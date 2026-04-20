@@ -9,7 +9,6 @@
   },
   "dataconnect": {
     "source": "dataconnect",
-    "location": "us-east4",
     "schema": "schema.gql",
     "connector": "canticum-connector"
   },
