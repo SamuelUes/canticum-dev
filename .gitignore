@@ -1,0 +1,15 @@
+# Firebase
+.firebase/
+
+# Functions
+functions/node_modules/
+functions/.env
+
+#Frontend
+frontend/apps/web/.env.*
+
+#Docs
+Docs/
+
+
+
