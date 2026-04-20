@@ -8,7 +8,6 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "postbuild": "node ./scripts/fix-apphosting-standalone.mjs",
     "start": "next start -H 0.0.0.0",
     "lint": "next lint"
   },
