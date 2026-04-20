@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../../src/shared/rbac/index.ts"],"names":[],"mappings":";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;AAEA,kCAIC;AAND,8DAAgD;AAEhD,SAAgB,WAAW,CAAC,IAAa;IACvC,IAAI,IAAI,KAAK,OAAO,EAAE,CAAC;QACrB,MAAM,IAAI,SAAS,CAAC,KAAK,CAAC,UAAU,CAAC,mBAAmB,EAAE,sBAAsB,CAAC,CAAC;IACpF,CAAC;AACH,CAAC"}

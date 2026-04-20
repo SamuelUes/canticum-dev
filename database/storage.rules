@@ -1,0 +1,49 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && request.auth.token.role == role;
+    }
+
+    function isAdminOrEditor() {
+      return hasRole('admin') || hasRole('editor');
+    }
+
+    function isPremium() {
+      return isAuthenticated() && request.auth.token.premium == true;
+    }
+
+    match /songs/{songId}/lyrics/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdminOrEditor();
+    }
+
+    match /songs/{songId}/audio/reference/{fileName} {
+      allow read: if true;
+      allow write: if isAdminOrEditor();
+    }
+
+    match /songs/{songId}/audio/premium/{fileName} {
+      allow read: if isPremium();
+      allow write: if isAdminOrEditor();
+    }
+
+    match /songs/{songId}/sheet/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdminOrEditor();
+    }
+
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Canticum",
+    "slug": "Canticum",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "Canticum",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#F8F5ED"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F8F5ED"
+      }
+    },
+    "plugins": ["expo-router"]
+  }
+}

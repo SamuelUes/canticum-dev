@@ -1,0 +1,1 @@
+export { artists } from './http';

@@ -1,0 +1,22 @@
+{
+  "name": "Canticum-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Monorepo frontend for Canticum (Next.js + Expo)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @Canticum/web",
+    "dev:mobile": "npm run start -w @Canticum/mobile",
+    "build:web": "npm run build -w @Canticum/web",
+    "lint:web": "npm run lint -w @Canticum/web"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "i18n": "^0.15.3"
+  }
+}
