@@ -1,10 +1,17 @@
 {
   "firestore": {
+    "database": "db-canticum",
     "rules": "database/firestore.rules",
     "indexes": "database/firestore.indexes.json"
   },
   "storage": {
     "rules": "database/storage.rules"
+  },
+  "dataconnect": {
+    "source": "dataconnect",
+    "location": "us-east4",
+    "schema": "schema.gql",
+    "connector": "canticum-connector"
   },
   "apphosting": {
     "backend": {

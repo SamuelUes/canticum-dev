@@ -4,6 +4,9 @@
 # Functions
 functions/node_modules/
 functions/.env
+functions/lib/
+functions/lib/*
+functions/lib
 
 #Frontend
 frontend/apps/web/.env.*

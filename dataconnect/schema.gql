@@ -1,0 +1,95 @@
+# Canticum Data Connect Schema
+# Complementa Firestore - solo datos relacionales complejos
+# Firestore: users, songs, artists (NoSQL, real-time)
+# Cloud SQL: relaciones complejas, álbumes, discografías (relacional)
+
+# Albums (relaciones complejas que no existen en Firestore)
+type Album @table {
+  id: String! @id
+  title: String!
+  artist_id: String! # Referencia a Firestore artists/{artistId}
+  cover_url: String?
+  release_year: Int?
+  album_type: String!
+  status: String! @default("DRAFT")
+  description: String?
+  created_at: Timestamp! @default(timestamp: "now")
+  
+  # Relations
+  songs: [AlbumSong] @relation(link: "album_songs")
+}
+
+# Album-Songs junction (N:M relationship)
+type AlbumSong @table {
+  album_id: String!
+  song_id: String! # Referencia a Firestore songs/{songId}
+  track_number: Int!
+  is_primary_release: Boolean! @default(true)
+  
+  # Relations
+  album: Album @relation(link: "album_songs")
+  
+  @unique(fields: ["album_id", "song_id"])
+}
+
+# Artist Discography (datos estructurados de discografía)
+type ArtistDiscography @table {
+  artist_id: String! # Referencia a Firestore artists/{artistId}
+  album_id: String? # Referencia a Album en esta misma DB
+  song_id: String? # Referencia a Firestore songs/{songId}
+  release_date: String?
+  sequence: Int? # Orden en discografía
+}
+
+# Artist Suggestions (sistema de recomendación)
+type ArtistSuggestion @table {
+  artist_id: String! # Referencia a Firestore artists/{artistId}
+  suggested_artist_id: String! # Referencia a Firestore artists/{artistId}
+  similarity_score: Float?
+  reason: String? # Por qué se sugiere
+  created_at: Timestamp! @default(timestamp: "now")
+  
+  @unique(fields: ["artist_id", "suggested_artist_id"])
+}
+
+# Artist Likes (métricas de likes)
+type ArtistLike @table {
+  artist_id: String! # Referencia a Firestore artists/{artistId}
+  user_id: String! # Referencia a Firestore users/{userId}
+  created_at: Timestamp! @default(timestamp: "now")
+  
+  @unique(fields: ["artist_id", "user_id"])
+}
+
+# Schema Songs (orden de canciones en esquemas)
+type SchemaSong @table {
+  schema_id: String! # Referencia a Firestore schemas/{schemaId}
+  song_id: String! # Referencia a Firestore songs/{songId}
+  order_index: Int!
+  added_at: Timestamp! @default(timestamp: "now")
+  
+  @unique(fields: ["schema_id", "song_id"])
+}
+
+# Analytics (eventos de tracking)
+type AnalyticsEvent @table {
+  id: String! @id
+  user_id: String? # Referencia a Firestore users/{userId}
+  event_type: String! # song_play, artist_view, search, etc.
+  resource_id: String? # ID del recurso (songId, artistId, etc.)
+  resource_type: String? # song, artist, album
+  metadata: String? # JSON string con datos adicionales
+  created_at: Timestamp! @default(timestamp: "now")
+}
+
+# Indexes para performance
+@@index([AlbumSong.album_id])
+@@index([AlbumSong.song_id])
+@@index([ArtistDiscography.artist_id])
+@@index([ArtistSuggestion.artist_id])
+@@index([ArtistLike.artist_id])
+@@index([ArtistLike.user_id])
+@@index([SchemaSong.schema_id])
+@@index([AnalyticsEvent.user_id])
+@@index([AnalyticsEvent.event_type])
+@@index([AnalyticsEvent.created_at])
