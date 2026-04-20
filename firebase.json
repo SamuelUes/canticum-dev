@@ -14,7 +14,7 @@
   },
   "apphosting": {
     "backend": {
-      "source": "frontend/apps/web",
+      "source": "frontend",
       "env": [
         {
           "variable": "NODE_ENV",

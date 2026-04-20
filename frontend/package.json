@@ -8,14 +8,14 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev:web",
-    "build": "npm run build:web",
-    "start": "npm run start:web",
-    "dev:web": "npm run dev -w @Canticum/web",
-    "start:web": "npm run start -w @Canticum/web",
-    "dev:mobile": "npm run start -w @Canticum/mobile",
-    "build:web": "npm run build -w @Canticum/web",
-    "lint:web": "npm run lint -w @Canticum/web"
+    "dev": "npm --prefix apps/web run dev",
+    "build": "npm --prefix apps/web run build",
+    "start": "npm --prefix apps/web run start",
+    "dev:web": "npm --prefix apps/web run dev",
+    "start:web": "npm --prefix apps/web run start",
+    "dev:mobile": "npm --prefix apps/mobile run start",
+    "build:web": "npm --prefix apps/web run build",
+    "lint:web": "npm --prefix apps/web run lint"
   },
   "engines": {
     "node": ">=20.0.0"
