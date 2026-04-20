@@ -8,9 +8,10 @@ interface SubscriptionPlansProps {
   plans: SubscriptionPlan[];
   onPlanSelect: (plan: SubscriptionPlan) => void;
   currentPlan?: string;
+  processingPlan?: string | null;
 }
 
-export function SubscriptionPlans({ plans, onPlanSelect, currentPlan }: SubscriptionPlansProps) {
+export function SubscriptionPlans({ plans, onPlanSelect, currentPlan, processingPlan }: SubscriptionPlansProps) {
   const [hoveredPlan, setHoveredPlan] = useState<string | null>(null);
   const [isYearly, setIsYearly] = useState(false);
 
@@ -50,6 +51,7 @@ export function SubscriptionPlans({ plans, onPlanSelect, currentPlan }: Subscrip
           const isHovered = hoveredPlan === plan.id;
           const otherHovered = hoveredPlan !== null && !isHovered;
           const isCurrentPlan = currentPlan === plan.id;
+          const isProcessing = processingPlan === plan.id;
 
           return (
             <div
@@ -99,9 +101,9 @@ export function SubscriptionPlans({ plans, onPlanSelect, currentPlan }: Subscrip
                 type="button"
                 className={`sp-cta ${isPremium ? 'sp-cta--premium' : 'sp-cta--free'}`}
                 onClick={() => onPlanSelect(plan)}
-                disabled={isCurrentPlan}
+                disabled={isCurrentPlan || isProcessing}
               >
-                {isCurrentPlan ? 'Plan Actual' : 'Try for free'}
+                {isCurrentPlan ? 'Plan Actual' : isProcessing ? 'Procesando...' : 'Try for free'}
               </button>
             </div>
           );

@@ -15,10 +15,8 @@ export default function SubscriptionsPage() {
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
   const [loading, setLoading] = useState(true);
+  const [processingPlan, setProcessingPlan] = useState<string | null>(null);
 
-  
-  // const [processingPlan, setProcessingPlan] = useState<string | null>(null);
-  
   const { user } = useAuth();
   const router = useRouter();
   const locale: Locale = 'es';
@@ -70,11 +68,7 @@ export default function SubscriptionsPage() {
       return;
     }
 
-
-
-    // setProcessingPlan(plan.id);
-    
-
+    setProcessingPlan(plan.id);
 
     try {
       const paymentIntent = await createPaymentIntent(plan.id);
@@ -91,11 +85,8 @@ export default function SubscriptionsPage() {
       // Show error message to user
       alert('Error al procesar el pago. Por favor intenta nuevamente.');
 
-
-    // } finally {
-    //   setProcessingPlan(null);
-
-
+    } finally {
+      setProcessingPlan(null);
     }
   }
 
@@ -159,6 +150,7 @@ export default function SubscriptionsPage() {
           plans={plans}
           onPlanSelect={handlePlanSelect}
           currentPlan={userSubscription?.plan}
+          processingPlan={processingPlan}
         />
 
         <div className="subscriptions-faq">
