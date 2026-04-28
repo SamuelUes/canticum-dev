@@ -24,6 +24,12 @@ export interface SongVersion {
   instrumentName?: string;
   label: string;
   isPremium?: boolean;
+  /** Per-version lyrics text (replaces legacy song-level lyrics). */
+  lyrics?: string;
+  /** Optional uploaded lyrics file URL. */
+  lyricsFileUrl?: string;
+  /** Optional uploaded sheet music file URL. */
+  sheetFileUrl?: string;
 }
 
 export interface SongInstrument {
@@ -118,6 +124,8 @@ export interface SongDetail {
   lyrics: string;
   sheet?: string;
   isFavorite?: boolean;
+  /** ID of the version currently projected at top-level (lyrics/audio/sheet). */
+  activeVersionId?: string;
   currentVersionId: string;
   currentInstrumentId: string;
   versions: SongVersion[];

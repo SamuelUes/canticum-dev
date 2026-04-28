@@ -1,5 +1,5 @@
-import * as functions from 'firebase-functions';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 
 interface PremiumAccessPayload {
@@ -25,7 +25,7 @@ export const getPremiumContentAccess = functions.https.onCall(async (data: Premi
     };
   }
 
-  const unlockSnap = await getFirestore().collection('users').doc(uid).collection('songUnlocks').doc(songId).get();
+  const unlockSnap = await getAppFirestore().collection('users').doc(uid).collection('songUnlocks').doc(songId).get();
   const hasSongUnlock = unlockSnap.exists;
 
   return {

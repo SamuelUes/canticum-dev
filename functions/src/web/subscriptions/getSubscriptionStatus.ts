@@ -1,5 +1,5 @@
-import * as functions from 'firebase-functions';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 
 export const getSubscriptionStatus = functions.https.onCall(async (_data, context) => {
@@ -8,7 +8,7 @@ export const getSubscriptionStatus = functions.https.onCall(async (_data, contex
   }
 
   const uid = context.auth.uid;
-  const db = getFirestore();
+  const db = getAppFirestore();
 
   const userSnap = await db.collection('users').doc(uid).get();
   const userData = (userSnap.data() ?? {}) as Record<string, unknown>;

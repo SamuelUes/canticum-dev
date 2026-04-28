@@ -9,7 +9,7 @@ export interface ArtistSongRow {
   isVerified?: boolean;
 }
 
-export interface ArtistSchemaRef {
+export interface ArtistrepertoireRef {
   id: string;
   title: string;
   ownerName: string;

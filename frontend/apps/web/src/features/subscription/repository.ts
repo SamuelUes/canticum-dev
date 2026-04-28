@@ -31,9 +31,9 @@ const subscriptionPlansMock: SubscriptionPlan[] = [
         included: true
       },
       {
-        id: 'basic-schemas',
-        title: 'Hasta 2 esquemas',
-        description: 'Máximo 10 canciones por esquema',
+        id: 'basic-repertoires',
+        title: 'Hasta 2 repertorios',
+        description: 'Máximo 10 canciones por repertorio',
         included: true
       },
       {
@@ -67,9 +67,9 @@ const subscriptionPlansMock: SubscriptionPlan[] = [
         included: false
       },
       {
-        id: 'unlimited-schemas',
-        title: 'Esquemas ilimitados',
-        description: 'Crea esquemas sin límites',
+        id: 'unlimited-repertoires',
+        title: 'repertorios ilimitados',
+        description: 'Crea repertorios sin límites',
         included: false
       },
       {
@@ -112,8 +112,8 @@ const subscriptionPlansMock: SubscriptionPlan[] = [
         isHighlight: true
       },
       {
-        id: 'unlimited-schemas',
-        title: 'Esquemas avanzados',
+        id: 'unlimited-repertoires',
+        title: 'repertorios avanzados',
         description: 'Ilimitados con drag & drop y plantillas',
         included: true,
         isHighlight: true
@@ -176,8 +176,8 @@ const subscriptionPlansMock: SubscriptionPlan[] = [
         isHighlight: true
       },
       {
-        id: 'unlimited-schemas',
-        title: 'Esquemas avanzados',
+        id: 'unlimited-repertoires',
+        title: 'repertorios avanzados',
         description: 'Ilimitados con drag & drop y plantillas',
         included: true,
         isHighlight: true

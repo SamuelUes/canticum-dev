@@ -2,26 +2,21 @@
 
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
 export function CreateMenu() {
   const [isOpen, setIsOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { user, loading } = useAuth();
 
   useEffect(() => {
     if (!isOpen) return;
-
-    const handleOutsideClick = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsOpen(false);
     };
-
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
   }, [isOpen]);
 
   const handleToggle = () => {
@@ -35,18 +30,18 @@ export function CreateMenu() {
     setIsOpen((prev) => !prev);
   };
 
-  const handleOption = (path: string) => {
+  const handleOption = useCallback((path: string) => {
     setIsOpen(false);
     router.push(path);
-  };
+  }, [router]);
 
   return (
-    <div className="create-menu-wrap" ref={menuRef}>
+    <>
       <button
         type="button"
         className="icon-button"
         aria-label="crear"
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={isOpen}
         onClick={handleToggle}
       >
@@ -60,33 +55,46 @@ export function CreateMenu() {
       </button>
 
       {isOpen && (
-        <div className="create-menu-dropdown" role="menu" aria-label="Opciones de creación">
-          <button
-            type="button"
-            role="menuitem"
-            className="create-menu-item"
-            onClick={() => handleOption('/crear/cancion')}
+        <div className="create-overlay-backdrop" onClick={() => setIsOpen(false)}>
+          <div
+            className="create-overlay-panel"
+            role="dialog"
+            aria-label="Escoge qué se creará"
+            onClick={(e) => e.stopPropagation()}
           >
-            <span className="create-menu-icon">♫</span>
-            <div className="create-menu-item-text">
-              <strong>Subir Canción</strong>
-              <small>Letra, audio y metadatos</small>
+            <h2 className="create-overlay-title">Escoge que se creará</h2>
+
+            <div className="create-overlay-options">
+              <button
+                type="button"
+                className="create-overlay-card create-overlay-card--song"
+                onClick={() => handleOption('/create/song')}
+              >
+                <span className="create-overlay-card-icon">♫</span>
+                <strong>Canción</strong>
+              </button>
+
+              <button
+                type="button"
+                className="create-overlay-card create-overlay-card--repertoire"
+                onClick={() => handleOption('/create/repertoires')}
+              >
+                <span className="create-overlay-card-icon">☰</span>
+                <strong>Repertorio</strong>
+              </button>
             </div>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="create-menu-item"
-            onClick={() => handleOption('/crear/esquema')}
-          >
-            <span className="create-menu-icon">☰</span>
-            <div className="create-menu-item-text">
-              <strong>Crear Esquema</strong>
-              <small>Organiza canciones litúrgicas</small>
-            </div>
-          </button>
+
+            <button
+              type="button"
+              className="create-overlay-close"
+              aria-label="Cerrar"
+              onClick={() => setIsOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

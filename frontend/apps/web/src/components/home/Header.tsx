@@ -87,15 +87,15 @@ export function Header({ text }: HeaderProps) {
           />
           {text.subscribe}
         </button>
-        <button type="button" onClick={() => router.push('/schemas')}>
+        <button type="button" onClick={() => router.push('/repertoires')}>
           <Image
             src="/assets/utils/iconly_light-outline_document/iconlylightoutlinedocument2x.png"
-            alt="Esquemas"
+            alt="repertorios"
             width={16}
             height={16}
             className="action-icon"
           />
-          {text.schemas}
+          {text.repertoires}
         </button>
       </nav>
 

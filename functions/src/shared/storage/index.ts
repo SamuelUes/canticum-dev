@@ -6,6 +6,18 @@ function sanitizePathSegment(value: string): string {
   return value.trim().replace(/^\/+|\/+$/g, '');
 }
 
+export function buildVersionAssetPath(
+  songId: string,
+  versionId: string,
+  assetType: 'audio' | 'lyrics' | 'sheet',
+  fileName: string
+): string {
+  const safeSongId = sanitizePathSegment(songId);
+  const safeVersionId = sanitizePathSegment(versionId);
+  const safeFileName = sanitizePathSegment(fileName);
+  return `songs/${safeSongId}/versions/${safeVersionId}/${assetType}/${safeFileName}`;
+}
+
 export function buildSongAssetPath(songId: string, assetType: 'lyrics' | 'audio' | 'sheet', fileName: string, variant?: string): string {
   const safeSongId = sanitizePathSegment(songId);
   const safeFileName = sanitizePathSegment(fileName);

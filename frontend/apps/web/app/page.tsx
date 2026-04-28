@@ -1,6 +1,4 @@
-import { ArtistsSection } from '../src/components/home/ArtistsSection';
-import { DualListSection } from '../src/components/home/DualListSection';
-import { FeaturedSection } from '../src/components/home/FeaturedSection';
+import { HomeContent } from '../src/components/home/HomeContent';
 import { HomeFooter } from '../src/components/home/Footer';
 import { Header } from '../src/components/home/Header';
 import { NewsletterSection } from '../src/components/home/NewsletterSection';
@@ -17,19 +15,7 @@ export default function HomePage() {
       <div className="home-shell">
         <Header text={text} />
 
-        <FeaturedSection title={text.featuredTitle} songs={homeMockData.featuredSongs} />
-
-        <ArtistsSection title={text.artistsTitle} artists={homeMockData.artists} />
-
-        <DualListSection
-          left={{ title: text.trendsTitle, viewAllLabel: text.viewAll, items: homeMockData.trends }}
-          right={{
-            title: text.recentTitle,
-            viewAllLabel: text.viewAll,
-            items: homeMockData.recentSongs,
-            linkBasePath: '/songs'
-          }}
-        />
+        <HomeContent text={text} />
 
         <NewsletterSection
           text={{

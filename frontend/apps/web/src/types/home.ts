@@ -43,7 +43,7 @@ export interface HomeText {
   brand: string;
   searchPlaceholder: string;
   subscribe: string;
-  schemas: string;
+  repertoires: string;
   userNameLabel: string;
   welcome: string;
   featuredTitle: string;

@@ -1,8 +1,13 @@
 import { songMockById } from './mockData';
 import type { SongDetail, SongImage, SongSimplifiedArtist } from '../../types/song';
-import type { SongRef } from '../../types/schema';
+import type { SongRef } from '../../types/repertoire';
 
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+const functionsBaseUrl = [
+  process.env.GCP_FUNCTIONS_BASE_URL,
+  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
+]
+  .map((value) => (typeof value === 'string' ? value.trim() : ''))
+  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
 
 function normalizeImages(raw: unknown): SongImage[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -22,6 +27,39 @@ function normalizeImages(raw: unknown): SongImage[] | undefined {
     })
     .filter((value): value is SongImage => value !== null);
   return list.length > 0 ? list : undefined;
+}
+
+async function getServerSessionToken(): Promise<string | null> {
+  if (typeof window !== 'undefined') {
+    return null;
+  }
+
+  try {
+    const { cookies } = await import('next/headers');
+    return cookies().get('__session')?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildSongHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
+  const clientToken = await getAuthToken();
+  if (clientToken) {
+    return {
+      ...baseHeaders,
+      Authorization: `Bearer ${clientToken}`
+    };
+  }
+
+  const serverToken = await getServerSessionToken();
+  if (serverToken) {
+    return {
+      ...baseHeaders,
+      Authorization: `Bearer ${serverToken}`
+    };
+  }
+
+  return baseHeaders;
 }
 
 function computePopularity(durationOrViews: number | undefined): number {
@@ -102,6 +140,10 @@ function extractSongPayload(payload: unknown): SongDetail | null {
 }
 
 async function getAuthToken(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
   try {
     const { auth } = await import('../../services/firebase');
     if (!auth?.currentUser) {
@@ -114,19 +156,18 @@ async function getAuthToken(): Promise<string | null> {
   }
 }
 
-async function getSongDetailFromFunctions(songId: string): Promise<SongDetail | null> {
+async function getSongDetailFromFunctions(songId: string, versionId?: string): Promise<SongDetail | null> {
   if (!functionsBaseUrl) {
     return null;
   }
 
   try {
-    const token = await getAuthToken();
-    const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    const headers = await buildSongHeaders({ 'Cache-Control': 'no-store' });
+    const qs = versionId && versionId.trim()
+      ? `?versionId=${encodeURIComponent(versionId.trim())}`
+      : '';
 
-    const response = await fetch(`${functionsBaseUrl}/songs/${songId}`, {
+    const response = await fetch(`${functionsBaseUrl}/songs/${songId}${qs}`, {
       method: 'GET',
       headers,
       cache: 'no-store'
@@ -149,8 +190,8 @@ async function getSongDetailFromFunctions(songId: string): Promise<SongDetail | 
   }
 }
 
-export async function getSongDetailById(songId: string): Promise<SongDetail | null> {
-  const remoteSong = await getSongDetailFromFunctions(songId);
+export async function getSongDetailById(songId: string, versionId?: string): Promise<SongDetail | null> {
+  const remoteSong = await getSongDetailFromFunctions(songId, versionId);
 
   if (remoteSong) {
     return remoteSong;
@@ -165,11 +206,13 @@ export async function getSongDetailById(songId: string): Promise<SongDetail | nu
   return normalizeSongDetail(song);
 }
 
-export async function getSongTitleById(songId: string): Promise<SongRef | null> {
+export async function getSongTitleById(songId: string, versionId?: string): Promise<SongRef | null> {
   if (functionsBaseUrl) {
     try {
+      const headers = await buildSongHeaders({ Accept: 'application/json' });
       const response = await fetch(`${functionsBaseUrl}/songs/${songId}`, {
         method: 'GET',
+        headers,
         cache: 'no-store'
       });
 
@@ -177,14 +220,35 @@ export async function getSongTitleById(songId: string): Promise<SongRef | null> 
         const payload = (await response.json()) as unknown;
         const raw = (payload && typeof payload === 'object' && 'song' in (payload as object)
           ? (payload as { song: unknown }).song
-          : payload) as Partial<SongDetail> | null;
+          : payload) as (Partial<SongDetail> & { versions?: Array<Record<string, unknown>> }) | null;
 
         if (raw && typeof raw.id === 'string' && typeof raw.title === 'string') {
+          const resolvedVersionId = (() => {
+            if (!versionId || !Array.isArray(raw.versions)) {
+              return versionId;
+            }
+
+            const exact = raw.versions.find((version) => {
+              const versionRecord = version as unknown as Record<string, unknown>;
+              const candidateVersionId = String(versionRecord.versionId ?? versionRecord.id ?? '');
+              const candidateSqlVersionId = String(versionRecord.sqlSongVersionId ?? '');
+              return candidateVersionId === versionId || candidateSqlVersionId === versionId;
+            });
+
+            if (!exact) {
+              return versionId;
+            }
+
+            const canonical = String(exact.versionId ?? exact.id ?? '');
+            return canonical || versionId;
+          })();
+
           return {
             id: raw.id,
             title: raw.title,
             artistName: typeof raw.artistName === 'string' ? raw.artistName : undefined,
-            audioUrl: typeof raw.audioUrl === 'string' ? raw.audioUrl : undefined
+            audioUrl: typeof raw.audioUrl === 'string' ? raw.audioUrl : undefined,
+            ...(resolvedVersionId ? { versionId: resolvedVersionId } : {})
           };
         }
       }
@@ -201,6 +265,7 @@ export async function getSongTitleById(songId: string): Promise<SongRef | null> 
     id: mock.id,
     title: mock.title,
     artistName: mock.artistName,
-    audioUrl: mock.audioUrl
+    audioUrl: mock.audioUrl,
+    ...(versionId ? { versionId } : {})
   };
 }

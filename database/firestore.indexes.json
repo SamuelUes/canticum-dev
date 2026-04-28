@@ -1,4 +1,6 @@
 {
+  "_comment": "Indices de la capa Firestore (lectura/proyeccion). Fuente canonica relacional: Cloud SQL. Ver docs/CloudSQL-vs-Firestore.md y database/DATA_CONTRACT.md",
+  "_comment2": "Version: 2.2",
   "indexes": [
     {
       "collectionGroup": "songs",
@@ -25,7 +27,7 @@
       ]
     },
     {
-      "collectionGroup": "schemas",
+      "collectionGroup": "repertoires",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "userId", "order": "ASCENDING" },
@@ -33,7 +35,7 @@
       ]
     },
     {
-      "collectionGroup": "schemas",
+      "collectionGroup": "repertoires",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "isPublic", "order": "ASCENDING" },
@@ -41,7 +43,7 @@
       ]
     },
     {
-      "collectionGroup": "schemas",
+      "collectionGroup": "repertoires",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "userId", "order": "ASCENDING" },

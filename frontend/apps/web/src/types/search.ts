@@ -2,10 +2,10 @@
  * Search kind discriminator. Aligned with Spotify search types:
  * Spotify `track` -> Canticum `song`
  * Spotify `album` -> `album`
- * Spotify `playlist` -> `schema` (Canticum's equivalent of a curated playlist)
+ * Spotify `playlist` -> `repertoire` (Canticum's equivalent of a curated playlist)
  * Plus Canticum-specific `artist` and `version` kinds.
  */
-export type SearchEntityKind = 'song' | 'album' | 'schema' | 'artist' | 'version';
+export type SearchEntityKind = 'song' | 'album' | 'repertoire' | 'artist' | 'version';
 
 export interface SearchImage {
   url: string;
@@ -28,7 +28,7 @@ export interface SearchEntityBase {
   title: string;
   subtitle: string;
   songId?: string;
-  schemaId?: string;
+  repertoireId?: string;
   artistId?: string;
   albumId?: string;
   /** Optional Spotify-style image list (largest first). */
@@ -43,6 +43,12 @@ export interface SearchSongItem extends SearchEntityBase {
   kind: 'song';
   type: 'song';
   isPremium: boolean;
+  popularity?: number;
+  totalViews?: number;
+  likeCount?: number;
+  publishedAt?: string | null;
+  createdAt?: string | null;
+  ownerUserId?: string;
 }
 
 export interface SearchAlbumItem extends SearchEntityBase {
@@ -56,9 +62,9 @@ export interface SearchAlbumItem extends SearchEntityBase {
   artistName: string;
 }
 
-export interface SearchSchemaItem extends SearchEntityBase {
-  kind: 'schema';
-  type: 'schema';
+export interface SearchrepertoireItem extends SearchEntityBase {
+  kind: 'repertoire';
+  type: 'repertoire';
   dateLabel: string;
   songsCount: number;
   sheetsCount: number;
@@ -84,7 +90,7 @@ export interface SearchVersionItem extends SearchEntityBase {
 export type SearchEntityItem =
   | SearchSongItem
   | SearchAlbumItem
-  | SearchSchemaItem
+  | SearchrepertoireItem
   | SearchArtistItem
   | SearchVersionItem;
 
@@ -105,7 +111,7 @@ export interface SearchBucket<T> {
 export interface SearchBuckets {
   songs?: SearchBucket<SearchSongItem>;
   albums?: SearchBucket<SearchAlbumItem>;
-  schemas?: SearchBucket<SearchSchemaItem>;
+  repertoires?: SearchBucket<SearchrepertoireItem>;
   artists?: SearchBucket<SearchArtistItem>;
   versions?: SearchBucket<SearchVersionItem>;
 }

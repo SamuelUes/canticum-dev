@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { getStorage } from 'firebase-admin/storage';
 import '../../shared/firebaseAdmin';
 import { buildCdnUrl, buildSongAssetPath, buildStoragePublicUrl } from '../../shared/storage';

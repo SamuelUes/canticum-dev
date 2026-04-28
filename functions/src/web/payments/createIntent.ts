@@ -1,5 +1,6 @@
-import * as functions from 'firebase-functions';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { handlePreflight, sendJson, sendError, getOptionalAuthContext, getBodyRecord } from '../../shared/http/http';
 
@@ -50,7 +51,7 @@ export const createIntent = functions.https.onRequest(async (req, res) => {
   }
 
   try {
-    const db = getFirestore();
+    const db = getAppFirestore();
     const { uid: userId } = authContext;
 
     // Check if user already has active subscription

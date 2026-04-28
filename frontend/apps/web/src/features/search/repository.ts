@@ -8,7 +8,7 @@ import type {
   SearchEntityItem,
   SearchEntityKind,
   SearchImage,
-  SearchSchemaItem,
+  SearchrepertoireItem,
   SearchSongItem,
   SearchVersionItem
 } from '../../types/search';
@@ -33,14 +33,134 @@ function normalizeImages(raw: unknown): SearchImage[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+export async function getSearchDatasetClient(): Promise<SearchDataset> {
+  if (!functionsBaseUrl) {
+    return searchMockData;
+  }
+
+  try {
+    const token = await getAuthIdToken();
+    const headers: Record<string, string> = {
+      Accept: 'application/json'
+    };
+
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${functionsBaseUrl}/search/catalog`, {
+      method: 'GET',
+      headers,
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Search catalog request failed with status ${response.status}`);
+    }
+
+    const payload = (await response.json()) as unknown;
+    const normalized = normalizeDataset(payload);
+    return normalized ?? searchMockData;
+  } catch {
+    return searchMockData;
+  }
+}
+
 const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
 
+async function getAuthIdToken(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+  if (!hasFirebaseConfig) {
+    return null;
+  }
+
+  try {
+    const { auth } = await import('../../services/firebase');
+    if (!auth.currentUser) {
+      return null;
+    }
+
+    return auth.currentUser.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
+export async function getClientCurrentUserId(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+  if (!hasFirebaseConfig) {
+    return null;
+  }
+
+  try {
+    const { auth } = await import('../../services/firebase');
+    return auth.currentUser?.uid ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeKind(value: unknown): SearchEntityKind {
-  if (value === 'album' || value === 'schema' || value === 'artist' || value === 'version') {
+  if (value === 'album' || value === 'repertoire' || value === 'artist' || value === 'version') {
     return value;
   }
 
   return 'song';
+}
+
+function normalizeDateLabel(value: unknown): string {
+  let date: Date | null = null;
+
+  if (value instanceof Date) {
+    date = value;
+  } else if (value && typeof value === 'object' && 'toDate' in value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+    try {
+      date = (value as { toDate: () => Date }).toDate();
+    } catch {
+      date = null;
+    }
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '[object Object]') {
+      return 'N/D';
+    }
+
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      date = parsed;
+    } else {
+      return trimmed;
+    }
+  } else if (typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      date = parsed;
+    }
+  }
+
+  if (!date) {
+    return 'N/D';
+  }
+
+  try {
+    return new Intl.DateTimeFormat('es-MX', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
 }
 
 function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unknown>): SearchEntityItem {
@@ -52,7 +172,7 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     title: String(rawItem.title ?? ''),
     subtitle: String(rawItem.subtitle ?? ''),
     songId: rawItem.songId ? String(rawItem.songId) : undefined,
-    schemaId: rawItem.schemaId ? String(rawItem.schemaId) : undefined,
+    repertoireId: rawItem.repertoireId ? String(rawItem.repertoireId) : undefined,
     artistId: rawItem.artistId ? String(rawItem.artistId) : undefined,
     albumId: rawItem.albumId ? String(rawItem.albumId) : undefined,
     images: normalizeImages(rawItem.images),
@@ -76,12 +196,12 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     };
   }
 
-  if (kind === 'schema') {
+  if (kind === 'repertoire') {
     return {
       ...base,
-      kind: 'schema',
-      type: 'schema',
-      dateLabel: String(rawItem.dateLabel ?? 'N/D'),
+      kind: 'repertoire',
+      type: 'repertoire',
+      dateLabel: normalizeDateLabel(rawItem.dateLabel),
       songsCount: Number(rawItem.songsCount ?? 0),
       sheetsCount: Number(rawItem.sheetsCount ?? 0),
       ownerUserId: String(rawItem.ownerUserId ?? rawItem.userId ?? 'unknown-user'),
@@ -114,7 +234,13 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     ...base,
     kind: 'song',
     type: 'song',
-    isPremium: Boolean(rawItem.isPremium)
+    isPremium: Boolean(rawItem.isPremium),
+    popularity: Number.isFinite(Number(rawItem.popularity)) ? Number(rawItem.popularity) : undefined,
+    totalViews: Number.isFinite(Number(rawItem.totalViews)) ? Number(rawItem.totalViews) : undefined,
+    likeCount: Number.isFinite(Number(rawItem.likeCount)) ? Number(rawItem.likeCount) : undefined,
+    publishedAt: typeof rawItem.publishedAt === 'string' ? rawItem.publishedAt : null,
+    createdAt: typeof rawItem.createdAt === 'string' ? rawItem.createdAt : null,
+    ownerUserId: typeof rawItem.ownerUserId === 'string' ? rawItem.ownerUserId : undefined
   };
 }
 
@@ -151,7 +277,7 @@ function deriveBucketsFromItems(items: SearchEntityItem[]): SearchBuckets {
   return {
     songs: byKind<SearchSongItem>('song'),
     albums: byKind<SearchAlbumItem>('album'),
-    schemas: byKind<SearchSchemaItem>('schema'),
+    repertoires: byKind<SearchrepertoireItem>('repertoire'),
     artists: byKind<SearchArtistItem>('artist'),
     versions: byKind<SearchVersionItem>('version')
   };
@@ -175,7 +301,7 @@ function normalizeDataset(rawData: unknown): SearchDataset | null {
     buckets = {
       songs: normalizeBucket<SearchSongItem>(rawBuckets.songs, (item): item is SearchSongItem => item.kind === 'song'),
       albums: normalizeBucket<SearchAlbumItem>(rawBuckets.albums, (item): item is SearchAlbumItem => item.kind === 'album'),
-      schemas: normalizeBucket<SearchSchemaItem>(rawBuckets.schemas, (item): item is SearchSchemaItem => item.kind === 'schema'),
+      repertoires: normalizeBucket<SearchrepertoireItem>(rawBuckets.repertoires, (item): item is SearchrepertoireItem => item.kind === 'repertoire'),
       artists: normalizeBucket<SearchArtistItem>(rawBuckets.artists, (item): item is SearchArtistItem => item.kind === 'artist'),
       versions: normalizeBucket<SearchVersionItem>(rawBuckets.versions, (item): item is SearchVersionItem => item.kind === 'version')
     };
@@ -197,7 +323,7 @@ function normalizeDataset(rawData: unknown): SearchDataset | null {
     items = [
       ...(buckets.songs?.items ?? []),
       ...(buckets.albums?.items ?? []),
-      ...(buckets.schemas?.items ?? []),
+      ...(buckets.repertoires?.items ?? []),
       ...(buckets.artists?.items ?? []),
       ...(buckets.versions?.items ?? [])
     ];

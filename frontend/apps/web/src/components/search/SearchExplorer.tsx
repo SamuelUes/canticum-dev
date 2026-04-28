@@ -2,24 +2,32 @@
 
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
-import { requestDeleteSchema } from '../../features/schema/clientPersistence';
-import type { SearchAlbumItem, SearchDataset, SearchEntityItem, SearchEntityKind, SearchSchemaItem } from '../../types/search';
+import { useEffect, useMemo, useState } from 'react';
+import { getArtistProfileHref } from '../../features/artist/routing';
+import { getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
+import { requestDeleterepertoire } from '../../features/repertoire/clientPersistence';
+import type { SearchAlbumItem, SearchDataset, SearchEntityItem, SearchEntityKind, SearchrepertoireItem } from '../../types/search';
 
 const kindLabels: Record<SearchEntityKind, string> = {
   song: 'Canciones',
   album: 'Álbumes',
-  schema: 'Esquemas',
+  repertoire: 'Repertorios',
   artist: 'Artistas',
   version: 'Versiones'
 };
 
-const KIND_ORDER: SearchEntityKind[] = ['song', 'album', 'schema', 'artist', 'version'];
+const KIND_ORDER: SearchEntityKind[] = ['song', 'album', 'repertoire', 'artist', 'version'];
 
 interface SearchExplorerProps {
   initialQuery?: string;
-  dataset: SearchDataset;
+  /** Optional initial dataset (e.g. SSR). When omitted, the explorer renders a skeleton until the client fetch resolves. */
+  dataset?: SearchDataset;
 }
+
+const EMPTY_DATASET: SearchDataset = {
+  filters: { liturgicalTypes: [], liturgicalTimes: [], authorOrChoirs: [] },
+  items: []
+};
 
 function normalize(value: string) {
   return value.trim().toLowerCase();
@@ -36,27 +44,59 @@ function includesQuery(item: SearchEntityItem, query: string) {
 
 export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerProps) {
   const router = useRouter();
-  const currentUserId = 'user-1';
-  const [removedSchemaIds, setRemovedSchemaIds] = useState<string[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [activeDataset, setActiveDataset] = useState<SearchDataset>(dataset ?? EMPTY_DATASET);
+  const [isLoading, setIsLoading] = useState<boolean>(!dataset);
+  const [removedrepertoireIds, setRemovedrepertoireIds] = useState<string[]>([]);
   const [query, setQuery] = useState(initialQuery);
   const [selectedKinds, setSelectedKinds] = useState<SearchEntityKind[]>([...KIND_ORDER]);
   const [selectedLiturgicalTypes, setSelectedLiturgicalTypes] = useState<string[]>([]);
   const [selectedLiturgicalTimes, setSelectedLiturgicalTimes] = useState<string[]>([]);
   const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
 
+  useEffect(() => {
+    let disposed = false;
+
+    const hydrate = async () => {
+      try {
+        const [resolvedUserId, resolvedDataset] = await Promise.all([
+          getClientCurrentUserId(),
+          getSearchDatasetClient()
+        ]);
+
+        if (disposed) {
+          return;
+        }
+
+        setCurrentUserId(resolvedUserId);
+        setActiveDataset(resolvedDataset);
+      } finally {
+        if (!disposed) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const visibleItems = useMemo(() => {
-    return dataset.items.filter((item) => {
-      if (item.kind === 'schema' && removedSchemaIds.includes(item.id)) {
+    return activeDataset.items.filter((item) => {
+      if (item.kind === 'repertoire' && removedrepertoireIds.includes(item.id)) {
         return false;
       }
 
-      if (item.kind !== 'schema') {
+      if (item.kind !== 'repertoire') {
         return true;
       }
 
       return item.ownerUserId === currentUserId || item.isPublic;
     });
-  }, [currentUserId, dataset.items, removedSchemaIds]);
+  }, [activeDataset.items, currentUserId, removedrepertoireIds]);
 
   const filteredItems = useMemo(() => {
     return visibleItems.filter((item) => {
@@ -73,7 +113,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
     return {
       songs: filteredItems.filter((item) => item.kind === 'song'),
       albums: filteredItems.filter((item): item is SearchAlbumItem => item.kind === 'album'),
-      schemas: filteredItems.filter((item): item is SearchSchemaItem => item.kind === 'schema'),
+      repertoires: filteredItems.filter((item): item is SearchrepertoireItem => item.kind === 'repertoire'),
       artists: filteredItems.filter((item) => item.kind === 'artist'),
       versions: filteredItems.filter((item) => item.kind === 'version')
     };
@@ -94,8 +134,8 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
       return;
     }
 
-    if (item.kind === 'schema') {
-      router.push(`/schemas/${item.schemaId ?? item.id}`);
+    if (item.kind === 'repertoire') {
+      router.push(`/repertoires/${item.repertoireId ?? item.id}`);
       return;
     }
 
@@ -105,32 +145,37 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
     }
 
     if (item.kind === 'artist') {
-      router.push(`/artists/${item.artistId ?? item.id}`);
+      router.push(
+        getArtistProfileHref({
+          artistId: item.artistId ?? item.id,
+          artistName: item.title
+        })
+      );
       return;
     }
 
     router.push(`/songs/${item.songId ?? item.id}`);
   };
 
-  const onEditSchema = (schema: SearchSchemaItem) => {
-    router.push(`/schemas/${schema.schemaId ?? schema.id}/edit`);
+  const onEditrepertoire = (repertoire: SearchrepertoireItem) => {
+    router.push(`/repertoires/${repertoire.repertoireId ?? repertoire.id}/edit`);
   };
 
-  const onDeleteSchema = async (schema: SearchSchemaItem) => {
-    const shouldDelete = window.confirm(`¿Seguro que quieres eliminar el esquema \"${schema.title}\"?`);
+  const onDeleterepertoire = async (repertoire: SearchrepertoireItem) => {
+    const shouldDelete = window.confirm(`¿Seguro que quieres eliminar el repertorio \"${repertoire.title}\"?`);
 
     if (!shouldDelete) {
       return;
     }
 
-    const result = await requestDeleteSchema(schema.schemaId ?? schema.id);
+    const result = await requestDeleterepertoire(repertoire.repertoireId ?? repertoire.id);
 
     if (!result.ok) {
-      window.alert('No se pudo eliminar el esquema. Verifica permisos o intenta de nuevo.');
+      window.alert('No se pudo eliminar el repertorio. Verifica permisos o intenta de nuevo.');
       return;
     }
 
-    setRemovedSchemaIds((prev) => [...prev, schema.id]);
+    setRemovedrepertoireIds((prev) => [...prev, repertoire.id]);
   };
 
   return (
@@ -150,7 +195,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
 
         <div className="search-filter-group">
           <h3>Tipo Litúrgico</h3>
-          {dataset.filters.liturgicalTypes.map((type) => (
+          {activeDataset.filters.liturgicalTypes.map((type) => (
             <label key={type} className="search-check-row">
               <input
                 type="checkbox"
@@ -164,7 +209,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
 
         <div className="search-filter-group">
           <h3>Tiempo Litúrgico</h3>
-          {dataset.filters.liturgicalTimes.map((time) => (
+          {activeDataset.filters.liturgicalTimes.map((time) => (
             <label key={time} className="search-check-row">
               <input type="checkbox" checked={selectedLiturgicalTimes.includes(time)} onChange={() => toggleGeneric(time, selectedLiturgicalTimes, setSelectedLiturgicalTimes)} />
               <span>{time}</span>
@@ -174,7 +219,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
 
         <div className="search-filter-group">
           <h3>Autor / Coro</h3>
-          {dataset.filters.authorOrChoirs.map((author) => (
+          {activeDataset.filters.authorOrChoirs.map((author) => (
             <label key={author} className="search-check-row">
               <input type="checkbox" checked={selectedAuthors.includes(author)} onChange={() => toggleGeneric(author, selectedAuthors, setSelectedAuthors)} />
               <span>{author}</span>
@@ -186,26 +231,39 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
       <article className="search-results-panel">
         <header className="search-results-head">
           <h1>Gestión de Búsqueda</h1>
-          <label className="search-page-input-wrap" aria-label="buscar canciones, álbumes, esquemas, artistas y versiones">
+          <label className="search-page-input-wrap" aria-label="buscar canciones, álbumes, Repertorios, artistas y versiones">
             <input
               className="search-page-input"
               type="search"
-              placeholder="Buscar canciones, álbumes, esquemas, artistas o versiones"
+              placeholder="Buscar canciones, álbumes, Repertorios, artistas o versiones"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
         </header>
 
-        <div className="search-type-chips" aria-label="conteo de resultados">
-          <span>{grouped.songs.length} Canciones</span>
-          <span>{grouped.albums.length} Álbumes</span>
-          <span>{grouped.schemas.length} Esquemas</span>
-          <span>{grouped.artists.length} Artistas</span>
-          <span>{grouped.versions.length} Versiones</span>
-        </div>
+        {!isLoading ? (
+          <div className="search-type-chips" aria-label="conteo de resultados">
+            <span>{grouped.songs.length} Canciones</span>
+            <span>{grouped.albums.length} Álbumes</span>
+            <span>{grouped.repertoires.length} Repertorios</span>
+            <span>{grouped.artists.length} Artistas</span>
+            <span>{grouped.versions.length} Versiones</span>
+          </div>
+        ) : null}
 
-        <section className="search-results-section">
+        {isLoading ? (
+          <div aria-busy aria-label="Cargando resultados">
+            {Array.from({ length: 4 }).map((_, idx) => (
+              <div key={idx} className="search-results-section">
+                <div className="skeleton-pulse home-skeleton-title" />
+                <div className="skeleton-pulse search-skeleton-block" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <section className="search-results-section" hidden={isLoading}>
           <h2>Canciones</h2>
           <div className="search-generic-grid">
             {grouped.songs.map((item) => (
@@ -217,7 +275,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           </div>
         </section>
 
-        <section className="search-results-section">
+        <section className="search-results-section" hidden={isLoading}>
           <h2>Álbumes</h2>
           <div className="search-generic-grid">
             {grouped.albums.map((album) => (
@@ -230,45 +288,45 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           </div>
         </section>
 
-        <section className="search-results-section">
-          <h2>Esquemas</h2>
-          <div className="search-schema-grid">
-            {grouped.schemas.map((schema) => (
-              <button key={schema.id} type="button" className="search-schema-card search-clickable-card" onClick={() => navigateByItem(schema)}>
+        <section className="search-results-section" hidden={isLoading}>
+          <h2>Repertorios</h2>
+          <div className="search-repertoire-grid">
+            {grouped.repertoires.map((repertoire) => (
+              <button key={repertoire.id} type="button" className="search-repertoire-card search-clickable-card" onClick={() => navigateByItem(repertoire)}>
                 <div>
-                  <strong>{schema.title}</strong>
-                  <small>Fecha: {schema.dateLabel}</small>
-                  <small>{schema.ownerUserId === currentUserId ? 'Tu esquema' : schema.isPublic ? 'Esquema público' : 'Esquema privado'}</small>
+                  <strong>{repertoire.title}</strong>
+                  <small>Fecha: {repertoire.dateLabel}</small>
+                  <small>{repertoire.ownerUserId === currentUserId ? 'Tu repertorio' : repertoire.isPublic ? 'repertorio público' : 'repertorio privado'}</small>
                 </div>
 
-                <div className="search-schema-structure">
+                <div className="search-repertoire-structure">
                   <span>Estructura</span>
-                  <small>Total Canciones: {schema.songsCount}</small>
-                  <small>Partituras: {schema.sheetsCount}</small>
+                  <small>Total Canciones: {repertoire.songsCount}</small>
+                  <small>Partituras: {repertoire.sheetsCount}</small>
                 </div>
 
-                <div className="search-schema-actions" aria-label="acciones de esquema">
-                  <button type="button" aria-label="Guardar esquema" onClick={(event) => event.stopPropagation()}>
+                <div className="search-repertoire-actions" aria-label="acciones de repertorio">
+                  <button type="button" aria-label="Guardar repertorio" onClick={(event) => event.stopPropagation()}>
                     <Image src="/assets/utils/iconly_light-outline_bookmark/iconlylightoutlinebookmark2x.png" alt="Guardar" width={14} height={14} />
                   </button>
-                  {schema.ownerUserId === currentUserId ? (
+                  {repertoire.ownerUserId === currentUserId ? (
                     <>
                       <button
                         type="button"
-                        aria-label="Editar esquema"
+                        aria-label="Editar repertorio"
                         onClick={(event) => {
                           event.stopPropagation();
-                          onEditSchema(schema);
+                          onEditrepertoire(repertoire);
                         }}
                       >
                         <Image src="/assets/utils/iconly_light-outline_edit/iconlylightoutlineedit2x.png" alt="Editar" width={14} height={14} />
                       </button>
                       <button
                         type="button"
-                        aria-label="Eliminar esquema"
+                        aria-label="Eliminar repertorio"
                         onClick={(event) => {
                           event.stopPropagation();
-                          void onDeleteSchema(schema);
+                          void onDeleterepertoire(repertoire);
                         }}
                       >
                         <Image src="/assets/utils/iconly_light-outline_delete/iconlylightoutlinedelete2x.png" alt="Eliminar" width={14} height={14} />
@@ -281,8 +339,8 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           </div>
         </section>
 
-        <section className="search-results-section">
-          <h2>Artistas y Versiones</h2>
+        <section className="search-results-section" hidden={isLoading}>
+          <h2>Artistas</h2>
           <div className="search-generic-grid">
             {grouped.artists.map((item) => (
               <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>

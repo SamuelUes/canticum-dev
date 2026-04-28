@@ -1,5 +1,5 @@
-import * as functions from 'firebase-functions';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { handlePreflight, sendJson, sendError, getOptionalAuthContext } from '../../shared/http/http';
 
@@ -32,7 +32,7 @@ export const getUserSubscription = functions.https.onRequest(async (req, res) =>
 
   // Users can only access their own subscription data unless they're admin
   if (requestedUserId !== authUid) {
-    const userDoc = await getFirestore().collection('users').doc(authUid).get();
+    const userDoc = await getAppFirestore().collection('users').doc(authUid).get();
     const userData = userDoc.data();
     
     if (userData?.role !== 'admin') {
@@ -42,7 +42,7 @@ export const getUserSubscription = functions.https.onRequest(async (req, res) =>
   }
 
   try {
-    const db = getFirestore();
+    const db = getAppFirestore();
     
     // Check user document first
     const userDoc = await db.collection('users').doc(requestedUserId).get();

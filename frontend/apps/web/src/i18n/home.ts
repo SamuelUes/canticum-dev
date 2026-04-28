@@ -5,7 +5,7 @@ const dictionary: Record<Locale, HomeText> = {
     brand: 'CANTECUM',
     searchPlaceholder: 'Busca canciones, artistas o partituras',
     subscribe: 'Suscribirte',
-    schemas: 'Esquemas',
+    repertoires: 'Repertorios',
     userNameLabel: 'Nombre',
     welcome: 'Bienvenido',
     featuredTitle: 'Destacado',

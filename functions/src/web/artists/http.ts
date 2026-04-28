@@ -1,7 +1,9 @@
-import * as functions from 'firebase-functions';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
-import { getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { getBodyRecord, getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { createArtist, findArtistByNameSlug, getArtistById, searchArtists } from '../../shared/cloudSql/artists';
+import { listSongsByArtistId } from '../../shared/cloudSql/songs';
 
 interface ArtistSongRow {
   id: string;
@@ -156,12 +158,54 @@ export const artists = functions.https.onRequest(async (req, res) => {
     return;
   }
 
+  const segments = getPathSegments(req);
+
+  // ── GET /artists?q=  →  autocomplete search from Cloud SQL ──
+  if (!segments.length && req.method === 'GET') {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query) {
+      sendJson(res, 200, { items: [] });
+      return;
+    }
+    try {
+      const limitParam = typeof req.query.limit === 'string' ? Number(req.query.limit) : 10;
+      const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 30) : 10;
+      const rows = await searchArtists(query, limit);
+      sendJson(res, 200, { items: rows });
+    } catch (error) {
+      console.error('Artist search failed:', error);
+      sendError(res, 500, 'internal_error', 'Artist search failed.');
+    }
+    return;
+  }
+
+  // ── POST /artists  →  create new artist (type = 'unknown') ──
+  if (!segments.length && req.method === 'POST') {
+    const authContext = await getOptionalAuthContext(req);
+    if (!authContext) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+    const body = getBodyRecord(req);
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) {
+      sendError(res, 400, 'invalid_argument', 'name is required.');
+      return;
+    }
+    try {
+      const artist = await createArtist(name, 'unknown');
+      sendJson(res, 201, { ok: true, artist });
+    } catch (error) {
+      console.error('Artist creation failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to create artist.');
+    }
+    return;
+  }
+
   if (req.method !== 'GET') {
     sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
     return;
   }
-
-  const segments = getPathSegments(req);
 
   if (segments.length < 1 || segments.length > 2) {
     sendError(res, 404, 'not_found', 'Endpoint not found.');
@@ -170,7 +214,7 @@ export const artists = functions.https.onRequest(async (req, res) => {
 
   const artistId = segments[0];
   const subpath = segments[1];
-  const db = getFirestore();
+  const db = getAppFirestore();
 
   // Sub-endpoints: keep the base artist response lean and cacheable.
   if (subpath) {
@@ -188,6 +232,38 @@ export const artists = functions.https.onRequest(async (req, res) => {
   ]);
 
   if (!artistSnap.exists) {
+    const numericArtistId = Number.parseInt(artistId, 10);
+    const isNumericId = Number.isFinite(numericArtistId) && numericArtistId > 0 && String(numericArtistId) === artistId;
+    try {
+      const sqlArtist = isNumericId
+        ? await getArtistById(numericArtistId)
+        : await findArtistByNameSlug(decodeURIComponent(artistId));
+      if (sqlArtist) {
+        sendJson(res, 200, {
+          type: 'artist',
+          id: String(sqlArtist.id),
+          name: sqlArtist.name,
+          bio: '',
+          ministryType: sqlArtist.type || 'General',
+          images: sqlArtist.imageUrl ? [{ url: sqlArtist.imageUrl }] : [],
+          imageUrl: sqlArtist.imageUrl ?? undefined,
+          songsCount: 0,
+          followers: { total: 0 },
+          likeCount: 0,
+          totalViews: 0,
+          popularity: 0,
+          genres: [sqlArtist.type || 'General'],
+          discography: [],
+          suggestedArtists: [],
+          highlightedSongs: [],
+          songs: []
+        });
+        return;
+      }
+    } catch (error) {
+      console.error('Cloud SQL artist fallback failed:', error);
+    }
+
     sendError(res, 404, 'not_found', 'Artist not found.');
     return;
   }
@@ -276,6 +352,43 @@ async function handleArtistSubEndpoint(
   db: FirebaseFirestore.Firestore,
   res: functions.Response
 ): Promise<void> {
+  // ── /songs sub-endpoint resolves from Cloud SQL by numeric artist id ──
+  // (allows listing songs for adding versions, regardless of Firestore artist doc).
+  if (subpath === 'songs') {
+    const numericArtistId = Number.parseInt(artistId, 10);
+    if (!Number.isFinite(numericArtistId) || numericArtistId <= 0) {
+      sendError(res, 400, 'invalid_argument', 'Numeric artistId required.');
+      return;
+    }
+    try {
+      const sqlRows = await listSongsByArtistId(numericArtistId, 100);
+      // Enrich with Firestore song IDs (lookup by sqlSongId).
+      const enriched = await Promise.all(sqlRows.map(async (row) => {
+        let firestoreId: string | null = null;
+        try {
+          const snap = await db.collection('songs').where('sqlSongId', '==', row.id).limit(1).get();
+          if (!snap.empty) {
+            firestoreId = snap.docs[0].id;
+          }
+        } catch { /* best-effort */ }
+        return {
+          sqlSongId: row.id,
+          songId: firestoreId,
+          title: row.title,
+          year: row.year,
+          liturgicalUse: row.liturgicalUse,
+          status: row.status,
+          ownerFirebaseUid: row.ownerFirebaseUid
+        };
+      }));
+      sendJson(res, 200, { items: enriched });
+    } catch (error) {
+      console.error('Artist songs lookup failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to list artist songs.');
+    }
+    return;
+  }
+
   const artistSnap = await db.collection('artists').doc(artistId).get();
   if (!artistSnap.exists) {
     sendError(res, 404, 'not_found', 'Artist not found.');

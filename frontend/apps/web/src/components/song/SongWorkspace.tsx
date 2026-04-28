@@ -2,7 +2,9 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AudioPlayer } from './AudioPlayer';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { useAuth } from '../../context/AuthContext';
 import { usePremiumNavigation } from '../../hooks/usePremiumNavigation';
@@ -11,6 +13,7 @@ import {
   loadSongFavorite,
   loadSongUserPreferences,
   requestSongPurchaseIntent,
+  requestTrackSongListen,
   saveSongFavorite,
   saveSongUserPreferences
 } from '../../features/song/clientPersistence';
@@ -21,9 +24,13 @@ type ScrollSpeed = 1 | 1.5 | 2;
 
 interface SongWorkspaceProps {
   song: SongDetail;
+  initialVersionId?: string;
 }
 
-export function SongWorkspace({ song }: SongWorkspaceProps) {
+export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { user } = useAuth();
   const { openPremiumPlans } = usePremiumNavigation();
   const { requireAuth } = useRequireAuth();
@@ -41,8 +48,17 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
   const [isFavorite, setIsFavorite] = useState(Boolean(song.isFavorite));
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [isAudioTriggering, setIsAudioTriggering] = useState(false);
+  const [activeAudioSrc, setActiveAudioSrc] = useState<string | null>(null);
+  const [audioAutoplayToken, setAudioAutoplayToken] = useState(0);
   const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>(null);
-  const [selectedVersionId, setSelectedVersionId] = useState(song.currentVersionId);
+  const [selectedVersionId, setSelectedVersionId] = useState(() => {
+    const requested = typeof initialVersionId === 'string' ? initialVersionId.trim() : '';
+    if (requested && song.versions.some((version) => version.id === requested)) {
+      return requested;
+    }
+
+    return song.currentVersionId;
+  });
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(song.currentInstrumentId);
   const [isAutoScrolling, setIsAutoScrolling] = useState(false);
   const [scrollSpeed, setScrollSpeed] = useState<ScrollSpeed>(1);
@@ -50,7 +66,6 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
   const [songAccessMessage, setSongAccessMessage] = useState('');
 
   const lyricsRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioTriggerTimeoutRef = useRef<number | null>(null);
 
   const userAccess = useMemo(() => {
@@ -105,9 +120,19 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
   }, [song.id, song.instruments, song.versions]);
 
   useEffect(() => {
+    const requested = typeof initialVersionId === 'string' ? initialVersionId.trim() : '';
+    if (requested && song.versions.some((version) => version.id === requested)) {
+      setSelectedVersionId(requested);
+      return;
+    }
+
+    setSelectedVersionId(song.currentVersionId);
+  }, [initialVersionId, song.currentVersionId, song.versions]);
+
+  useEffect(() => {
     let isMounted = true;
 
-    void loadSongFavorite(song.id).then((favorite) => {
+    void loadSongFavorite(song.id, selectedVersionId).then((favorite) => {
       if (!isMounted || typeof favorite !== 'boolean') {
         return;
       }
@@ -118,7 +143,7 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
     return () => {
       isMounted = false;
     };
-  }, [song.id]);
+  }, [song.id, selectedVersionId]);
 
   useEffect(() => {
     if (!isAutoScrolling) {
@@ -188,30 +213,23 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
       return;
     }
 
-    if (!audioRef.current || audioRef.current.src !== audioSource) {
-      audioRef.current?.pause();
-      audioRef.current = new Audio(audioSource);
-      audioRef.current.addEventListener('ended', () => setIsAudioPlaying(false));
-      audioRef.current.addEventListener('pause', () => setIsAudioPlaying(false));
-    }
-
-    if (isAudioPlaying) {
-      audioRef.current.pause();
+    if (activeAudioSrc === audioSource && isAudioPlaying) {
+      setActiveAudioSrc(null);
       setIsAudioPlaying(false);
       return;
     }
 
-    audioRef.current.currentTime = 0;
-    void audioRef.current.play();
-    setIsAudioPlaying(true);
+    setActiveAudioSrc(audioSource);
+    setAudioAutoplayToken((prev) => prev + 1);
     setSongAccessMessage('');
     triggerAudioFeedback();
+    void requestTrackSongListen(song.id);
   };
 
   const onToggleFavorite = () => {
     setIsFavorite((previousValue) => {
       const nextValue = !previousValue;
-      void saveSongFavorite(song.id, nextValue);
+      void saveSongFavorite(song.id, selectedVersionId, nextValue);
       void saveSongUserPreferences(song.id, {
         currentVersionId: selectedVersionId,
         currentInstrumentId: selectedInstrumentId
@@ -233,6 +251,16 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
       currentVersionId: versionId,
       currentInstrumentId: selectedInstrumentId
     });
+
+    if (pathname) {
+      const currentVersionParam = searchParams?.get('versionId') ?? '';
+      if (currentVersionParam !== versionId) {
+        const params = new URLSearchParams(searchParams?.toString());
+        params.set('versionId', versionId);
+        const query = params.toString();
+        router.replace(`${pathname}?${query}`, { scroll: false });
+      }
+    }
   };
 
   const onSelectInstrument = (instrumentId: string) => {
@@ -351,7 +379,12 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
           <div className="song-headline-main">
             <h1>{song.title}</h1>
             <strong>
-              <Link href={getArtistProfileHref({ artistName: selectedVersion?.artistName ?? song.artistName })}>
+              <Link
+                href={getArtistProfileHref({
+                  artistId: selectedVersion?.artistId ?? song.artists?.[0]?.id,
+                  artistName: selectedVersion?.artistName ?? song.artistName
+                })}
+              >
                 {selectedVersion?.artistName ?? song.artistName}
               </Link>
             </strong>
@@ -416,6 +449,20 @@ export function SongWorkspace({ song }: SongWorkspaceProps) {
                 <span />
               </span>
             </button>
+
+            {activeAudioSrc ? (
+              <div className="song-inline-audio-player">
+                <AudioPlayer
+                  key={`${activeAudioSrc}-${audioAutoplayToken}`}
+                  src={activeAudioSrc}
+                  title={song.title}
+                  autoPlay
+                  showMainButton={false}
+                  onEnded={() => setIsAudioPlaying(false)}
+                  onPlayingChange={setIsAudioPlaying}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
 

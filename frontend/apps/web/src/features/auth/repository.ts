@@ -12,6 +12,44 @@ const hasFirebaseConfig = Boolean(
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
 );
 
+function logRuntimeConnectionStatus(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const runtime = hasFirebaseConfig ? 'firebase' : 'mock-dev';
+  const functionsConfigured = Boolean(functionsBaseUrl);
+
+  console.info(`[Canticum/Auth] Runtime=${runtime} | FunctionsConfigured=${functionsConfigured ? 'yes' : 'no'}`);
+
+  if (!hasFirebaseConfig) {
+    console.warn('[Canticum/Auth] Firebase no configurado. Se usa modo desarrollo.');
+  }
+
+  if (!functionsConfigured) {
+    console.warn('[Canticum/Auth] NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL no configurado.');
+    return;
+  }
+
+  void fetch(`${functionsBaseUrl}/auth`, { method: 'GET' })
+    .then((response) => {
+      console.info(`[Canticum/Auth] Backend Functions reachable: ${response.status} ${response.statusText}`);
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[Canticum/Auth] Backend Functions unreachable: ${message}`);
+    });
+}
+
+if (typeof window !== 'undefined') {
+  const runtimeKey = '__canticum_runtime_diag_done__';
+  const runtimeWindow = window as typeof window & { [key: string]: unknown };
+  if (!runtimeWindow[runtimeKey]) {
+    runtimeWindow[runtimeKey] = true;
+    logRuntimeConnectionStatus();
+  }
+}
+
 export interface AuthUser {
   uid: string;
   email: string | null;
@@ -97,22 +135,73 @@ function mapFirebaseUser(user: User, claims?: Record<string, unknown>): AuthUser
   };
 }
 
-async function registerProfileWithBackend(user: User, displayName?: string): Promise<void> {
+async function registerProfileWithBackend(user: User, displayName?: string, password?: string): Promise<void> {
   if (!functionsBaseUrl) {
-    return;
+    throw new Error('Falta configurar NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL para registrar perfil en backend.');
   }
 
-  try {
-    const token = await user.getIdToken();
-    await fetch(`${functionsBaseUrl}/auth/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify({ uid: user.uid, displayName: displayName ?? user.displayName ?? undefined })
-    });
-  } catch {
+  const token = await user.getIdToken();
+
+  const registerResponse = await fetch(`${functionsBaseUrl}/auth/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ uid: user.uid, displayName: displayName ?? user.displayName ?? undefined, password })
+  });
+
+  if (!registerResponse.ok) {
+    let backendMessage = 'No se pudo registrar el perfil en backend.';
+
+    try {
+      const payload = (await registerResponse.json()) as unknown;
+      if (payload && typeof payload === 'object') {
+        const error = (payload as { error?: { message?: unknown } }).error;
+        if (error && typeof error === 'object' && typeof error.message === 'string' && error.message.trim()) {
+          backendMessage = error.message;
+        }
+      }
+    } catch {
+    }
+
+    throw new Error(backendMessage);
+  }
+
+  const registerPayload = (await registerResponse.json()) as unknown;
+  const registerOk = Boolean(
+    registerPayload
+    && typeof registerPayload === 'object'
+    && (registerPayload as { ok?: boolean }).ok
+  );
+
+  if (!registerOk) {
+    throw new Error('El backend no confirmó la creación del perfil.');
+  }
+
+  const validateResponse = await fetch(`${functionsBaseUrl}/auth/validate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ uid: user.uid })
+  });
+
+  if (!validateResponse.ok) {
+    throw new Error('No se pudo validar el perfil de usuario en backend.');
+  }
+
+  const validatePayload = (await validateResponse.json()) as unknown;
+  const hasBackendProfile = Boolean(
+    validatePayload
+    && typeof validatePayload === 'object'
+    && (validatePayload as { exists?: boolean }).exists
+    && (validatePayload as { profileExists?: boolean }).profileExists
+  );
+
+  if (!hasBackendProfile) {
+    throw new Error('La cuenta se creó en Auth, pero no quedó perfil en la base de datos.');
   }
 }
 
@@ -167,7 +256,17 @@ export async function signUp(email: string, password: string, displayName?: stri
       await updateProfile(credential.user, { displayName });
     }
 
-    await registerProfileWithBackend(credential.user, displayName);
+    try {
+      await registerProfileWithBackend(credential.user, displayName, password);
+    } catch (backendErr) {
+      await firebaseSignOut(auth);
+      return {
+        ok: false,
+        error: backendErr instanceof Error
+          ? backendErr.message
+          : 'No se pudo sincronizar el usuario con backend.'
+      };
+    }
 
     const tokenResult = await credential.user.getIdTokenResult();
     writeSessionCookie(tokenResult.token);

@@ -1,9 +1,9 @@
-import { getFirestore } from 'firebase-admin/firestore';
+import { getAppFirestore } from '../firestore';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 
 /* ── Free-plan caps ── */
-export const FREE_MAX_SCHEMAS = 2;
-export const FREE_MAX_SONGS_PER_SCHEMA = 10;
+export const FREE_MAX_repertoireS = 2;
+export const FREE_MAX_SONGS_PER_repertoire = 10;
 export const FREE_MAX_FAVORITES = 10;
 
 /* ── Helpers ── */
@@ -13,7 +13,7 @@ export function isPremiumUser(token: DecodedIdToken | null | undefined): boolean
 }
 
 export async function isPremiumByUid(uid: string): Promise<boolean> {
-  const userSnap = await getFirestore().collection('users').doc(uid).get();
+  const userSnap = await getAppFirestore().collection('users').doc(uid).get();
   const data = (userSnap.data() ?? {}) as Record<string, unknown>;
   return Boolean(data.premium);
 }
@@ -29,11 +29,11 @@ export async function resolveIsPremium(uid: string, token: DecodedIdToken | null
 }
 
 /**
- * Count how many schemas the user currently owns.
+ * Count how many repertoires the user currently owns.
  */
-export async function countUserSchemas(uid: string): Promise<number> {
-  const snap = await getFirestore()
-    .collection('schemas')
+export async function countUserrepertoires(uid: string): Promise<number> {
+  const snap = await getAppFirestore()
+    .collection('repertoires')
     .where('userId', '==', uid)
     .count()
     .get();
@@ -44,11 +44,30 @@ export async function countUserSchemas(uid: string): Promise<number> {
  * Count how many favorites the user currently has.
  */
 export async function countUserFavorites(uid: string): Promise<number> {
-  const snap = await getFirestore()
-    .collection('users')
-    .doc(uid)
-    .collection('favorites')
-    .count()
-    .get();
-  return snap.data().count;
+  try {
+    const snap = await getAppFirestore()
+      .collectionGroup('versions')
+      .where('userId', '==', uid)
+      .count()
+      .get();
+    return snap.data().count;
+  } catch {
+    const favoriteSongsSnap = await getAppFirestore()
+      .collection('users')
+      .doc(uid)
+      .collection('favorites')
+      .get();
+
+    if (favoriteSongsSnap.empty) {
+      return 0;
+    }
+
+    const countTasks = favoriteSongsSnap.docs.map(async (favoriteSongDoc) => {
+      const versionCountSnap = await favoriteSongDoc.ref.collection('versions').count().get();
+      return versionCountSnap.data().count;
+    });
+
+    const counts = await Promise.all(countTasks);
+    return counts.reduce((total, current) => total + current, 0);
+  }
 }

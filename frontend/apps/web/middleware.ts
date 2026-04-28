@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 const PROTECTED_ROUTES: Array<{ prefix: string; reason: 'auth' | 'auth-to-buy' }> = [
-  { prefix: '/schemas', reason: 'auth' },
+  { prefix: '/repertoires', reason: 'auth' },
+  { prefix: '/create/repertoires', reason: 'auth' },
+  { prefix: '/create/song', reason: 'auth' },
   { prefix: '/artistas', reason: 'auth' },
   { prefix: '/checkout', reason: 'auth-to-buy' },
   { prefix: '/premium', reason: 'auth-to-buy' }
@@ -45,7 +47,9 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/schemas/:path*',
+    '/repertoires/:path*',
+    '/create/repertoires/:path*',
+    '/create/song/:path*',
     '/artistas/:path*',
     '/checkout/:path*',
     '/premium/:path*'

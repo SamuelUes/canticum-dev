@@ -1,7 +1,10 @@
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { getAuth } from 'firebase-admin/auth';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import '../../shared/firebaseAdmin';
+import { hasCloudSqlUser, upsertUserInCloudSql } from '../../shared/cloudSql/users';
+import { runStartupDiagnostics } from '../../shared/diagnostics';
+import { getAppFirestore } from '../../shared/firestore';
 import {
   getBodyRecord,
   getBodyString,
@@ -18,6 +21,7 @@ interface UserProfileWrite {
   email?: string;
   displayName?: string;
   premium: boolean;
+  password?: string;
 }
 
 function buildProfileFromRequest(req: functions.https.Request): UserProfileWrite {
@@ -26,17 +30,20 @@ function buildProfileFromRequest(req: functions.https.Request): UserProfileWrite
   const plan = typeof body.plan === 'string' && body.plan.trim() ? body.plan.trim() : 'free';
   const displayName = typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : undefined;
 
+  const password = typeof body.password === 'string' && body.password.trim() ? body.password.trim() : undefined;
+
   return {
     role,
     plan,
     displayName,
-    premium: plan.toLowerCase().includes('premium')
+    premium: plan.toLowerCase().includes('premium'),
+    password
   };
 }
 
 async function upsertUserProfile(uid: string, data: UserProfileWrite): Promise<Record<string, unknown>> {
   const authUser = await getAuth().getUser(uid);
-  const userRef = getFirestore().collection('users').doc(uid);
+  const userRef = getAppFirestore().collection('users').doc(uid);
 
   await userRef.set(
     {
@@ -51,6 +58,8 @@ async function upsertUserProfile(uid: string, data: UserProfileWrite): Promise<R
     },
     { merge: true }
   );
+
+  await upsertUserInCloudSql(authUser, data.displayName, data.password);
 
   await userRef.collection('private').doc('meta').set(
     {
@@ -72,7 +81,18 @@ async function upsertUserProfile(uid: string, data: UserProfileWrite): Promise<R
 }
 
 export const auth = functions.https.onRequest(async (req, res) => {
+  await runStartupDiagnostics();
+
   if (handlePreflight(req, res)) {
+    return;
+  }
+
+  if (req.method === 'GET') {
+    sendJson(res, 200, {
+      ok: true,
+      service: 'auth',
+      message: 'Auth endpoint is reachable. Use POST for actions.'
+    });
     return;
   }
 
@@ -106,12 +126,14 @@ export const auth = functions.https.onRequest(async (req, res) => {
         ? await getAuth().getUser(requestUid)
         : await getAuth().getUserByEmail(String(requestEmail));
 
-      const profileSnap = await getFirestore().collection('users').doc(authUser.uid).get();
+      const profileSnap = await getAppFirestore().collection('users').doc(authUser.uid).get();
+      const cloudSqlExists = await hasCloudSqlUser(authUser.uid, authUser.email ?? null);
 
       sendJson(res, 200, {
         exists: true,
         uid: authUser.uid,
         email: authUser.email ?? null,
+        cloudSqlExists,
         profileExists: profileSnap.exists,
         profile: profileSnap.exists ? profileSnap.data() : null
       });
@@ -157,7 +179,22 @@ export const auth = functions.https.onRequest(async (req, res) => {
       });
       return;
     } catch (error) {
-      functions.logger.error('auth/register failed', error);
+      const message = error instanceof Error ? error.message : String(error);
+      functions.logger.error('auth/register failed', {
+        uid: requestUid,
+        error: message
+      });
+
+      if (message.includes('Cloud SQL authentication failed')) {
+        sendError(res, 500, 'cloudsql_auth_failed', message);
+        return;
+      }
+
+      if (message.includes('Cloud SQL repertoire mismatch')) {
+        sendError(res, 500, 'cloudsql_repertoire_mismatch', message);
+        return;
+      }
+
       sendError(res, 500, 'internal', 'Unable to register user profile.');
       return;
     }
@@ -169,13 +206,16 @@ export const auth = functions.https.onRequest(async (req, res) => {
       return;
     }
 
-    const userRef = getFirestore().collection('users').doc(authContext.uid);
+    const userRef = getAppFirestore().collection('users').doc(authContext.uid);
     const currentSnap = await userRef.get();
     const current = currentSnap.data() ?? {};
 
     const role = typeof current.role === 'string' ? current.role : 'user';
     const plan = typeof current.plan === 'string' ? current.plan : 'free';
     const premium = Boolean(current.premium ?? authContext.token.premium);
+    const authUser = await getAuth().getUser(authContext.uid);
+
+    await upsertUserInCloudSql(authUser, current.displayName as string | undefined);
 
     await userRef.set(
       {

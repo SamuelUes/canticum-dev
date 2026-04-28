@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const subscriptionStatusSchema = z.object({
+export const subscriptionStatusrepertoire = z.object({
   platform: z.enum(['android', 'ios', 'web']).optional(),
   plan: z.string(),
   status: z.enum(['active', 'inactive', 'expired'])

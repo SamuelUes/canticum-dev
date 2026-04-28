@@ -1,3 +1,5 @@
+// Storage guarda binarios; permisos de negocio se alinean con Firestore/Cloud SQL.
+// Ver contrato: database/DATA_CONTRACT.md y docs/CloudSQL-vs-Firestore.md
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
@@ -18,6 +20,11 @@ service firebase.storage {
       return isAuthenticated() && request.auth.token.premium == true;
     }
 
+    function hasSongUnlock(songId) {
+      return isAuthenticated()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)/songUnlocks/$(songId));
+    }
+
     match /songs/{songId}/lyrics/{allPaths=**} {
       allow read: if true;
       allow write: if isAdminOrEditor();
@@ -29,13 +36,31 @@ service firebase.storage {
     }
 
     match /songs/{songId}/audio/premium/{fileName} {
-      allow read: if isPremium();
+      allow read: if isPremium() || hasSongUnlock(songId);
       allow write: if isAdminOrEditor();
     }
 
     match /songs/{songId}/sheet/{allPaths=**} {
       allow read: if true;
       allow write: if isAdminOrEditor();
+    }
+
+    // Per-version assets (audio, lyrics file, sheet file).
+    // Reads are public for non-premium, owner-only granular checks delegated to backend.
+    // Writes allowed to any authenticated user; backend validates DRAFT/published and ownership rules.
+    match /songs/{songId}/versions/{versionId}/audio/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /songs/{songId}/versions/{versionId}/lyrics/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /songs/{songId}/versions/{versionId}/sheet/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
     }
 
     match /users/{userId}/{allPaths=**} {

@@ -1,6 +1,16 @@
-import * as functions from 'firebase-functions';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
+import {
+  addVersionsToExistingSong,
+  createSongDraftInCloudSql,
+  deleteSongByIdInCloudSql,
+  deleteVersionsByIdsInCloudSql,
+  incrementSongViewInCloudSql,
+  type VersionInput
+} from '../../shared/cloudSql/songs';
+import { createArtist, getArtistById } from '../../shared/cloudSql/artists';
 import {
   getBodyRecord,
   getOptionalAuthContext,
@@ -42,6 +52,14 @@ function isPremiumVersion(version: Record<string, unknown>): boolean {
   return Boolean(version.isPremium);
 }
 
+function isSongPremium(songData: Record<string, unknown>, versions: Array<Record<string, unknown>>): boolean {
+  if (Boolean(songData.isPremium)) {
+    return true;
+  }
+
+  return versions.some((version) => isPremiumVersion(version));
+}
+
 interface SongImage { url: string; width?: number; height?: number; }
 
 function normalizeImages(raw: unknown, fallbackUrl?: string): SongImage[] | undefined {
@@ -73,12 +91,446 @@ function computePopularity(raw: unknown, totalViews: number): number {
   return Math.max(0, Math.min(100, Math.round(Math.log10(totalViews + 1) * 20)));
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter((entry) => entry.length > 0);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+
+  return [];
+}
+
+async function resolveSongSnapshotByAnyId(
+  db: FirebaseFirestore.Firestore,
+  songId: string
+): Promise<FirebaseFirestore.DocumentSnapshot | null> {
+  const directSnap = await db.collection('songs').doc(songId).get();
+  if (directSnap.exists) {
+    return directSnap;
+  }
+
+  const numericId = Number(songId);
+  if (!Number.isFinite(numericId) || numericId <= 0) {
+    return null;
+  }
+
+  const bySqlSong = await db
+    .collection('songs')
+    .where('sqlSongId', '==', numericId)
+    .limit(1)
+    .get();
+
+  if (!bySqlSong.empty) {
+    return bySqlSong.docs[0];
+  }
+
+  try {
+    const bySqlVersion = await db
+      .collectionGroup('versions')
+      .where('sqlSongVersionId', '==', numericId)
+      .limit(1)
+      .get();
+
+    if (!bySqlVersion.empty) {
+      const versionData = (bySqlVersion.docs[0].data() ?? {}) as Record<string, unknown>;
+      const parentSongId = typeof versionData.songId === 'string' ? versionData.songId : '';
+      if (parentSongId) {
+        const parentSongSnap = await db.collection('songs').doc(parentSongId).get();
+        if (parentSongSnap.exists) {
+          return parentSongSnap;
+        }
+      }
+    }
+  } catch {
+  }
+
+  return null;
+}
+
+function resolveSqlSongIdFromSongSnapshot(songId: string, songData: Record<string, unknown>): number | null {
+  const fromDoc = Number(songData.sqlSongId);
+  if (Number.isFinite(fromDoc) && fromDoc > 0) {
+    return Math.floor(fromDoc);
+  }
+
+  const direct = Number(songId);
+  if (Number.isFinite(direct) && direct > 0) {
+    return Math.floor(direct);
+  }
+
+  return null;
+}
+
 export const songs = functions.https.onRequest(async (req, res) => {
   if (handlePreflight(req, res)) {
     return;
   }
 
   const segments = getPathSegments(req);
+
+  // ── POST /songs  →  create a new song draft OR add versions to existing ──
+  if (!segments.length && req.method === 'POST') {
+    const authContext = await getOptionalAuthContext(req);
+    if (!authContext) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const body = getBodyRecord(req);
+    const uid = authContext.uid;
+    const db = getAppFirestore();
+
+    const mode = typeof body.mode === 'string' && body.mode.trim() === 'addVersion' ? 'addVersion' : 'new';
+    const role = (authContext.token.role as string | undefined) ?? '';
+    const isAdmin = role === 'admin';
+
+    // ── Helper: build version inputs from raw body, resolving artists ──
+    const buildVersionInputs = async (
+      rawVersions: Array<Record<string, unknown>>,
+      defaultArtistId: number | null,
+      defaultArtistName: string | null
+    ): Promise<VersionInput[]> => {
+      const out: VersionInput[] = [];
+      for (const rv of rawVersions) {
+        const vName = typeof rv.versionName === 'string' && rv.versionName.trim() ? rv.versionName.trim() : 'Versión 1';
+        const instrName = typeof rv.instrumentName === 'string' && rv.instrumentName.trim() ? rv.instrumentName.trim() : 'Letra';
+        let vArtistId: number | null = null;
+        let vArtistName: string | null = null;
+
+        if (typeof rv.artistId === 'number' && rv.artistId > 0) {
+          vArtistId = rv.artistId;
+          try {
+            const a = await getArtistById(vArtistId);
+            if (a) vArtistName = a.name;
+          } catch { /* keep null */ }
+        } else if (rv.isOwnVersion === true) {
+          vArtistId = defaultArtistId;
+          vArtistName = defaultArtistName ?? uid;
+        } else if (typeof rv.artistName === 'string' && rv.artistName.trim()) {
+          try {
+            const created = await createArtist(String(rv.artistName).trim(), 'unknown');
+            vArtistId = created.id;
+            vArtistName = created.name;
+          } catch {
+            vArtistName = String(rv.artistName).trim();
+          }
+        }
+
+        out.push({
+          versionName: vName,
+          instrumentName: instrName,
+          artistId: vArtistId,
+          artistName: vArtistName,
+          tone: typeof rv.tone === 'string' ? rv.tone.trim() || null : null,
+          notationType: typeof rv.notationType === 'string' ? rv.notationType.trim() || null : null,
+          audioReferenceUrl: typeof rv.audioReferenceUrl === 'string' ? rv.audioReferenceUrl.trim() || null : null
+        });
+      }
+      return out;
+    };
+
+    // ╔══════════════════════════════════════════╗
+    // ║          mode = 'addVersion'             ║
+    // ╚══════════════════════════════════════════╝
+    if (mode === 'addVersion') {
+      const targetSongId = typeof body.songId === 'string' ? body.songId.trim() : '';
+      if (!targetSongId) {
+        sendError(res, 400, 'invalid_argument', 'songId is required when mode=addVersion.');
+        return;
+      }
+
+      const songRef = db.collection('songs').doc(targetSongId);
+      const songSnap = await songRef.get();
+      if (!songSnap.exists) {
+        sendError(res, 404, 'not_found', 'Target song not found.');
+        return;
+      }
+      const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+      const songSqlId = Number(songData.sqlSongId);
+      if (!Number.isFinite(songSqlId) || songSqlId <= 0) {
+        sendError(res, 422, 'invalid_state', 'Target song has no Cloud SQL projection.');
+        return;
+      }
+
+      // Permissions: DRAFT → only owner/admin; published → any authenticated.
+      const status = typeof songData.status === 'string' ? songData.status.toUpperCase() : '';
+      const ownerUid = typeof songData.ownerUserId === 'string' ? songData.ownerUserId : (typeof songData.createdBy === 'string' ? songData.createdBy : '');
+      if (status === 'DRAFT' && !isAdmin && ownerUid && ownerUid !== uid) {
+        sendError(res, 403, 'forbidden', 'Only the owner can add versions to a draft song.');
+        return;
+      }
+
+      const rawVersions = Array.isArray(body.versions) ? body.versions as Array<Record<string, unknown>> : [];
+      if (rawVersions.length === 0) {
+        sendError(res, 400, 'invalid_argument', 'At least one version is required.');
+        return;
+      }
+
+      const songArtistIdNum = typeof songData.artistId === 'string' ? Number(songData.artistId) : NaN;
+      const versionInputs = await buildVersionInputs(
+        rawVersions,
+        Number.isFinite(songArtistIdNum) ? songArtistIdNum : null,
+        typeof songData.artistName === 'string' ? songData.artistName : null
+      );
+
+      let sqlVersions: Array<{ id: number; versionName: string; instrumentId: number | null; instrumentName: string | null; artistId: number | null; artistName: string | null; audioReferenceUrl: string | null }> = [];
+      try {
+        sqlVersions = await addVersionsToExistingSong(songSqlId, versionInputs);
+      } catch (error) {
+        console.error('Cloud SQL addVersions failed:', error);
+        sendError(res, 500, 'internal_error', 'Failed to add versions in Cloud SQL.');
+        return;
+      }
+
+      // Project versions to Firestore. Use client-provided Firestore IDs when given.
+      const versionsCollection = songRef.collection('versions');
+      const clientVersionIds: Array<string | undefined> = rawVersions.map((rv) =>
+        typeof rv.versionDocId === 'string' && rv.versionDocId.trim() ? rv.versionDocId.trim() : undefined
+      );
+
+      try {
+        const batch = db.batch();
+        const createdVersionIds: string[] = [];
+
+        sqlVersions.forEach((sv, index) => {
+          const vi = versionInputs[index];
+          const rv = rawVersions[index];
+          const ref = clientVersionIds[index]
+            ? versionsCollection.doc(clientVersionIds[index] as string)
+            : versionsCollection.doc();
+          const versionLabel = sv.instrumentName ? `${sv.versionName} · ${sv.instrumentName}` : sv.versionName;
+          createdVersionIds.push(ref.id);
+
+          batch.set(ref, {
+            songId: songRef.id,
+            versionId: ref.id,
+            sqlSongVersionId: sv.id,
+            versionName: sv.versionName,
+            artistName: sv.artistName ?? vi.artistName ?? songData.artistName ?? null,
+            artistId: sv.artistId ? String(sv.artistId) : null,
+            instrumentId: sv.instrumentId ? String(sv.instrumentId) : null,
+            instrumentName: sv.instrumentName ?? vi.instrumentName ?? null,
+            tone: vi.tone ?? null,
+            notationType: vi.notationType ?? null,
+            audioReferenceUrl: sv.audioReferenceUrl ?? vi.audioReferenceUrl ?? null,
+            lyrics: typeof rv.lyrics === 'string' ? rv.lyrics : '',
+            lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null,
+            sheetFileUrl: typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null,
+            isPremium: false,
+            label: versionLabel,
+            createdBy: uid,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp()
+          });
+        });
+
+        // Update parent song updatedAt + currentVersionId to most recent created.
+        const newCurrentVersionId = createdVersionIds[createdVersionIds.length - 1];
+        batch.update(songRef, {
+          updatedAt: FieldValue.serverTimestamp(),
+          currentVersionId: newCurrentVersionId
+        });
+
+        await batch.commit();
+
+        sendJson(res, 201, {
+          ok: true,
+          songId: songRef.id,
+          versionIds: createdVersionIds,
+          sqlSongId: songSqlId,
+          sqlVersionIds: sqlVersions.map((sv) => sv.id)
+        });
+      } catch (error) {
+        console.error('Firestore addVersion projection failed:', error);
+        try {
+          await deleteVersionsByIdsInCloudSql(sqlVersions.map((sv) => sv.id));
+        } catch (rollbackError) {
+          console.error('Cloud SQL rollback for addVersion failed:', rollbackError);
+        }
+        sendError(res, 500, 'internal_error', 'Failed to project versions to Firestore.');
+      }
+      return;
+    }
+
+    // ╔══════════════════════════════════════════╗
+    // ║          mode = 'new' (default)          ║
+    // ╚══════════════════════════════════════════╝
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (!title) {
+      sendError(res, 400, 'invalid_argument', 'title is required.');
+      return;
+    }
+
+    // Allow client-supplied Firestore song doc id so file uploads can use final paths.
+    const clientSongId = typeof body.songDocId === 'string' && body.songDocId.trim() ? body.songDocId.trim() : '';
+    const songRef = clientSongId
+      ? db.collection('songs').doc(clientSongId)
+      : db.collection('songs').doc();
+    const artistName = typeof body.artistName === 'string' ? body.artistName.trim() : '';
+
+    // ── Resolve song-level artist ──
+    let songArtistId: number | null = null;
+    let resolvedArtistName = artistName;
+    if (typeof body.artistId === 'number' && body.artistId > 0) {
+      songArtistId = body.artistId;
+      try {
+        const existing = await getArtistById(songArtistId);
+        if (existing) resolvedArtistName = existing.name;
+      } catch { /* keep name from body */ }
+    } else if (artistName) {
+      try {
+        const created = await createArtist(artistName, 'unknown');
+        songArtistId = created.id;
+        resolvedArtistName = created.name;
+      } catch { /* artist_id stays null */ }
+    }
+
+    // ── Build versions array from body ──
+    const rawVersions = Array.isArray(body.versions) ? body.versions as Array<Record<string, unknown>> : [];
+    let versionInputs: VersionInput[] = [];
+
+    if (rawVersions.length > 0) {
+      versionInputs = await buildVersionInputs(rawVersions, songArtistId, resolvedArtistName || null);
+    } else {
+      // Fallback: create one default version
+      const instruments = normalizeStringArray(body.instruments ?? body.instrumentation);
+      const normalizedInstruments = instruments.length > 0 ? instruments : ['Letra'];
+      const fallbackVersionName = typeof body.versionName === 'string' && body.versionName.trim()
+        ? body.versionName.trim() : 'Versión 1';
+      const songTone = typeof body.tone === 'string' ? body.tone.trim() || null : null;
+      const songNotationType = typeof body.notationType === 'string' ? body.notationType.trim() || null : null;
+      const songAudioReferenceUrl = typeof body.audioReferenceUrl === 'string' ? body.audioReferenceUrl.trim() || null : null;
+
+      for (const instrName of normalizedInstruments) {
+        versionInputs.push({
+          versionName: fallbackVersionName,
+          instrumentName: instrName,
+          artistId: songArtistId,
+          artistName: resolvedArtistName || null,
+          tone: songTone,
+          notationType: songNotationType,
+          audioReferenceUrl: songAudioReferenceUrl
+        });
+      }
+    }
+
+    let sqlSongId: number;
+    let sqlVersions: Array<{ id: number; versionName: string; instrumentId: number | null; instrumentName: string | null; artistId: number | null; artistName: string | null; audioReferenceUrl: string | null }> = [];
+    try {
+      const sqlSong = await createSongDraftInCloudSql({
+        firebaseUid: uid,
+        title,
+        year: typeof body.year === 'number' ? body.year : null,
+        liturgicalUse: typeof body.liturgicalUse === 'string' ? body.liturgicalUse : 'General',
+        filePath: `songs/${songRef.id}`,
+        previewUrl: null,
+        artistId: songArtistId,
+        versions: versionInputs
+      });
+      sqlSongId = sqlSong.id;
+      sqlVersions = sqlSong.versions;
+    } catch (error) {
+      console.error('Cloud SQL draft insert failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to create song draft in Cloud SQL.');
+      return;
+    }
+
+    try {
+      const versionsCollection = songRef.collection('versions');
+      const clientVersionIds: Array<string | undefined> = rawVersions.map((rv) =>
+        typeof rv.versionDocId === 'string' && rv.versionDocId.trim() ? rv.versionDocId.trim() : undefined
+      );
+      const versionRefs = sqlVersions.length > 0
+        ? sqlVersions.map((_, idx) => clientVersionIds[idx]
+          ? versionsCollection.doc(clientVersionIds[idx] as string)
+          : versionsCollection.doc())
+        : [versionsCollection.doc()];
+
+      const firstVersionRef = versionRefs[0];
+      const firstSqlVersion = sqlVersions[0];
+
+      const batch = db.batch();
+
+      // NOTE: lyrics no longer projected on song doc; lives on each version doc instead.
+      batch.set(songRef, {
+        title,
+        artistName: resolvedArtistName,
+        author: resolvedArtistName,
+        artistId: songArtistId ? String(songArtistId) : null,
+        year: typeof body.year === 'number' ? body.year : null,
+        liturgicalType: typeof body.liturgicalUse === 'string' ? body.liturgicalUse : 'General',
+        status: 'DRAFT',
+        createdBy: uid,
+        ownerUserId: uid,
+        sqlSongId,
+        currentVersionId: firstVersionRef.id,
+        currentInstrumentId: firstSqlVersion?.instrumentId ? String(firstSqlVersion.instrumentId) : '',
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      versionRefs.forEach((versionRef, index) => {
+        const sv = sqlVersions[index];
+        const vi = versionInputs[index];
+        const rv = rawVersions[index] ?? {};
+        const versionLabel = sv?.instrumentName
+          ? `${sv.versionName} · ${sv.instrumentName}`
+          : sv?.versionName ?? 'Versión 1';
+
+        batch.set(versionRef, {
+          songId: songRef.id,
+          versionId: versionRef.id,
+          sqlSongVersionId: sv?.id ?? null,
+          versionName: sv?.versionName ?? vi?.versionName ?? 'Versión 1',
+          artistName: sv?.artistName ?? vi?.artistName ?? resolvedArtistName,
+          artistId: sv?.artistId ? String(sv.artistId) : null,
+          instrumentId: sv?.instrumentId ? String(sv.instrumentId) : null,
+          instrumentName: sv?.instrumentName ?? vi?.instrumentName ?? null,
+          tone: vi?.tone ?? null,
+          notationType: vi?.notationType ?? null,
+          audioReferenceUrl: sv?.audioReferenceUrl ?? vi?.audioReferenceUrl ?? null,
+          lyrics: typeof rv.lyrics === 'string' ? rv.lyrics : (typeof body.lyrics === 'string' ? body.lyrics : ''),
+          lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null,
+          sheetFileUrl: typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null,
+          isPremium: false,
+          label: versionLabel,
+          createdBy: uid,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp()
+        });
+      });
+
+      await batch.commit();
+
+      sendJson(res, 201, {
+        ok: true,
+        song: { id: songRef.id },
+        songId: songRef.id,
+        versionIds: versionRefs.map((r) => r.id),
+        sqlSongId,
+        sqlVersionIds: sqlVersions.map((v) => v.id),
+        status: 'DRAFT'
+      });
+      return;
+    } catch (error) {
+      console.error('Firestore projection for song draft failed:', error);
+      try {
+        await deleteSongByIdInCloudSql(sqlSongId);
+      } catch (rollbackError) {
+        console.error('Cloud SQL rollback for song draft failed:', rollbackError);
+      }
+      sendError(res, 500, 'internal_error', 'Failed to project song draft to Firestore.');
+      return;
+    }
+  }
 
   if (!segments.length) {
     sendError(res, 404, 'not_found', 'Endpoint not found.');
@@ -88,12 +540,12 @@ export const songs = functions.https.onRequest(async (req, res) => {
   const songId = segments[0];
   const authContext = await getOptionalAuthContext(req);
   const requestUserId = resolveRequestUserId(req, authContext);
-  const db = getFirestore();
+  const db = getAppFirestore();
 
   if (segments.length === 1 && req.method === 'GET') {
-    const songSnap = await db.collection('songs').doc(songId).get();
+    const songSnap = await resolveSongSnapshotByAnyId(db, songId);
 
-    if (!songSnap.exists) {
+    if (!songSnap || !songSnap.exists) {
       sendError(res, 404, 'not_found', 'Song not found.');
       return;
     }
@@ -123,10 +575,18 @@ export const songs = functions.https.onRequest(async (req, res) => {
       return isPremiumUser || hasSongUnlock;
     });
 
-    const versions = (visibleVersions.length ? visibleVersions : rawVersions).map((version) => ({
+    // Sort visible versions by createdAt DESC (most recent first) for "default version" fallback.
+    const sortedVisible = [...visibleVersions].sort((a, b) => {
+      const aMs = (a.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      const bMs = (b.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      return bMs - aMs;
+    });
+
+    const versions = visibleVersions.map((version) => ({
       id: String(version.id),
       songId: String(version.songId ?? songId),
       versionId: String(version.versionId ?? version.id),
+      sqlSongVersionId: Number.isFinite(Number(version.sqlSongVersionId)) ? String(version.sqlSongVersionId) : undefined,
       versionName: String(version.versionName ?? version.label ?? 'Versión'),
       artistId: typeof version.artistId === 'string' ? version.artistId : undefined,
       instrumentId: typeof version.instrumentId === 'string' ? version.instrumentId : undefined,
@@ -136,8 +596,17 @@ export const songs = functions.https.onRequest(async (req, res) => {
       artistName: String(version.artistName ?? songData.artistName ?? ''),
       instrumentName: typeof version.instrumentName === 'string' ? version.instrumentName : undefined,
       label: String(version.label ?? version.versionName ?? 'Versión'),
-      isPremium: Boolean(version.isPremium)
+      isPremium: Boolean(version.isPremium),
+      lyrics: typeof version.lyrics === 'string' ? version.lyrics : undefined,
+      lyricsFileUrl: typeof version.lyricsFileUrl === 'string' ? version.lyricsFileUrl : undefined,
+      sheetFileUrl: typeof version.sheetFileUrl === 'string' ? version.sheetFileUrl : undefined
     }));
+
+    // Resolve active version: ?versionId query → exact match; else most recent visible.
+    const requestedVersionId = typeof req.query.versionId === 'string' ? req.query.versionId.trim() : '';
+    const activeVersionRaw = requestedVersionId
+      ? sortedVisible.find((v) => String(v.id) === requestedVersionId)
+      : sortedVisible[0];
 
     const instrumentMap = new Map<string, { id: string; name: string }>();
 
@@ -150,13 +619,29 @@ export const songs = functions.https.onRequest(async (req, res) => {
       }
     });
 
-    const currentVersionId = String(songData.currentVersionId ?? versions[0]?.id ?? '');
-    const currentInstrumentId = String(songData.currentInstrumentId ?? instrumentMap.values().next().value?.id ?? '');
+    // Active version takes precedence over song-level legacy fields.
+    const activeVersionId = activeVersionRaw ? String(activeVersionRaw.id) : '';
+    const currentVersionId = activeVersionId
+      || String(songData.currentVersionId ?? versions[0]?.id ?? '');
+    const currentInstrumentId = activeVersionRaw && typeof activeVersionRaw.instrumentId === 'string'
+      ? String(activeVersionRaw.instrumentId)
+      : String(songData.currentInstrumentId ?? instrumentMap.values().next().value?.id ?? '');
 
     // ---- Spotify-aligned fields ----
     const title = String(songData.title ?? '');
     const primaryArtistName = String(songData.artistName ?? songData.author ?? '');
-    const audioUrl = typeof songData.audioUrl === 'string' ? songData.audioUrl : undefined;
+    // Audio: active version's audio first, then legacy song-level audioUrl.
+    const audioUrl = (activeVersionRaw && typeof activeVersionRaw.audioReferenceUrl === 'string' && activeVersionRaw.audioReferenceUrl)
+      ? (activeVersionRaw.audioReferenceUrl as string)
+      : (typeof songData.audioUrl === 'string' ? songData.audioUrl : undefined);
+    // Lyrics: active version first, legacy song-level fallback.
+    const activeLyrics = (activeVersionRaw && typeof activeVersionRaw.lyrics === 'string' && activeVersionRaw.lyrics)
+      ? (activeVersionRaw.lyrics as string)
+      : String(songData.lyrics ?? '');
+    // Sheet: active version's sheetFileUrl first, legacy song-level sheet fallback.
+    const activeSheet = (activeVersionRaw && typeof activeVersionRaw.sheetFileUrl === 'string' && activeVersionRaw.sheetFileUrl)
+      ? (activeVersionRaw.sheetFileUrl as string)
+      : (typeof songData.sheet === 'string' ? songData.sheet : undefined);
     const images = normalizeImages(
       songData.images,
       typeof songData.thumbnailUrl === 'string' ? (songData.thumbnailUrl as string) : undefined
@@ -232,11 +717,13 @@ export const songs = functions.https.onRequest(async (req, res) => {
       year: typeof songData.year === 'number' ? songData.year : undefined,
       status: String(songData.status ?? 'draft').toLowerCase(),
       createdBy: String(songData.createdBy ?? ''),
-      lyrics: String(songData.lyrics ?? ''),
-      sheet: typeof songData.sheet === 'string' ? songData.sheet : undefined,
+      lyrics: activeLyrics,
+      sheet: activeSheet,
       // Back-compat audio alias + Spotify-style `previewUrl`
       audioUrl,
       previewUrl: audioUrl ?? null,
+      sqlSongId: Number.isFinite(Number(songData.sqlSongId)) ? String(songData.sqlSongId) : undefined,
+      activeVersionId: activeVersionId || undefined,
       currentVersionId,
       currentInstrumentId,
       userAccess: {
@@ -250,6 +737,54 @@ export const songs = functions.https.onRequest(async (req, res) => {
       instruments: Array.from(instrumentMap.values())
     });
     return;
+  }
+
+  if (segments.length === 2 && segments[1] === 'listen' && req.method === 'POST') {
+    const songSnap = await resolveSongSnapshotByAnyId(db, songId);
+
+    if (!songSnap || !songSnap.exists) {
+      sendError(res, 404, 'not_found', 'Song not found.');
+      return;
+    }
+
+    const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+    const sqlSongId = resolveSqlSongIdFromSongSnapshot(songSnap.id, songData);
+
+    if (!sqlSongId) {
+      sendError(res, 422, 'invalid_state', 'Song has no Cloud SQL projection.');
+      return;
+    }
+
+    try {
+      const metrics = await incrementSongViewInCloudSql(sqlSongId);
+      if (!metrics) {
+        sendError(res, 404, 'not_found', 'Cloud SQL song not found.');
+        return;
+      }
+
+      await songSnap.ref.set(
+        {
+          totalViews: metrics.totalViews,
+          popularity: metrics.popularity,
+          updatedAt: FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+
+      sendJson(res, 200, {
+        ok: true,
+        songId: songSnap.id,
+        sqlSongId: metrics.sqlSongId,
+        totalViews: metrics.totalViews,
+        likeCount: metrics.likeCount,
+        popularity: metrics.popularity
+      });
+      return;
+    } catch (error) {
+      console.error('Song listen tracking failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to register song listen.');
+      return;
+    }
   }
 
   if (segments.length === 2 && segments[1] === 'preferences' && req.method === 'GET') {
@@ -314,6 +849,40 @@ export const songs = functions.https.onRequest(async (req, res) => {
 
     if (!isOwnerOrAdmin(requestUserId, authContext?.uid ?? null, authContext?.token.role as string | undefined)) {
       sendError(res, 403, 'forbidden', 'Cannot create purchase intent for another user.');
+      return;
+    }
+
+    const songRef = db.collection('songs').doc(songId);
+    const songSnap = await songRef.get();
+
+    if (!songSnap.exists) {
+      sendError(res, 404, 'not_found', 'Song not found.');
+      return;
+    }
+
+    const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+    const songVersionsSnap = await songRef.collection('versions').get();
+    const songVersions = songVersionsSnap.docs.map((doc) => doc.data() as Record<string, unknown>);
+
+    if (!isSongPremium(songData, songVersions)) {
+      sendError(res, 400, 'invalid_argument', 'Song does not require individual premium purchase.');
+      return;
+    }
+
+    if (!Boolean(songData.canPurchaseIndividually ?? true)) {
+      sendError(res, 400, 'purchase_unavailable', 'This song cannot be purchased individually.');
+      return;
+    }
+
+    const premium = await resolveIsPremium(requestUserId, authContext?.token ?? null);
+    if (premium) {
+      sendError(res, 409, 'already_accessible', 'Premium users already have access to this song.');
+      return;
+    }
+
+    const unlockSnap = await db.collection('users').doc(requestUserId).collection('songUnlocks').doc(songId).get();
+    if (unlockSnap.exists) {
+      sendError(res, 409, 'already_unlocked', 'Song is already unlocked for this user.');
       return;
     }
 

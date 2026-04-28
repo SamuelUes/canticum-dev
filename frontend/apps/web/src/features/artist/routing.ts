@@ -65,9 +65,21 @@ interface ArtistProfileRouteInput {
   artistName?: string;
 }
 
+function toArtistSlug(artistName: string): string {
+  return artistName
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .toLowerCase();
+}
+
 export function getArtistProfileHref({ artistId, artistName }: ArtistProfileRouteInput): string {
+  const slug = artistName?.trim() ? toArtistSlug(artistName) : '';
+
   if (artistId) {
-    return `/artists/${artistId}`;
+    const safeSlug = slug || 'artist';
+    return `/artists/${encodeURIComponent(safeSlug)}?id=${encodeURIComponent(artistId)}`;
   }
 
   if (!artistName?.trim()) {
@@ -76,7 +88,11 @@ export function getArtistProfileHref({ artistId, artistName }: ArtistProfileRout
 
   const mockId = resolveArtistIdFromMock(artistName);
   if (mockId) {
-    return `/artists/${mockId}`;
+    return `/artists/${encodeURIComponent(slug || mockId)}?id=${encodeURIComponent(mockId)}`;
+  }
+
+  if (slug) {
+    return `/artists/${encodeURIComponent(slug)}`;
   }
 
   return `/search?q=${encodeURIComponent(artistName.trim())}`;

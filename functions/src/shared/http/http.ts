@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { DecodedIdToken, getAuth } from 'firebase-admin/auth';
 
 export interface RequestAuthContext {

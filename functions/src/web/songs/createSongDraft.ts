@@ -1,5 +1,6 @@
-import * as functions from 'firebase-functions';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 
 interface CreateSongDraftPayload {
@@ -28,7 +29,7 @@ export const createSongDraft = functions.https.onCall(async (data: CreateSongDra
   }
 
   const uid = context.auth.uid;
-  const songRef = getFirestore().collection('songs').doc();
+  const songRef = getAppFirestore().collection('songs').doc();
 
   await songRef.set({
     title,

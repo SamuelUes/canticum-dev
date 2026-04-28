@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { handlePreflight, sendJson, sendError, getPathSegments } from '../../shared/http/http';
 import { createIntent } from './createIntent';
 

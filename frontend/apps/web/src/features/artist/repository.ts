@@ -1,9 +1,9 @@
-import { artistMockById, artistSchemasMock } from './mockData';
+import { artistMockById, artistrepertoiresMock } from './mockData';
 import type {
   ArtistDetail,
   ArtistDiscographyItem,
   ArtistImage,
-  ArtistSchemaRef,
+  ArtistrepertoireRef,
   ArtistSongRow,
   SuggestedArtistItem
 } from '../../types/artist';
@@ -209,23 +209,77 @@ export async function getArtistDetailById(artistId: string): Promise<ArtistDetai
   return artistMockById[artistId] ?? null;
 }
 
-export async function getPublicSchemasForArtist(artistSongIds: string[]): Promise<ArtistSchemaRef[]> {
+/** Lightweight row returned by GET /artists/:id/songs. */
+export interface ArtistSongLookup {
+  sqlSongId: number;
+  songId: string | null;
+  title: string;
+  year: number | null;
+  liturgicalUse: string | null;
+  status: string | null;
+  ownerFirebaseUid: string | null;
+}
+
+/**
+ * Lists the songs of an artist (resolved from Cloud SQL by numeric artist id),
+ * enriched with their Firestore document IDs. Used when adding a version to an
+ * existing song from the create-song workspace.
+ */
+export async function fetchSongsByArtist(artistId: string | number): Promise<ArtistSongLookup[]> {
+  if (!functionsBaseUrl) {
+    return [];
+  }
+  const id = String(artistId).trim();
+  if (!id) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(id)}/songs`, {
+      method: 'GET',
+      cache: 'no-store'
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as { items?: unknown };
+    if (!Array.isArray(payload.items)) {
+      return [];
+    }
+    return payload.items
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      .map((row) => ({
+        sqlSongId: Number(row.sqlSongId),
+        songId: typeof row.songId === 'string' && row.songId ? row.songId : null,
+        title: String(row.title ?? ''),
+        year: typeof row.year === 'number' ? row.year : null,
+        liturgicalUse: typeof row.liturgicalUse === 'string' ? row.liturgicalUse : null,
+        status: typeof row.status === 'string' ? row.status : null,
+        ownerFirebaseUid: typeof row.ownerFirebaseUid === 'string' ? row.ownerFirebaseUid : null
+      }))
+      .filter((row) => Number.isFinite(row.sqlSongId) && row.sqlSongId > 0);
+  } catch {
+    return [];
+  }
+}
+
+export async function getPublicrepertoiresForArtist(artistSongIds: string[]): Promise<ArtistrepertoireRef[]> {
   if (!artistSongIds.length) {
     return [];
   }
 
   if (functionsBaseUrl) {
     try {
-      const response = await fetch(`${functionsBaseUrl}/schemas?public=true`, {
+      const response = await fetch(`${functionsBaseUrl}/repertoires?public=true`, {
         method: 'GET',
         cache: 'no-store'
       });
 
       if (response.ok) {
-        const payload = (await response.json()) as { schemas?: ArtistSchemaRef[] };
-        if (Array.isArray(payload.schemas)) {
-          return payload.schemas.filter((schema) =>
-            schema.songIds.some((songId) => artistSongIds.includes(songId))
+        const payload = (await response.json()) as { repertoires?: ArtistrepertoireRef[] };
+        if (Array.isArray(payload.repertoires)) {
+          return payload.repertoires.filter((repertoire) =>
+            repertoire.songIds.some((songId) => artistSongIds.includes(songId))
           );
         }
       }
@@ -235,7 +289,7 @@ export async function getPublicSchemasForArtist(artistSongIds: string[]): Promis
   }
 
   const songIdSet = new Set(artistSongIds);
-  return artistSchemasMock.filter((schema) =>
-    schema.songIds.some((songId) => songIdSet.has(songId))
+  return artistrepertoiresMock.filter((repertoire) =>
+    repertoire.songIds.some((songId) => songIdSet.has(songId))
   );
 }

@@ -15,13 +15,13 @@ function arePreferencesEqual(a: SongUserPreferences | null, b: SongUserPreferenc
   return a.currentVersionId === b.currentVersionId && a.currentInstrumentId === b.currentInstrumentId;
 }
 
-function readLocalFavorite(songId: string): boolean | null {
+function readLocalFavorite(songId: string, versionId: string): boolean | null {
   if (typeof window === 'undefined') {
     return null;
   }
 
   try {
-    const raw = window.localStorage.getItem(getFavoriteStorageKey(songId));
+    const raw = window.localStorage.getItem(getFavoriteStorageKey(songId, versionId));
     if (!raw) {
       return null;
     }
@@ -29,6 +29,30 @@ function readLocalFavorite(songId: string): boolean | null {
     return raw === '1';
   } catch {
     return null;
+  }
+}
+
+export async function requestTrackSongListen(songId: string): Promise<boolean> {
+  if (!functionsBaseUrl) {
+    return false;
+  }
+
+  try {
+    const userId = await getCurrentUserId();
+    const headers = await buildAuthHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+
+    const response = await fetch(`${functionsBaseUrl}/songs/${encodeURIComponent(songId)}/listen`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ userId })
+    });
+
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -64,11 +88,15 @@ async function buildAuthHeaders(baseHeaders: Record<string, string>): Promise<Re
   };
 }
 
-function saveLocalFavorite(songId: string, isFavorite: boolean): boolean {
-  favoriteCache.set(songId, isFavorite);
+function getFavoriteCompoundKey(songId: string, versionId: string): string {
+  return `${songId}::${versionId}`;
+}
+
+function saveLocalFavorite(songId: string, versionId: string, isFavorite: boolean): boolean {
+  favoriteCache.set(getFavoriteCompoundKey(songId, versionId), isFavorite);
 
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem(getFavoriteStorageKey(songId), isFavorite ? '1' : '0');
+    window.localStorage.setItem(getFavoriteStorageKey(songId, versionId), isFavorite ? '1' : '0');
   }
 
   return isFavorite;
@@ -91,8 +119,8 @@ function getPreferencesStorageKey(songId: string): string {
   return `song-preferences:${songId}`;
 }
 
-function getFavoriteStorageKey(songId: string): string {
-  return `song-favorite:${songId}`;
+function getFavoriteStorageKey(songId: string, versionId: string): string {
+  return `song-favorite:${songId}:${versionId}`;
 }
 
 async function getCurrentUserId(): Promise<string> {
@@ -266,20 +294,21 @@ export async function saveSongUserPreferences(songId: string, preferences: SongU
   pendingSyncTimeout.set(songId, timeoutId);
 }
 
-export async function loadSongFavorite(songId: string): Promise<boolean | null> {
-  const cached = favoriteCache.get(songId);
+export async function loadSongFavorite(songId: string, versionId: string): Promise<boolean | null> {
+  const favoriteKey = getFavoriteCompoundKey(songId, versionId);
+  const cached = favoriteCache.get(favoriteKey);
   if (typeof cached === 'boolean') {
     return cached;
   }
 
-  const inflight = pendingFavoriteLoads.get(songId);
+  const inflight = pendingFavoriteLoads.get(favoriteKey);
   if (inflight) {
     return inflight;
   }
 
-  const local = readLocalFavorite(songId);
+  const local = readLocalFavorite(songId, versionId);
   if (typeof local === 'boolean') {
-    favoriteCache.set(songId, local);
+    favoriteCache.set(favoriteKey, local);
   }
 
   if (!functionsBaseUrl) {
@@ -289,14 +318,18 @@ export async function loadSongFavorite(songId: string): Promise<boolean | null> 
   const task = (async () => {
     try {
       const userId = await getCurrentUserId();
+      if (userId === 'anonymous') {
+        return local;
+      }
+
       const headers = await buildAuthHeaders({ Accept: 'application/json' });
-      const response = await fetch(`${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/${songId}`, {
+      const response = await fetch(`${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/${encodeURIComponent(songId)}/${encodeURIComponent(versionId)}`, {
         method: 'GET',
         headers
       });
 
       if (response.status === 404) {
-        return saveLocalFavorite(songId, false);
+        return saveLocalFavorite(songId, versionId, false);
       }
 
       if (!response.ok) {
@@ -310,21 +343,22 @@ export async function loadSongFavorite(songId: string): Promise<boolean | null> 
         return local;
       }
 
-      return saveLocalFavorite(songId, remoteFavorite);
+      return saveLocalFavorite(songId, versionId, remoteFavorite);
     } catch {
       return local;
     } finally {
-      pendingFavoriteLoads.delete(songId);
+      pendingFavoriteLoads.delete(favoriteKey);
     }
   })();
 
-  pendingFavoriteLoads.set(songId, task);
+  pendingFavoriteLoads.set(favoriteKey, task);
   return task;
 }
 
-export async function saveSongFavorite(songId: string, isFavorite: boolean): Promise<void> {
-  const cached = favoriteCache.get(songId);
-  const merged = saveLocalFavorite(songId, isFavorite);
+export async function saveSongFavorite(songId: string, versionId: string, isFavorite: boolean): Promise<void> {
+  const favoriteKey = getFavoriteCompoundKey(songId, versionId);
+  const cached = favoriteCache.get(favoriteKey);
+  const merged = saveLocalFavorite(songId, versionId, isFavorite);
 
   if (cached === merged) {
     return;
@@ -334,18 +368,21 @@ export async function saveSongFavorite(songId: string, isFavorite: boolean): Pro
     return;
   }
 
-  const existingTimeout = pendingFavoriteSyncTimeout.get(songId);
+  const existingTimeout = pendingFavoriteSyncTimeout.get(favoriteKey);
   if (typeof existingTimeout === 'number') {
     window.clearTimeout(existingTimeout);
   }
 
   const timeoutId = window.setTimeout(async () => {
-    pendingFavoriteSyncTimeout.delete(songId);
+    pendingFavoriteSyncTimeout.delete(favoriteKey);
 
     try {
       const userId = await getCurrentUserId();
+      if (userId === 'anonymous') {
+        return;
+      }
 
-      if (lastSyncedFavoriteBySong.get(songId) === merged) {
+      if (lastSyncedFavoriteBySong.get(favoriteKey) === merged) {
         return;
       }
 
@@ -353,18 +390,21 @@ export async function saveSongFavorite(songId: string, isFavorite: boolean): Pro
         'Content-Type': 'application/json'
       });
 
-      const response = await fetch(`${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/${songId}`, {
+      const response = await fetch(
+        `${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/${encodeURIComponent(songId)}/${encodeURIComponent(versionId)}`,
+        {
         method: merged ? 'PUT' : 'DELETE',
         headers
-      });
+        }
+      );
 
       if (response.ok) {
-        lastSyncedFavoriteBySong.set(songId, merged);
+        lastSyncedFavoriteBySong.set(favoriteKey, merged);
       } else if (response.status === 403) {
         try {
           const err = (await response.json()) as { error?: { code?: string; message?: string } };
           if (err.error?.code === 'plan_limit') {
-            saveLocalFavorite(songId, !merged);
+            saveLocalFavorite(songId, versionId, !merged);
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('canticum:plan_limit', { detail: { message: err.error.message } }));
             }
@@ -376,23 +416,54 @@ export async function saveSongFavorite(songId: string, isFavorite: boolean): Pro
     }
   }, REMOTE_SYNC_DEBOUNCE_MS);
 
-  pendingFavoriteSyncTimeout.set(songId, timeoutId);
+  pendingFavoriteSyncTimeout.set(favoriteKey, timeoutId);
 }
 
-export interface CreateSongPayload {
-  title: string;
+export interface CreateSongPayloadVersion {
+  /** Client-pre-generated Firestore version doc id; backend will use it verbatim. */
+  versionDocId?: string;
+  versionName: string;
+  instrumentName: string;
+  artistId?: number;
   artistName?: string;
-  year?: number;
-  liturgicalUse?: string;
-  lyrics: string;
+  isOwnVersion?: boolean;
   tone?: string;
   notationType?: string;
   audioReferenceUrl?: string;
+  /** Per-version lyrics text (replaces the previous song-level `lyrics`). */
+  lyrics?: string;
+  /** Optional uploaded lyrics file URL. */
+  lyricsFileUrl?: string;
+  /** Optional uploaded sheet music file URL. */
+  sheetFileUrl?: string;
+}
+
+export interface CreateSongPayload {
+  /** 'new' creates a song + versions; 'addVersion' appends versions to an existing song. */
+  mode?: 'new' | 'addVersion';
+  /** Required when mode='addVersion': target song Firestore id. */
+  songId?: string;
+  /** Optional client-pre-generated Firestore song id (mode='new'). */
+  songDocId?: string;
+  title?: string;
+  artistId?: number;
+  artistName?: string;
+  year?: number;
+  liturgicalUse?: string;
+  /** @deprecated Use per-version `lyrics` instead. Kept for legacy callers. */
+  lyrics?: string;
+  versionName?: string;
+  instruments?: string[];
+  tone?: string;
+  notationType?: string;
+  audioReferenceUrl?: string;
+  versions?: CreateSongPayloadVersion[];
 }
 
 export interface SongActionResult {
   ok: boolean;
   songId?: string;
+  versionIds?: string[];
   reason?: 'forbidden' | 'unauthorized' | 'network' | 'plan_limit' | 'unknown';
   message?: string;
 }
@@ -429,8 +500,16 @@ export async function requestCreateSong(payload: CreateSongPayload): Promise<Son
       return { ok: false, reason: 'unknown' };
     }
 
-    const data = (await response.json()) as { song?: { id?: string } };
-    return { ok: true, songId: data.song?.id };
+    const data = (await response.json()) as {
+      song?: { id?: string };
+      songId?: string;
+      versionIds?: string[];
+    };
+    return {
+      ok: true,
+      songId: data.song?.id ?? data.songId,
+      versionIds: Array.isArray(data.versionIds) ? data.versionIds.filter((v) => typeof v === 'string') : undefined
+    };
   } catch {
     return { ok: false, reason: 'network' };
   }

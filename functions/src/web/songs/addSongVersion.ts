@@ -1,5 +1,6 @@
-import * as functions from 'firebase-functions';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 
 interface AddSongVersionPayload {
@@ -38,7 +39,7 @@ export const addSongVersion = functions.https.onCall(async (data: AddSongVersion
     throw new functions.https.HttpsError('invalid-argument', 'songId and versionName are required.');
   }
 
-  const songRef = getFirestore().collection('songs').doc(songId);
+  const songRef = getAppFirestore().collection('songs').doc(songId);
   const songSnap = await songRef.get();
 
   if (!songSnap.exists) {

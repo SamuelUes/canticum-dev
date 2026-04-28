@@ -2,3 +2,8 @@
 .next/
 .next/*
 
+
+.env
+.env.local
+.env.example
+

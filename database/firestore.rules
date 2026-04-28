@@ -1,3 +1,5 @@
+// Firestore en este proyecto se usa como capa de lectura/proyección para cliente.
+// La fuente canónica relacional está en Cloud SQL (ver docs/CloudSQL-vs-Firestore.md).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -22,6 +24,11 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.token.premium == true;
     }
 
+    function hasSongUnlock(songId) {
+      return isAuthenticated()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/songUnlocks/$(songId));
+    }
+
     match /users/{userId} {
       allow read, create: if isOwner(userId);
       allow update: if isOwner(userId);
@@ -29,6 +36,10 @@ service cloud.firestore {
 
       match /favorites/{songId} {
         allow read, write: if isOwner(userId);
+
+        match /versions/{versionId} {
+          allow read, write: if isOwner(userId);
+        }
       }
 
       match /songPreferences/{songId} {
@@ -51,6 +62,7 @@ service cloud.firestore {
     }
 
     match /subscriptions/{subscriptionId} {
+      // Colección de lectura/proyección; estado canónico de suscripción en Cloud SQL.
       allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
       allow write: if isAdmin();
     }
@@ -60,7 +72,7 @@ service cloud.firestore {
       allow write: if isAdmin();
 
       match /versions/{versionId} {
-        allow read: if resource.data.isPremium == false || isPremium();
+        allow read: if resource.data.isPremium == false || isPremium() || hasSongUnlock(songId);
         allow write: if isAdmin();
       }
     }
@@ -70,7 +82,7 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    match /schemas/{schemaId} {
+    match /repertoires/{repertoireId} {
       allow read: if isAuthenticated()
         && (resource.data.userId == request.auth.uid
           || resource.data.visibility == 'public'
@@ -82,7 +94,7 @@ service cloud.firestore {
       match /songs/{songId} {
         allow read: if isAuthenticated();
         allow write: if isAuthenticated()
-          && (get(/databases/$(database)/documents/schemas/$(schemaId)).data.userId == request.auth.uid
+          && (get(/databases/$(database)/documents/repertoires/$(repertoireId)).data.userId == request.auth.uid
             || isAdmin());
       }
     }

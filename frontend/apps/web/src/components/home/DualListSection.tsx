@@ -13,6 +13,7 @@ interface ListColumnProps {
 interface DualListSectionProps {
   left: ListColumnProps;
   right: ListColumnProps;
+  loading?: boolean;
 }
 
 function ListColumn({ title, viewAllLabel, items, linkBasePath }: ListColumnProps) {
@@ -75,11 +76,34 @@ function ListColumn({ title, viewAllLabel, items, linkBasePath }: ListColumnProp
   );
 }
 
-export function DualListSection({ left, right }: DualListSectionProps) {
+export function DualListSection({ left, right, loading = false }: DualListSectionProps) {
+  if (loading) {
+    return (
+      <section className="home-section double-list-section layout-h-margin" aria-busy>
+        {[0, 1].map((column) => (
+          <div key={column} className="list-column">
+            <div className="skeleton-pulse home-skeleton-title" />
+            {Array.from({ length: 5 }).map((_, idx) => (
+              <div key={idx} className="skeleton-pulse home-skeleton-line" />
+            ))}
+          </div>
+        ))}
+      </section>
+    );
+  }
+
+  if (left.items.length === 0 && right.items.length === 0) {
+    return null;
+  }
+
   return (
     <section className="home-section double-list-section layout-h-margin">
-      <ListColumn title={left.title} viewAllLabel={left.viewAllLabel} items={left.items} linkBasePath={left.linkBasePath} />
-      <ListColumn title={right.title} viewAllLabel={right.viewAllLabel} items={right.items} linkBasePath={right.linkBasePath} />
+      {left.items.length > 0 ? (
+        <ListColumn title={left.title} viewAllLabel={left.viewAllLabel} items={left.items} linkBasePath={left.linkBasePath} />
+      ) : null}
+      {right.items.length > 0 ? (
+        <ListColumn title={right.title} viewAllLabel={right.viewAllLabel} items={right.items} linkBasePath={right.linkBasePath} />
+      ) : null}
     </section>
   );
 }

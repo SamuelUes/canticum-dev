@@ -1,5 +1,5 @@
 export * as webSongs from './songs';
-export * as webSchemas from './schemas';
+export * as webrepertoires from './repertoires';
 export * as webEditorial from './editorial';
 export * as webFavorites from './favorites';
 export * as webPremium from './premium';
@@ -8,10 +8,18 @@ export * as webPayments from './payments';
 
 export { songs } from './songs';
 export { search } from './search';
-export { schemas } from './schemas';
+export { repertoires, Repertoires } from './repertoires';
 export { artists } from './artists';
 export { albums } from './albums';
 export { users } from './users';
 export { auth } from './auth';
 export { subscriptions } from './subscriptions';
 export { payments } from './payments';
+
+export { createSongDraft, addSongVersion, submitForReview, getSongAssetUploadUrl } from './songs';
+export { createRepertoire, addSongToRepertoire, reorderRepertoireSongs } from './repertoires';
+export { approveSong, rejectSong, publishSong } from './editorial';
+export { toggleFavorite } from './favorites';
+export { getPremiumContentAccess } from './premium';
+export { getSubscriptionStatus, getPlans, getUserSubscription } from './subscriptions';
+export { createIntent } from './payments';

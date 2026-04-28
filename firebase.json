@@ -9,7 +9,7 @@
   },
   "dataconnect": {
     "source": "dataconnect",
-    "schema": "schema.gql",
+    "repertoire": "repertoire.gql",
     "connector": "canticum-connector"
   },
   "apphosting": {

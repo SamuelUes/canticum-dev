@@ -5,9 +5,27 @@ import type { FeaturedSongCardData, HomeText } from '../../types/home';
 interface FeaturedSectionProps {
   title: HomeText['featuredTitle'];
   songs: FeaturedSongCardData[];
+  loading?: boolean;
 }
 
-export function FeaturedSection({ title, songs }: FeaturedSectionProps) {
+export function FeaturedSection({ title, songs, loading = false }: FeaturedSectionProps) {
+  if (loading) {
+    return (
+      <section className="home-section layout-h-margin" aria-busy>
+        <div className="skeleton-pulse home-skeleton-title" />
+        <div className="home-skeleton-grid">
+          {Array.from({ length: 4 }).map((_, idx) => (
+            <div key={idx} className="skeleton-pulse home-skeleton-card" />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (songs.length === 0) {
+    return null;
+  }
+
   return (
     <section className="home-section layout-h-margin">
       <h2>{title}</h2>

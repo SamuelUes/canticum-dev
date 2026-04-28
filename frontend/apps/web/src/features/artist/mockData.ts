@@ -1,4 +1,4 @@
-import type { ArtistDetail, ArtistDiscographyItem, ArtistSchemaRef, SuggestedArtistItem } from '../../types/artist';
+import type { ArtistDetail, ArtistDiscographyItem, ArtistrepertoireRef, SuggestedArtistItem } from '../../types/artist';
 
 type ArtistDetailBase = Omit<
   ArtistDetail,
@@ -161,8 +161,8 @@ export const artistMockById: Record<string, ArtistDetail> = Object.fromEntries(
   })
 ) as Record<string, ArtistDetail>;
 
-export const artistSchemasMock: ArtistSchemaRef[] = [
-  { id: 'schema-misa-pentecoste', title: 'Misa de Pentecostés', ownerName: 'Coro Emanuel', songIds: ['song-alabare', 'song-santo-eres-tu', 'song-renuevame'] },
-  { id: 'schema-concierto-jovenes', title: 'Concierto Juvenil', ownerName: 'Grupo Fiat', songIds: ['song-aqui-estoy', 'song-santo-eres-tu', 'song-alabare'] },
-  { id: 'schema-misa-confirmacion', title: 'Misa de Confirmación', ownerName: 'María Luz', songIds: ['song-santo-eres-tu', 'song-aqui-estoy', 'song-renuevame'] }
+export const artistrepertoiresMock: ArtistrepertoireRef[] = [
+  { id: 'repertoire-misa-pentecoste', title: 'Misa de Pentecostés', ownerName: 'Coro Emanuel', songIds: ['song-alabare', 'song-santo-eres-tu', 'song-renuevame'] },
+  { id: 'repertoire-concierto-jovenes', title: 'Concierto Juvenil', ownerName: 'Grupo Fiat', songIds: ['song-aqui-estoy', 'song-santo-eres-tu', 'song-alabare'] },
+  { id: 'repertoire-misa-confirmacion', title: 'Misa de Confirmación', ownerName: 'María Luz', songIds: ['song-santo-eres-tu', 'song-aqui-estoy', 'song-renuevame'] }
 ];

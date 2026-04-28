@@ -10,11 +10,29 @@ import type { ArtistData, HomeText } from '../../types/home';
 interface ArtistsSectionProps {
   title: HomeText['artistsTitle'];
   artists: ArtistData[];
+  loading?: boolean;
 }
 
-export function ArtistsSection({ title, artists }: ArtistsSectionProps) {
+export function ArtistsSection({ title, artists, loading = false }: ArtistsSectionProps) {
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
   const router = useRouter();
+
+  if (loading) {
+    return (
+      <section className="home-section layout-h-margin" aria-busy>
+        <div className="skeleton-pulse home-skeleton-title" />
+        <div className="home-skeleton-row">
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <div key={idx} className="skeleton-pulse home-skeleton-pill" />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (artists.length === 0) {
+    return null;
+  }
 
   return (
     <section className="home-section layout-h-margin">

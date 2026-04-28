@@ -1,9 +1,11 @@
-import * as functions from 'firebase-functions';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { listTopArtists as listTopArtistsInCloudSql, searchArtists as searchArtistsInCloudSql } from '../../shared/cloudSql/artists';
+import { getSongMetricsBySqlIds } from '../../shared/cloudSql/songs';
 
-type SearchKind = 'song' | 'album' | 'schema' | 'artist' | 'version';
+type SearchKind = 'song' | 'album' | 'repertoire' | 'artist' | 'version';
 
 interface SearchImage {
   url: string;
@@ -19,7 +21,7 @@ interface SearchItem {
   title: string;
   subtitle: string;
   songId?: string;
-  schemaId?: string;
+  repertoireId?: string;
   artistId?: string;
   albumId?: string;
   images?: SearchImage[];
@@ -28,6 +30,11 @@ interface SearchItem {
   authorOrChoir: string;
   searchableText: string;
   isPremium?: boolean;
+  popularity?: number;
+  totalViews?: number;
+  likeCount?: number;
+  publishedAt?: string | null;
+  createdAt?: string | null;
   dateLabel?: string;
   songsCount?: number;
   sheetsCount?: number;
@@ -39,6 +46,84 @@ interface SearchItem {
   releaseYear?: number;
   totalTracks?: number;
   artistName?: string;
+}
+
+function computePopularity(raw: unknown, totalViews: number): number {
+  const stored = Number(raw);
+  if (Number.isFinite(stored) && stored >= 0) return Math.min(100, Math.round(stored));
+  if (!Number.isFinite(totalViews) || totalViews <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round(Math.log10(totalViews + 1) * 20)));
+}
+
+function toIsoString(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  if (typeof value === 'object' && 'toDate' in (value as Record<string, unknown>) && typeof (value as { toDate?: unknown }).toDate === 'function') {
+    try {
+      const d = (value as { toDate: () => Date }).toDate();
+      return Number.isNaN(d.getTime()) ? null : d.toISOString();
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const seconds = Number((value as { _seconds?: unknown; seconds?: unknown })._seconds ?? (value as { seconds?: unknown }).seconds);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    const d = new Date(seconds * 1000);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  return null;
+}
+
+function pushSongItemIfMatch(
+  songs: SearchItem[],
+  seenSongIds: Set<string>,
+  doc: FirebaseFirestore.QueryDocumentSnapshot,
+  query: string,
+  sqlSongMetricsBySqlSongId: Map<number, { totalViews: number; likeCount: number; popularity: number }>
+): void {
+  if (seenSongIds.has(doc.id)) {
+    return;
+  }
+
+  const data = doc.data() as Record<string, unknown>;
+  const sqlSongId = Number(data.sqlSongId);
+  const sqlMetrics = Number.isFinite(sqlSongId) && sqlSongId > 0
+    ? sqlSongMetricsBySqlSongId.get(Math.floor(sqlSongId))
+    : undefined;
+  const totalViewsNum = Number(sqlMetrics?.totalViews ?? data.totalViews ?? 0) || 0;
+  const likeCountNum = Number(sqlMetrics?.likeCount ?? data.likeCount ?? 0) || 0;
+  const popularityNum = Number(sqlMetrics?.popularity ?? data.popularity ?? computePopularity(undefined, totalViewsNum)) || computePopularity(undefined, totalViewsNum);
+  const publishedAtIso = toIsoString(data.publishedAt);
+  const createdAtIso = toIsoString(data.createdAt);
+  const item: SearchItem = {
+    id: doc.id,
+    kind: 'song',
+    type: 'song',
+    title: String(data.title ?? ''),
+    subtitle: String(data.author ?? data.artistName ?? ''),
+    songId: doc.id,
+    images: normalizeImages(data.images, typeof data.thumbnailUrl === 'string' ? data.thumbnailUrl : undefined),
+    liturgicalType: String(data.liturgicalType ?? data.liturgical_use ?? 'General'),
+    liturgicalTime: String(data.liturgicalTime ?? 'Ordinario'),
+    authorOrChoir: String(data.author ?? data.artistName ?? 'General'),
+    searchableText: `${String(data.title ?? '')} ${String(data.author ?? data.artistName ?? '')}`.trim(),
+    isPremium: Boolean(data.isPremium),
+    popularity: popularityNum,
+    totalViews: totalViewsNum,
+    likeCount: likeCountNum,
+    publishedAt: publishedAtIso,
+    createdAt: createdAtIso,
+    ownerUserId: String(data.ownerUserId ?? data.createdBy ?? '')
+  };
+
+  if (matchesQuery(item, query)) {
+    songs.push(item);
+    seenSongIds.add(doc.id);
+  }
 }
 
 interface SearchBucket<T> {
@@ -109,6 +194,41 @@ function matchesQuery(item: SearchItem, query: string): boolean {
   return haystack.includes(query);
 }
 
+function formatDateLabel(value: unknown): string {
+  let date: Date | null = null;
+
+  if (value instanceof Date) {
+    date = value;
+  } else if (value && typeof value === 'object' && 'toDate' in value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+    try {
+      date = ((value as { toDate: () => Date }).toDate());
+    } catch {
+      date = null;
+    }
+  } else if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      date = parsed;
+    }
+  }
+
+  if (!date) {
+    return 'N/D';
+  }
+
+  try {
+    return new Intl.DateTimeFormat('es-MX', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
 export const search = functions.https.onRequest(async (req, res) => {
   if (handlePreflight(req, res)) {
     return;
@@ -128,16 +248,16 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const auth = await getOptionalAuthContext(req);
   const currentUserId = auth?.uid ?? null;
-  const db = getFirestore();
+  const db = getAppFirestore();
 
-  // Accept Spotify-style `type=song,album,schema,artist,version` AND legacy `kind=song`.
+  // Accept Spotify-style `type=song,album,repertoire,artist,version` AND legacy `kind=song`.
   const typeParam = typeof req.query.type === 'string' ? req.query.type : '';
   const legacyKindParam = typeof req.query.kind === 'string' ? req.query.kind : '';
   const kindFilters = new Set(
     (typeParam || legacyKindParam)
       .split(',')
       .map((s) => s.trim().toLowerCase())
-      .filter((s): s is SearchKind => s === 'song' || s === 'album' || s === 'schema' || s === 'artist' || s === 'version')
+      .filter((s): s is SearchKind => s === 'song' || s === 'album' || s === 'repertoire' || s === 'artist' || s === 'version')
   );
   const wants = (kind: SearchKind): boolean => kindFilters.size === 0 || kindFilters.has(kind);
 
@@ -147,15 +267,21 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const emptySnap = { docs: [] as FirebaseFirestore.QueryDocumentSnapshot[] };
 
-  const [songsSnap, albumsSnap, schemasSnap, artistsSnap] = await Promise.all([
+  const [publishedSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, albumsSnap, repertoiresSnap, artistsSnap] = await Promise.all([
     wants('song')
       ? db.collection('songs').where('status', '==', 'PUBLISHED').orderBy('publishedAt', 'desc').limit(200).get()
+      : Promise.resolve(emptySnap),
+    wants('song') && currentUserId
+      ? db.collection('songs').where('ownerUserId', '==', currentUserId).limit(200).get()
+      : Promise.resolve(emptySnap),
+    wants('song') && currentUserId
+      ? db.collection('songs').where('createdBy', '==', currentUserId).limit(200).get()
       : Promise.resolve(emptySnap),
     wants('album')
       ? db.collection('albums').where('status', '==', 'PUBLISHED').limit(200).get()
       : Promise.resolve(emptySnap),
-    wants('schema')
-      ? db.collection('schemas').limit(200).get()
+    wants('repertoire')
+      ? db.collection('repertoires').limit(200).get()
       : Promise.resolve(emptySnap),
     wants('artist')
       ? db.collection('artists').limit(200).get()
@@ -163,28 +289,40 @@ export const search = functions.https.onRequest(async (req, res) => {
   ]);
 
   const songs: SearchItem[] = [];
+  const seenSongIds = new Set<string>();
   const albums: SearchItem[] = [];
-  const schemas: SearchItem[] = [];
+  const repertoires: SearchItem[] = [];
   const artists: SearchItem[] = [];
   const versions: SearchItem[] = []; // reserved for future SearchService
 
-  songsSnap.docs.forEach((doc) => {
+  const allSongDocs = [
+    ...publishedSongsSnap.docs,
+    ...ownerSongsByOwnerIdSnap.docs,
+    ...ownerSongsByCreatedBySnap.docs
+  ];
+  const sqlSongIds = allSongDocs
+    .map((doc) => Number((doc.data() as Record<string, unknown>).sqlSongId))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .map((id) => Math.floor(id));
+
+  const sqlSongMetricsBySqlSongId = await getSongMetricsBySqlIds(sqlSongIds);
+
+  publishedSongsSnap.docs.forEach((doc) => {
+    pushSongItemIfMatch(songs, seenSongIds, doc, query, sqlSongMetricsBySqlSongId);
+  });
+
+  ownerSongsByOwnerIdSnap.docs.forEach((doc) => {
     const data = doc.data() as Record<string, unknown>;
-    const item: SearchItem = {
-      id: doc.id,
-      kind: 'song',
-      type: 'song',
-      title: String(data.title ?? ''),
-      subtitle: String(data.author ?? data.artistName ?? ''),
-      songId: doc.id,
-      images: normalizeImages(data.images, typeof data.thumbnailUrl === 'string' ? data.thumbnailUrl : undefined),
-      liturgicalType: String(data.liturgicalType ?? data.liturgical_use ?? 'General'),
-      liturgicalTime: String(data.liturgicalTime ?? 'Ordinario'),
-      authorOrChoir: String(data.author ?? data.artistName ?? 'General'),
-      searchableText: `${String(data.title ?? '')} ${String(data.author ?? data.artistName ?? '')}`.trim(),
-      isPremium: Boolean(data.isPremium)
-    };
-    if (matchesQuery(item, query)) songs.push(item);
+    if (String(data.status ?? '').toUpperCase() === 'DRAFT') {
+      pushSongItemIfMatch(songs, seenSongIds, doc, query, sqlSongMetricsBySqlSongId);
+    }
+  });
+
+  ownerSongsByCreatedBySnap.docs.forEach((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    if (String(data.status ?? '').toUpperCase() === 'DRAFT') {
+      pushSongItemIfMatch(songs, seenSongIds, doc, query, sqlSongMetricsBySqlSongId);
+    }
   });
 
   albumsSnap.docs.forEach((doc) => {
@@ -211,7 +349,7 @@ export const search = functions.https.onRequest(async (req, res) => {
     if (matchesQuery(item, query)) albums.push(item);
   });
 
-  schemasSnap.docs.forEach((doc) => {
+  repertoiresSnap.docs.forEach((doc) => {
     const data = doc.data() as Record<string, unknown>;
     const ownerUserId = String(data.userId ?? data.ownerUserId ?? '');
     const isPublic = Boolean(data.isPublic ?? data.visibility === 'public');
@@ -224,22 +362,22 @@ export const search = functions.https.onRequest(async (req, res) => {
 
     const item: SearchItem = {
       id: doc.id,
-      kind: 'schema',
-      type: 'schema',
-      schemaId: doc.id,
+      kind: 'repertoire',
+      type: 'repertoire',
+      repertoireId: doc.id,
       title: String(data.title ?? ''),
-      subtitle: String(data.liturgicalType ?? data.type ?? 'Esquema'),
+      subtitle: String(data.liturgicalType ?? data.type ?? 'repertorio'),
       liturgicalType: String(data.liturgicalType ?? data.type ?? 'General'),
       liturgicalTime: String(data.liturgicalTime ?? 'Ordinario'),
-      authorOrChoir: 'Schema',
+      authorOrChoir: 'repertoire',
       searchableText: `${String(data.title ?? '')} ${String(data.liturgicalType ?? data.type ?? '')}`.trim(),
-      dateLabel: String(data.updatedAt ?? data.createdAt ?? 'N/D'),
+      dateLabel: formatDateLabel(data.updatedAt ?? data.createdAt),
       songsCount: Number(data.songsCount ?? songIds.length),
       sheetsCount: Number(data.sheetsCount ?? 0),
       ownerUserId,
       isPublic
     };
-    if (matchesQuery(item, query)) schemas.push(item);
+    if (matchesQuery(item, query)) repertoires.push(item);
   });
 
   artistsSnap.docs.forEach((doc) => {
@@ -261,7 +399,45 @@ export const search = functions.https.onRequest(async (req, res) => {
     if (matchesQuery(item, query)) artists.push(item);
   });
 
-  const items: SearchItem[] = [...songs, ...albums, ...schemas, ...artists, ...versions];
+  if (wants('artist')) {
+    try {
+      const sqlArtists = query
+        ? await searchArtistsInCloudSql(query, 50)
+        : await listTopArtistsInCloudSql(50);
+      const seenArtistIds = new Set(artists.map((item) => item.artistId ?? item.id));
+
+      sqlArtists.forEach((artist) => {
+        const artistId = String(artist.id);
+        if (seenArtistIds.has(artistId)) {
+          return;
+        }
+
+        const item: SearchItem = {
+          id: artistId,
+          kind: 'artist',
+          type: 'artist',
+          artistId,
+          title: artist.name,
+          subtitle: artist.type || 'Artista',
+          images: artist.imageUrl ? [{ url: artist.imageUrl }] : undefined,
+          liturgicalType: 'General',
+          liturgicalTime: 'Ordinario',
+          authorOrChoir: artist.name,
+          searchableText: `${artist.name} ${artist.type}`.trim(),
+          songsCount: 0
+        };
+
+        if (matchesQuery(item, query)) {
+          artists.push(item);
+          seenArtistIds.add(artistId);
+        }
+      });
+    } catch (error) {
+      console.error('Cloud SQL artist merge failed in search/catalog:', error);
+    }
+  }
+
+  const items: SearchItem[] = [...songs, ...albums, ...repertoires, ...artists, ...versions];
 
   const liturgicalTypes = new Set<string>();
   const liturgicalTimes = new Set<string>();
@@ -283,7 +459,7 @@ export const search = functions.https.onRequest(async (req, res) => {
   const buckets = {
     songs: buildBucket(songs, offset, limit, baseHref),
     albums: buildBucket(albums, offset, limit, baseHref),
-    schemas: buildBucket(schemas, offset, limit, baseHref),
+    repertoires: buildBucket(repertoires, offset, limit, baseHref),
     artists: buildBucket(artists, offset, limit, baseHref),
     versions: buildBucket(versions, offset, limit, baseHref)
   };

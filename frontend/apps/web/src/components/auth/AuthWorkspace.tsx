@@ -12,12 +12,12 @@ interface AuthWorkspaceProps {
   redirectTo?: string;
 }
 
-const loginSchema = z.object({
+const loginrepertoire = z.object({
   email: z.string().email('Correo no válido.'),
   password: z.string().min(6, 'Mínimo 6 caracteres.')
 });
 
-const registerSchema = loginSchema.extend({
+const registerrepertoire = loginrepertoire.extend({
   displayName: z.string().max(60, 'Máximo 60 caracteres.').optional()
 });
 
@@ -34,10 +34,10 @@ export function AuthWorkspace({ redirectTo = '/' }: AuthWorkspaceProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!loading && user) {
+    if (!loading && user && !isSubmitting) {
       router.replace(redirectTo);
     }
-  }, [user, loading, redirectTo, router]);
+  }, [user, loading, isSubmitting, redirectTo, router]);
 
   const isLogin = mode === 'login';
 
@@ -49,8 +49,8 @@ export function AuthWorkspace({ redirectTo = '/' }: AuthWorkspaceProps) {
     e.preventDefault();
     setError(null);
 
-    const schema = isLogin ? loginSchema : registerSchema;
-    const parsed = schema.safeParse({ email, password, displayName: displayName.trim() || undefined });
+    const repertoire = isLogin ? loginrepertoire : registerrepertoire;
+    const parsed = repertoire.safeParse({ email, password, displayName: displayName.trim() || undefined });
 
     if (!parsed.success) {
       setError(parsed.error.errors[0]?.message ?? 'Datos inválidos.');
@@ -85,6 +85,10 @@ export function AuthWorkspace({ redirectTo = '/' }: AuthWorkspaceProps) {
           ) : reason === 'premium' ? (
             <div className="auth-reason-banner is-premium" role="note">
               ⭐ Crea una cuenta para acceder al plan Premium y desbloquear todo el contenido.
+            </div>
+          ) : reason === 'create' ? (
+            <div className="auth-reason-banner is-premium" role="note">
+              ✏️ Inicia sesión o crea una cuenta para subir canciones y crear repertorios.
             </div>
           ) : null}
           <h1 className="auth-title">

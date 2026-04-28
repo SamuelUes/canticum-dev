@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import type { ArtistDetail, ArtistImage, ArtistSchemaRef, ArtistSongRow } from '../../types/artist';
+import type { ArtistDetail, ArtistImage, ArtistrepertoireRef, ArtistSongRow } from '../../types/artist';
 
 function pickImage(images: ArtistImage[] | undefined, targetSize: number, fallback?: string): string | undefined {
   if (!images || images.length === 0) {
@@ -18,16 +18,16 @@ function pickImage(images: ArtistImage[] | undefined, targetSize: number, fallba
   return (match ?? sorted[sorted.length - 1] ?? images[0]).url ?? fallback;
 }
 
-type FilterPill = 'Letra' | 'Partituras' | 'Esquemas';
+type FilterPill = 'Letra' | 'Partituras' | 'Repertorios';
 
 interface ArtistProfileWorkspaceProps {
   artist: ArtistDetail;
-  schemas: ArtistSchemaRef[];
+  repertoires: ArtistrepertoireRef[];
 }
 
-export function ArtistProfileWorkspace({ artist, schemas }: ArtistProfileWorkspaceProps) {
+export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWorkspaceProps) {
   const [activeFilter, setActiveFilter] = useState<FilterPill>('Letra');
-  const pills: FilterPill[] = ['Letra', 'Partituras', 'Esquemas'];
+  const pills: FilterPill[] = ['Letra', 'Partituras', 'Repertorios'];
 
   const totalViews = artist.totalViews;
   const avatarSrc = pickImage(artist.images, 160, artist.imageUrl);
@@ -71,16 +71,16 @@ export function ArtistProfileWorkspace({ artist, schemas }: ArtistProfileWorkspa
     return [];
   }, [activeFilter, artist.songs]);
 
-  const relevantSchemas: ArtistSchemaRef[] = useMemo(() => {
-    if (activeFilter !== 'Esquemas') {
+  const relevantrepertoires: ArtistrepertoireRef[] = useMemo(() => {
+    if (activeFilter !== 'Repertorios') {
       return [];
     }
 
     const artistSongIdSet = new Set(artist.songs.map((song) => song.id));
-    return schemas.filter((schema) =>
-      schema.songIds.some((songId) => artistSongIdSet.has(songId))
+    return repertoires.filter((repertoire) =>
+      repertoire.songIds.some((songId) => artistSongIdSet.has(songId))
     );
-  }, [activeFilter, artist.songs, schemas]);
+  }, [activeFilter, artist.songs, repertoires]);
 
   const padNumber = (index: number): string => String(index + 1).padStart(2, '0');
 
@@ -140,7 +140,7 @@ export function ArtistProfileWorkspace({ artist, schemas }: ArtistProfileWorkspa
         </nav>
 
         {/* ── Songs table (Letra / Partituras) ── */}
-        {activeFilter !== 'Esquemas' ? (
+        {activeFilter !== 'Repertorios' ? (
           <>
             <div className="artist-table-head">
               <span className="artist-col-num" />
@@ -182,29 +182,29 @@ export function ArtistProfileWorkspace({ artist, schemas }: ArtistProfileWorkspa
           </>
         ) : null}
 
-        {/* ── Schemas grid ── */}
-        {activeFilter === 'Esquemas' ? (
-          <ul className="artist-schema-list" role="list">
-            {relevantSchemas.map((schema) => (
-              <li key={schema.id} className="artist-schema-card">
-                <Link href={`/schemas/${schema.id}`} className="artist-schema-link">
-                  <strong>{schema.title}</strong>
-                  <small>por {schema.ownerName}</small>
-                  <small>{schema.songIds.length} canciones</small>
+        {/* ── repertoires grid ── */}
+        {activeFilter === 'Repertorios' ? (
+          <ul className="artist-repertoire-list" role="list">
+            {relevantrepertoires.map((repertoire) => (
+              <li key={repertoire.id} className="artist-repertoire-card">
+                <Link href={`/repertoires/${repertoire.id}`} className="artist-repertoire-link">
+                  <strong>{repertoire.title}</strong>
+                  <small>por {repertoire.ownerName}</small>
+                  <small>{repertoire.songIds.length} canciones</small>
                 </Link>
               </li>
             ))}
 
-            {relevantSchemas.length === 0 ? (
-              <li className="artist-schema-card artist-empty-row">
-                <span>No hay esquemas públicos que contengan canciones de este artista.</span>
+            {relevantrepertoires.length === 0 ? (
+              <li className="artist-repertoire-card artist-empty-row">
+                <span>No hay repertorios públicos que contengan canciones de este artista.</span>
               </li>
             ) : null}
           </ul>
         ) : null}
 
         {/* bottom "Ver más" */}
-        {activeFilter !== 'Esquemas' && filteredSongs.length > 0 ? (
+        {activeFilter !== 'Repertorios' && filteredSongs.length > 0 ? (
           <div className="artist-bottom-more">
             <Link href={`/search?artist=${encodeURIComponent(artist.name)}`} className="artist-see-more more-pill-link">
               Ver más &rsaquo;
@@ -212,7 +212,7 @@ export function ArtistProfileWorkspace({ artist, schemas }: ArtistProfileWorkspa
           </div>
         ) : null}
 
-        {activeFilter !== 'Esquemas' ? (
+        {activeFilter !== 'Repertorios' ? (
           <>
             <section className="artist-extra-section" aria-label="discografía">
               <header className="artist-main-head artist-main-head--compact">

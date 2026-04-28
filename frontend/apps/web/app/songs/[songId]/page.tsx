@@ -11,12 +11,20 @@ interface SongPageProps {
   params: {
     songId: string;
   };
+  searchParams?: {
+    versionId?: string | string[];
+  };
 }
 
-export default async function SongPage({ params }: SongPageProps) {
+export default async function SongPage({ params, searchParams }: SongPageProps) {
   const locale: Locale = 'es';
   const text = getHomeText(locale);
-  const song = await getSongDetailById(params.songId);
+  const rawVersionId = searchParams?.versionId;
+  const initialVersionId = Array.isArray(rawVersionId) ? rawVersionId[0] : rawVersionId;
+  const song = await getSongDetailById(
+    params.songId,
+    typeof initialVersionId === 'string' ? initialVersionId : undefined
+  );
 
   if (!song) {
     notFound();
@@ -27,7 +35,7 @@ export default async function SongPage({ params }: SongPageProps) {
       <div className="home-shell song-page-shell">
         <Header text={text} />
 
-        <SongWorkspace song={song} />
+        <SongWorkspace song={song} initialVersionId={typeof initialVersionId === 'string' ? initialVersionId : undefined} />
 
         <HomeFooter
           text={{

@@ -1,5 +1,6 @@
-import * as functions from 'firebase-functions';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 
 interface RejectSongPayload {
@@ -33,7 +34,7 @@ export const rejectSong = functions.https.onCall(async (data: RejectSongPayload,
     throw new functions.https.HttpsError('invalid-argument', 'note is required when rejecting a song.');
   }
 
-  const songRef = getFirestore().collection('songs').doc(songId);
+  const songRef = getAppFirestore().collection('songs').doc(songId);
   const songSnap = await songRef.get();
 
   if (!songSnap.exists) {

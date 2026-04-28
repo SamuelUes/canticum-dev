@@ -1,5 +1,5 @@
-import * as functions from 'firebase-functions';
-import { getFirestore } from 'firebase-admin/firestore';
+import * as functions from 'firebase-functions/v1';
+import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { getPathSegments, getQueryString, handlePreflight, sendError, sendJson } from '../../shared/http/http';
 
@@ -357,7 +357,7 @@ export const albums = functions.https.onRequest(async (req, res) => {
   }
 
   const segments = getPathSegments(req);
-  const db = getFirestore();
+  const db = getAppFirestore();
 
   if (segments.length === 0) {
     const artistId = getQueryString(req, 'artistId');

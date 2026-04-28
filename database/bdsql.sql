@@ -1,7 +1,9 @@
 -- ================================
--- Canticum - SCHEMA BASE
+-- Canticum - repertoire BASE
 -- Roles, Permisos y Canciones
 -- PostgreSQL compatible
+-- Fuente canónica de negocio relacional.
+-- Ver responsabilidades SQL vs Firestore en: docs/CloudSQL-vs-Firestore.md
 -- ================================
 
 BEGIN;
@@ -11,9 +13,11 @@ BEGIN;
 -- ================================
 CREATE TABLE users (
   id SERIAL PRIMARY KEY,
+  firebase_uid VARCHAR(128) UNIQUE,
   name VARCHAR(100) NOT NULL,
   email VARCHAR(150) UNIQUE NOT NULL,
-  password TEXT NOT NULL,
+  password TEXT,
+  auth_provider VARCHAR(50) NOT NULL DEFAULT 'firebase_auth',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -86,6 +90,7 @@ CREATE TABLE songs (
   disc_number SMALLINT DEFAULT 1,
   -- International Standard Recording Code (external identifier).
   isrc VARCHAR(20),
+  like_count INT DEFAULT 0,
   -- popularity: 0-100 normalized score. Derived from total_views when null (log10-scaled).
   popularity SMALLINT DEFAULT 0,
   total_views INT DEFAULT 0,
@@ -242,6 +247,51 @@ CREATE TABLE instruments (
   name VARCHAR(100) UNIQUE NOT NULL
 );
 
+-- Optional migration for existing environments:
+-- Normalize and deduplicate instruments case-insensitively, then enforce unique lower(name).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_repertoire.tables
+    WHERE table_repertoire = 'public' AND table_name = 'instruments'
+  ) THEN
+    UPDATE instruments
+    SET name = btrim(name)
+    WHERE name <> btrim(name);
+
+    WITH duplicates AS (
+      SELECT
+        id,
+        lower(name) AS key_name,
+        MIN(id) OVER (PARTITION BY lower(name)) AS keep_id
+      FROM instruments
+    ),
+    remap AS (
+      SELECT id AS duplicate_id, keep_id
+      FROM duplicates
+      WHERE id <> keep_id
+    )
+    UPDATE song_versions sv
+    SET instrument_id = remap.keep_id
+    FROM remap
+    WHERE sv.instrument_id = remap.duplicate_id;
+
+    DELETE FROM instruments i
+    USING (
+      SELECT id
+      FROM (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY lower(name) ORDER BY id) AS rn
+        FROM instruments
+      ) ranked
+      WHERE rn > 1
+    ) dups
+    WHERE i.id = dups.id;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_instruments_name_lower_unique ON instruments ((lower(name)));
+
 -- ================================
 -- SONG_VERSIONS
 -- ================================
@@ -262,9 +312,9 @@ CREATE TABLE song_versions (
 );
 
 -- ================================
--- SCHEMAS
+-- repertoireS
 -- ================================
-CREATE TABLE schemas (
+CREATE TABLE repertoires (
   id SERIAL PRIMARY KEY,
   user_id INT NOT NULL,
   title VARCHAR(200) NOT NULL,
@@ -274,16 +324,16 @@ CREATE TABLE schemas (
 );
 
 -- ================================
--- SCHEMA_SONGS (N:M)
+-- repertoire_SONGS (N:M)
 -- ================================
-CREATE TABLE schema_songs (
+CREATE TABLE repertoire_songs (
   id SERIAL PRIMARY KEY,
-  schema_id INT NOT NULL,
+  repertoire_id INT NOT NULL,
   song_id INT NOT NULL,
   order_index INT NOT NULL,
-  UNIQUE (schema_id, song_id),
-  UNIQUE (schema_id, order_index),
-  FOREIGN KEY (schema_id) REFERENCES schemas(id) ON DELETE CASCADE,
+  UNIQUE (repertoire_id, song_id),
+  UNIQUE (repertoire_id, order_index),
+  FOREIGN KEY (repertoire_id) REFERENCES repertoires(id) ON DELETE CASCADE,
   FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
 );
 
@@ -317,6 +367,7 @@ CREATE INDEX idx_songs_user ON songs(user_id);
 CREATE INDEX idx_songs_artist ON songs(artist_id);
 CREATE INDEX idx_songs_year ON songs(year);
 CREATE INDEX idx_songs_album ON songs(album_id);
+CREATE INDEX idx_songs_like_count ON songs(like_count);
 CREATE INDEX idx_songs_popularity ON songs(popularity);
 CREATE INDEX idx_songs_total_views ON songs(total_views);
 CREATE UNIQUE INDEX idx_songs_isrc ON songs(isrc) WHERE isrc IS NOT NULL;
@@ -333,9 +384,9 @@ CREATE INDEX idx_song_versions_song ON song_versions(song_id);
 CREATE INDEX idx_song_versions_artist ON song_versions(artist_id);
 CREATE INDEX idx_song_versions_instrument ON song_versions(instrument_id);
 
-CREATE INDEX idx_schemas_user ON schemas(user_id);
-CREATE INDEX idx_schema_songs_schema ON schema_songs(schema_id);
-CREATE INDEX idx_schema_songs_song ON schema_songs(song_id);
+CREATE INDEX idx_repertoires_user ON repertoires(user_id);
+CREATE INDEX idx_repertoire_songs_repertoire ON repertoire_songs(repertoire_id);
+CREATE INDEX idx_repertoire_songs_song ON repertoire_songs(song_id);
 
 CREATE INDEX idx_artist_discography_artist ON artist_discography(artist_id);
 CREATE INDEX idx_artist_discography_song ON artist_discography(song_id);
