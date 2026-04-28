@@ -17,7 +17,7 @@ frontend/apps/web/.env.*
 Docs/
 
 
-bruin/readme.md
+#bruin/readme.md
 bruin/deploy-cloud-run.ps1
 
 disconnect/*
