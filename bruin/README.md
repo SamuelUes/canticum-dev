@@ -66,3 +66,45 @@ psql "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER password=$DB_PAS
 Usa `bruin/deploy-cloud-run.ps1`.
 
 > Nota: `firebase.json` no controla Cloud Run Jobs; se despliega con `gcloud run jobs`.
+
+## Trigger de Cloud Build (manual, recomendado)
+
+Archivo de build usado por el trigger: `cloudbuild.bruin.yaml` (en la raíz del repo).
+
+### Configuración exacta del trigger
+
+- Tipo: `Archivo de configuración de Cloud Build (YAML o JSON)`
+- Ubicación: `Repositorio`
+- Archivo de configuración: `cloudbuild.bruin.yaml`
+- Evento: `Enviar a una rama`
+- Rama (regex): `^main$`
+- Filtro de archivos incluidos (glob): `bruin/**`
+- Región del trigger: `us-central1`
+
+### Cuenta de servicio del trigger
+
+Si tu organización obliga SA personalizada, selecciona una SA dedicada de build (ej. `bruin-build@...`).
+
+Roles mínimos sugeridos para esa SA:
+
+- `Artifact Registry Writer`
+- `Logs Writer`
+- `Cloud Build Service Account` (o permisos equivalentes de ejecución de build según políticas de tu org)
+
+### Logging obligatorio (para evitar el error de build.service_account)
+
+El archivo `cloudbuild.bruin.yaml` ya incluye:
+
+```yaml
+options:
+  logging: CLOUD_LOGGING_ONLY
+```
+
+Con eso no necesitas configurar `logs_bucket` manualmente.
+
+### Resultado esperado del trigger
+
+Publica estas imágenes:
+
+- `us-central1-docker.pkg.dev/$PROJECT_ID/canticum-jobs/canticum-bruin-phase2:$COMMIT_SHA`
+- `us-central1-docker.pkg.dev/$PROJECT_ID/canticum-jobs/canticum-bruin-phase2:latest`
