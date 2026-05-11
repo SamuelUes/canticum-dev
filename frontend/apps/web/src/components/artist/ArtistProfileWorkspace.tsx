@@ -53,6 +53,8 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
       title: album.title,
       year: album.year,
       coverUrl: album.coverUrl,
+      moderationState: album.moderationState,
+      reviewStatus: album.reviewStatus,
       href: album.albumId
         ? `/albums/${album.albumId}`
         : album.songId

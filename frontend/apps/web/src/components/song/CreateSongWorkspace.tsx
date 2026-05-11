@@ -1,6 +1,7 @@
 'use client';
 
 import { collection, doc } from 'firebase/firestore';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
@@ -547,7 +548,13 @@ export function CreateSongWorkspace() {
 
               {coverPreviewUrl && (
                 <div className="create-cover-preview">
-                  <img src={coverPreviewUrl} alt="Previsualización de portada" />
+                  <Image
+                    src={coverPreviewUrl}
+                    alt="Previsualización de portada"
+                    width={88}
+                    height={88}
+                    unoptimized={coverPreviewUrl.startsWith('blob:') || coverPreviewUrl.startsWith('data:')}
+                  />
                   <div className="create-cover-preview-actions">
                     <span>{coverFile?.name ?? 'portada.jpg'}</span>
                     <button

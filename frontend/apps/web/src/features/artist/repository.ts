@@ -335,7 +335,7 @@ export async function fetchSongsByArtist(artistId: string | number): Promise<Art
     }
     return payload.items
       .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
-      .map((row) => ({
+      .map((row): ArtistSongLookup => ({
         sqlSongId: Number(row.sqlSongId),
         songId: typeof row.songId === 'string' && row.songId ? row.songId : null,
         title: String(row.title ?? ''),

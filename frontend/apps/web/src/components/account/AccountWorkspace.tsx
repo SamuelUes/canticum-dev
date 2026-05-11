@@ -263,10 +263,10 @@ export function AccountWorkspace() {
             <span>Nombre</span>
             <strong>{profileName}</strong>
           </div>
-          <div>
+          {/* <div>
             <span>Rol</span>
             <strong>{profileRole}</strong>
-          </div>
+          </div> */}
           <div>
             <span>Plan</span>
             <strong>{profilePremium ? 'Premium' : profilePlan === 'premium' ? 'Premium' : 'Free'}</strong>

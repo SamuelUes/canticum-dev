@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -304,7 +305,16 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
 
       <article className="account-card">
         <h2>Portada</h2>
-        {coverPreviewUrl ? <img src={coverPreviewUrl} alt="Portada del repertorio" className="account-cover-preview" /> : null}
+        {coverPreviewUrl ? (
+          <Image
+            src={coverPreviewUrl}
+            alt="Portada del repertorio"
+            className="account-cover-preview"
+            width={180}
+            height={180}
+            unoptimized={coverPreviewUrl.startsWith('blob:') || coverPreviewUrl.startsWith('data:')}
+          />
+        ) : null}
         <input
           type="file"
           accept="image/png,image/jpeg,image/jpg,image/webp"
