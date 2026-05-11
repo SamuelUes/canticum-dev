@@ -30,6 +30,8 @@ export interface SongVersion {
   lyricsFileUrl?: string;
   /** Optional uploaded sheet music file URL. */
   sheetFileUrl?: string;
+  /** Optional cover image tied to this version. */
+  coverImageUrl?: string;
 }
 
 export interface SongInstrument {
@@ -105,6 +107,10 @@ export interface SongDetail {
   album?: SongSimplifiedAlbum;
   /** Ordered image variants (largest first). */
   images?: SongImage[];
+  /** Primary cover shortcut when available. */
+  coverImageUrl?: string;
+  /** Optional thumbnail variant. */
+  thumbnailUrl?: string;
   /** Track duration in milliseconds. */
   durationMs?: number;
   /** 1-based track number within its album. */

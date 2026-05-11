@@ -5,6 +5,13 @@ export interface repertoireUpdatePayload {
   description?: string;
   liturgicalType?: string;
   isPublic?: boolean;
+  songIds?: string[];
+  songs?: Array<{
+    songId: string;
+    versionId?: string;
+  }>;
+  coverImageUrl?: string;
+  status?: string;
 }
 
 export interface repertoireActionResult {
@@ -14,6 +21,111 @@ export interface repertoireActionResult {
 }
 
 const functionsBaseUrl = (process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+const REPERTOIRE_CACHE_TTL_MS = 60_000;
+const REPERTOIRE_LIST_CACHE_PREFIX = 'canticum:repertoires:list:v1:';
+const REPERTOIRE_DETAIL_CACHE_PREFIX = 'canticum:repertoires:detail:v1:';
+
+interface CacheEnvelope<T> {
+  expiresAt: number;
+  value: T;
+}
+
+function readLocalCache<T>(key: string): T | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as CacheEnvelope<T>;
+    if (!parsed || typeof parsed !== 'object') {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+
+    if (!Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+
+    return parsed.value;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalCache<T>(key: string, value: T): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const envelope: CacheEnvelope<T> = {
+      expiresAt: Date.now() + REPERTOIRE_CACHE_TTL_MS,
+      value
+    };
+
+    window.localStorage.setItem(key, JSON.stringify(envelope));
+  } catch {
+  }
+}
+
+function removeLocalCache(key: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+  }
+}
+
+async function waitForAuthHydration(): Promise<void> {
+  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+
+  if (!hasFirebaseConfig) {
+    return;
+  }
+
+  try {
+    const { auth } = await import('../../services/firebase');
+    if (auth.currentUser) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let unsubscribe: (() => void) | null = null;
+
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        if (unsubscribe) {
+          unsubscribe();
+        }
+        resolve();
+      };
+
+      const timeoutId = window.setTimeout(() => {
+        finish();
+      }, 1500);
+
+      unsubscribe = auth.onAuthStateChanged(() => {
+        window.clearTimeout(timeoutId);
+        finish();
+      });
+    });
+  } catch {
+  }
+}
 
 async function getCurrentUserId(): Promise<string> {
   const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
@@ -23,6 +135,7 @@ async function getCurrentUserId(): Promise<string> {
   }
 
   try {
+    await waitForAuthHydration();
     const { auth } = await import('../../services/firebase');
     return auth.currentUser?.uid ?? 'anonymous';
   } catch {
@@ -38,6 +151,7 @@ async function getAuthIdToken(): Promise<string | null> {
   }
 
   try {
+    await waitForAuthHydration();
     const { auth } = await import('../../services/firebase');
     if (!auth.currentUser) {
       return null;
@@ -97,6 +211,12 @@ export async function fetchRepertoireDetailClient(repertoireId: string): Promise
     return null;
   }
 
+  const detailCacheKey = `${REPERTOIRE_DETAIL_CACHE_PREFIX}${repertoireId}`;
+  const cached = readLocalCache<Record<string, unknown>>(detailCacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const headers = await buildAuthHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/repertoires/${repertoireId}`, {
@@ -114,9 +234,14 @@ export async function fetchRepertoireDetailClient(repertoireId: string): Promise
     if (payload && typeof payload === 'object') {
       const maybeEnvelope = payload as { repertoire?: unknown };
       if (maybeEnvelope.repertoire && typeof maybeEnvelope.repertoire === 'object') {
-        return maybeEnvelope.repertoire as Record<string, unknown>;
+        const normalized = maybeEnvelope.repertoire as Record<string, unknown>;
+        writeLocalCache(detailCacheKey, normalized);
+        return normalized;
       }
-      return payload as Record<string, unknown>;
+
+      const normalized = payload as Record<string, unknown>;
+      writeLocalCache(detailCacheKey, normalized);
+      return normalized;
     }
 
     return null;
@@ -143,6 +268,12 @@ export async function requestUserRepertoires(): Promise<repertoireListItem[] | n
       return [];
     }
 
+    const listCacheKey = `${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`;
+    const cached = readLocalCache<repertoireListItem[]>(listCacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const headers = await buildAuthHeaders({ Accept: 'application/json' });
     const response = await fetch(
       `${functionsBaseUrl}/repertoires?userId=${encodeURIComponent(userId)}`,
@@ -160,7 +291,7 @@ export async function requestUserRepertoires(): Promise<repertoireListItem[] | n
         ? payload
         : [];
 
-    return rawList
+    const normalized = rawList
       .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
       .map((raw): repertoireListItem => {
         const songIds = Array.isArray(raw.songIds) ? raw.songIds.filter((id): id is string => typeof id === 'string') : [];
@@ -188,6 +319,9 @@ export async function requestUserRepertoires(): Promise<repertoireListItem[] | n
         };
       })
       .filter((item) => item.id.length > 0);
+
+    writeLocalCache(listCacheKey, normalized);
+    return normalized;
   } catch {
     return null;
   }
@@ -212,6 +346,9 @@ export async function requestDeleterepertoire(repertoireId: string): Promise<rep
     if (!response.ok) {
       return { ok: false, reason: mapStatusToReason(response.status) };
     }
+
+    removeLocalCache(`${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`);
+    removeLocalCache(`${REPERTOIRE_DETAIL_CACHE_PREFIX}${repertoireId}`);
 
     return { ok: true };
   } catch {
@@ -321,6 +458,9 @@ export async function requestUpdaterepertoire(repertoireId: string, update: repe
       return { ok: false, reason: mapStatusToReason(response.status) };
     }
 
+    removeLocalCache(`${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`);
+    removeLocalCache(`${REPERTOIRE_DETAIL_CACHE_PREFIX}${repertoireId}`);
+
     return { ok: true };
   } catch {
     return { ok: false, reason: 'network' };
@@ -329,6 +469,7 @@ export async function requestUpdaterepertoire(repertoireId: string, update: repe
 
 export interface CreaterepertoirePayload {
   title: string;
+  repertoireDocId?: string;
   songIds?: string[];
   songs?: Array<{
     songId: string;
@@ -336,6 +477,7 @@ export interface CreaterepertoirePayload {
   }>;
   isPublic?: boolean;
   liturgicalType?: string;
+  coverImageUrl?: string;
 }
 
 export async function requestCreaterepertoire(payload: CreaterepertoirePayload): Promise<repertoireActionResult & { repertoireId?: string }> {
@@ -363,6 +505,7 @@ export async function requestCreaterepertoire(payload: CreaterepertoirePayload):
     }
 
     const data = (await response.json()) as { repertoire?: { id?: string } };
+    removeLocalCache(`${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`);
     return { ok: true, repertoireId: data.repertoire?.id };
   } catch {
     return { ok: false, reason: 'network' };

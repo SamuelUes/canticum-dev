@@ -13,6 +13,25 @@ import type {
   SearchVersionItem
 } from '../../types/search';
 
+interface SearchDatasetClientOptions {
+  forceRefresh?: boolean;
+  timeoutMs?: number;
+  scope?: 'home' | 'catalog';
+}
+
+interface SearchDatasetCacheEntry {
+  dataset: SearchDataset;
+  expiresAt: number;
+}
+
+const SEARCH_DATASET_CACHE_KEY_PREFIX = '__canticum_search_dataset_cache_v1__';
+const SEARCH_DATASET_CACHE_TTL_MS = 60_000;
+const SEARCH_DATASET_FETCH_TIMEOUT_MS = 8_500;
+const MAX_NORMALIZED_ITEMS = 1_500;
+
+const inMemorySearchDatasetCacheByScope = new Map<'home' | 'catalog', SearchDatasetCacheEntry>();
+const inFlightSearchDatasetRequestByScope = new Map<'home' | 'catalog', Promise<SearchDataset>>();
+
 function normalizeImages(raw: unknown): SearchImage[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const normalized = raw
@@ -33,37 +52,136 @@ function normalizeImages(raw: unknown): SearchImage[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
-export async function getSearchDatasetClient(): Promise<SearchDataset> {
+export async function getSearchDatasetClient(options: SearchDatasetClientOptions = {}): Promise<SearchDataset> {
+  const { forceRefresh = false, timeoutMs = SEARCH_DATASET_FETCH_TIMEOUT_MS, scope = 'catalog' } = options;
+  const cached = getCachedSearchDatasetClient(scope);
+
+  if (!forceRefresh && cached) {
+    return cached;
+  }
+
+  if (!forceRefresh) {
+    const inFlightRequest = inFlightSearchDatasetRequestByScope.get(scope);
+    if (inFlightRequest) {
+      return inFlightRequest;
+    }
+  }
+
   if (!functionsBaseUrl) {
-    return searchMockData;
+    return cached ?? searchMockData;
+  }
+
+  const requestPromise = (async (): Promise<SearchDataset> => {
+    try {
+      const token = await getAuthIdToken();
+      const headers: Record<string, string> = {
+        Accept: 'application/json'
+      };
+
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => {
+        controller.abort();
+      }, timeoutMs);
+
+      try {
+        const endpoint = new URL(`${functionsBaseUrl}/search/catalog`);
+        if (scope === 'home') {
+          endpoint.searchParams.set('scope', 'home');
+        }
+
+        const response = await fetch(endpoint.toString(), {
+          method: 'GET',
+          headers,
+          cache: 'no-store',
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(`Search catalog request failed with status ${response.status}`);
+        }
+
+        const payload = (await response.json()) as unknown;
+        const normalized = normalizeDataset(payload) ?? searchMockData;
+        writeSearchDatasetCache(normalized, scope);
+        return normalized;
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+    } catch {
+      return cached ?? searchMockData;
+    } finally {
+      inFlightSearchDatasetRequestByScope.delete(scope);
+    }
+  })();
+
+  inFlightSearchDatasetRequestByScope.set(scope, requestPromise);
+  return requestPromise;
+}
+
+export function getCachedSearchDatasetClient(scope: 'home' | 'catalog' = 'catalog'): SearchDataset | null {
+  const now = Date.now();
+
+  const inMemoryEntry = inMemorySearchDatasetCacheByScope.get(scope);
+  if (inMemoryEntry && inMemoryEntry.expiresAt > now) {
+    return inMemoryEntry.dataset;
+  }
+
+  if (typeof window === 'undefined') {
+    return null;
   }
 
   try {
-    const token = await getAuthIdToken();
-    const headers: Record<string, string> = {
-      Accept: 'application/json'
+    const raw = window.sessionStorage.getItem(getSearchDatasetCacheKey(scope));
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<SearchDatasetCacheEntry>;
+    if (!parsed || typeof parsed !== 'object' || !parsed.dataset || typeof parsed.expiresAt !== 'number') {
+      return null;
+    }
+
+    if (parsed.expiresAt <= now) {
+      window.sessionStorage.removeItem(getSearchDatasetCacheKey(scope));
+      return null;
+    }
+
+    const entry: SearchDatasetCacheEntry = {
+      dataset: parsed.dataset,
+      expiresAt: parsed.expiresAt
     };
+    inMemorySearchDatasetCacheByScope.set(scope, entry);
 
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${functionsBaseUrl}/search/catalog`, {
-      method: 'GET',
-      headers,
-      cache: 'no-store'
-    });
-
-    if (!response.ok) {
-      throw new Error(`Search catalog request failed with status ${response.status}`);
-    }
-
-    const payload = (await response.json()) as unknown;
-    const normalized = normalizeDataset(payload);
-    return normalized ?? searchMockData;
+    return parsed.dataset;
   } catch {
-    return searchMockData;
+    return null;
   }
+}
+
+function writeSearchDatasetCache(dataset: SearchDataset, scope: 'home' | 'catalog'): void {
+  const entry: SearchDatasetCacheEntry = {
+    dataset,
+    expiresAt: Date.now() + SEARCH_DATASET_CACHE_TTL_MS
+  };
+
+  inMemorySearchDatasetCacheByScope.set(scope, entry);
+
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(getSearchDatasetCacheKey(scope), JSON.stringify(entry));
+  } catch {
+  }
+}
+
+function getSearchDatasetCacheKey(scope: 'home' | 'catalog'): string {
+  return `${SEARCH_DATASET_CACHE_KEY_PREFIX}:${scope}`;
 }
 
 const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
@@ -201,6 +319,7 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
       ...base,
       kind: 'repertoire',
       type: 'repertoire',
+      status: typeof rawItem.status === 'string' ? rawItem.status : undefined,
       dateLabel: normalizeDateLabel(rawItem.dateLabel),
       songsCount: Number(rawItem.songsCount ?? 0),
       sheetsCount: Number(rawItem.sheetsCount ?? 0),
@@ -234,6 +353,7 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     ...base,
     kind: 'song',
     type: 'song',
+    status: typeof rawItem.status === 'string' ? rawItem.status : undefined,
     isPremium: Boolean(rawItem.isPremium),
     popularity: Number.isFinite(Number(rawItem.popularity)) ? Number(rawItem.popularity) : undefined,
     totalViews: Number.isFinite(Number(rawItem.totalViews)) ? Number(rawItem.totalViews) : undefined,
@@ -318,6 +438,10 @@ function normalizeDataset(rawData: unknown): SearchDataset | null {
     items = rawItems
       .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
       .map((item) => normalizeItem(item));
+
+    if (items.length > MAX_NORMALIZED_ITEMS) {
+      items = items.slice(0, MAX_NORMALIZED_ITEMS);
+    }
   } else if (buckets) {
     // Flatten buckets into a single items array for legacy UI consumers.
     items = [
@@ -327,6 +451,10 @@ function normalizeDataset(rawData: unknown): SearchDataset | null {
       ...(buckets.artists?.items ?? []),
       ...(buckets.versions?.items ?? [])
     ];
+
+    if (items.length > MAX_NORMALIZED_ITEMS) {
+      items = items.slice(0, MAX_NORMALIZED_ITEMS);
+    }
   } else {
     return null;
   }

@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { getArtistProfileHref } from '../../features/artist/routing';
-import { getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
+import { getCachedSearchDatasetClient, getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
 import { requestDeleterepertoire } from '../../features/repertoire/clientPersistence';
 import type { SearchAlbumItem, SearchDataset, SearchEntityItem, SearchEntityKind, SearchrepertoireItem } from '../../types/search';
 
@@ -44,9 +44,10 @@ function includesQuery(item: SearchEntityItem, query: string) {
 
 export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerProps) {
   const router = useRouter();
+  const cachedDataset = useMemo(() => dataset ?? getCachedSearchDatasetClient('catalog') ?? EMPTY_DATASET, [dataset]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [activeDataset, setActiveDataset] = useState<SearchDataset>(dataset ?? EMPTY_DATASET);
-  const [isLoading, setIsLoading] = useState<boolean>(!dataset);
+  const [activeDataset, setActiveDataset] = useState<SearchDataset>(cachedDataset);
+  const [isLoading, setIsLoading] = useState<boolean>(cachedDataset === EMPTY_DATASET);
   const [removedrepertoireIds, setRemovedrepertoireIds] = useState<string[]>([]);
   const [query, setQuery] = useState(initialQuery);
   const [selectedKinds, setSelectedKinds] = useState<SearchEntityKind[]>([...KIND_ORDER]);
@@ -61,7 +62,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
       try {
         const [resolvedUserId, resolvedDataset] = await Promise.all([
           getClientCurrentUserId(),
-          getSearchDatasetClient()
+          getSearchDatasetClient({ scope: 'catalog' })
         ]);
 
         if (disposed) {

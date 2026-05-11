@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useState } from 'react';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { HorizontalConveyor } from '../ui/HorizontalConveyor';
@@ -15,7 +15,6 @@ interface ArtistsSectionProps {
 
 export function ArtistsSection({ title, artists, loading = false }: ArtistsSectionProps) {
   const [selectedArtistId, setSelectedArtistId] = useState<string | null>(null);
-  const router = useRouter();
 
   if (loading) {
     return (
@@ -41,26 +40,19 @@ export function ArtistsSection({ title, artists, loading = false }: ArtistsSecti
         <div className="artists-track" role="listbox" aria-label={title}>
           {artists.map((artist) => {
             const isSelected = selectedArtistId === artist.id;
+            const artistHref = getArtistProfileHref({ artistId: artist.id, artistName: artist.name });
 
             return (
-              <article
+              <Link
                 key={artist.id}
                 role="option"
                 aria-label={artist.name}
                 aria-selected={isSelected}
-                tabIndex={0}
                 className={isSelected ? 'artist-home-pill artist-card-interactive is-selected' : 'artist-home-pill artist-card-interactive'}
-                onClick={() => {
-                  setSelectedArtistId(artist.id);
-                  router.push(getArtistProfileHref({ artistId: artist.id, artistName: artist.name }));
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    setSelectedArtistId(artist.id);
-                    router.push(getArtistProfileHref({ artistId: artist.id, artistName: artist.name }));
-                  }
-                }}
+                href={artistHref}
+                onFocus={() => setSelectedArtistId(artist.id)}
+                onMouseEnter={() => setSelectedArtistId(artist.id)}
+                onClick={() => setSelectedArtistId(artist.id)}
               >
                 {artist.avatarUrl ? (
                   <Image src={artist.avatarUrl} alt={artist.name} className="artist-avatar-image" width={62} height={62} />
@@ -76,7 +68,7 @@ export function ArtistsSection({ title, artists, loading = false }: ArtistsSecti
                   </div>
                 )}
                 <small className="artist-name">{artist.name}</small>
-              </article>
+              </Link>
             );
           })}
         </div>

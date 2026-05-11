@@ -8,7 +8,11 @@ import {
   deleteSongByIdInCloudSql,
   deleteVersionsByIdsInCloudSql,
   incrementSongViewInCloudSql,
-  type VersionInput
+  type VersionInput,
+  updateSongMetadataInCloudSql,
+  type UpdateSongMetadataInput,
+  updateSongVersionInCloudSql,
+  type UpdateSongVersionInput
 } from '../../shared/cloudSql/songs';
 import { createArtist, getArtistById } from '../../shared/cloudSql/artists';
 import {
@@ -107,6 +111,33 @@ function normalizeStringArray(value: unknown): string[] {
 
   return [];
 }
+/*------*/
+const SONG_STATE_VALUES = ['DRAFT', 'UPLOADED', 'IN_REVIEW', 'APPROVED', 'REJECTED', 'PUBLISHED', 'ARCHIVED'] as const;
+
+function normalizeSongState(raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  return SONG_STATE_VALUES.includes(value as typeof SONG_STATE_VALUES[number]) ? value : 'DRAFT';
+}
+
+function readOptionalTrimmedString(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function readNullableTrimmedString(value: unknown): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+
+  const normalized = readOptionalTrimmedString(value);
+  return normalized === undefined ? undefined : normalized;
+}
+/*------*/
 
 async function resolveSongSnapshotByAnyId(
   db: FirebaseFirestore.Firestore,
@@ -321,6 +352,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
             tone: vi.tone ?? null,
             notationType: vi.notationType ?? null,
             audioReferenceUrl: sv.audioReferenceUrl ?? vi.audioReferenceUrl ?? null,
+            coverImageUrl: typeof rv?.coverImageUrl === 'string' && rv.coverImageUrl.trim() ? rv.coverImageUrl.trim() : null,
             lyrics: typeof rv.lyrics === 'string' ? rv.lyrics : '',
             lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null,
             sheetFileUrl: typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null,
@@ -334,9 +366,21 @@ export const songs = functions.https.onRequest(async (req, res) => {
 
         // Update parent song updatedAt + currentVersionId to most recent created.
         const newCurrentVersionId = createdVersionIds[createdVersionIds.length - 1];
+        const newestRawVersion = rawVersions[rawVersions.length - 1] ?? {};
+        const newestCoverImageUrl = typeof newestRawVersion.coverImageUrl === 'string' && newestRawVersion.coverImageUrl.trim()
+          ? newestRawVersion.coverImageUrl.trim()
+          : '';
+
         batch.update(songRef, {
           updatedAt: FieldValue.serverTimestamp(),
-          currentVersionId: newCurrentVersionId
+          currentVersionId: newCurrentVersionId,
+          ...(newestCoverImageUrl
+            ? {
+                coverImageUrl: newestCoverImageUrl,
+                thumbnailUrl: newestCoverImageUrl,
+                images: [{ url: newestCoverImageUrl }]
+              }
+            : {})
         });
 
         await batch.commit();
@@ -375,6 +419,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
       ? db.collection('songs').doc(clientSongId)
       : db.collection('songs').doc();
     const artistName = typeof body.artistName === 'string' ? body.artistName.trim() : '';
+    const coverImageUrl = typeof body.coverImageUrl === 'string' ? body.coverImageUrl.trim() : '';
 
     // ── Resolve song-level artist ──
     let songArtistId: number | null = null;
@@ -433,6 +478,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
         filePath: `songs/${songRef.id}`,
         previewUrl: null,
         artistId: songArtistId,
+        coverImageUrl: coverImageUrl || null,
         versions: versionInputs
       });
       sqlSongId = sqlSong.id;
@@ -460,6 +506,12 @@ export const songs = functions.https.onRequest(async (req, res) => {
       const batch = db.batch();
 
       // NOTE: lyrics no longer projected on song doc; lives on each version doc instead.
+      const firstRawVersion = rawVersions[0] ?? {};
+      const firstVersionCoverImageUrl = typeof firstRawVersion.coverImageUrl === 'string' && firstRawVersion.coverImageUrl.trim()
+        ? firstRawVersion.coverImageUrl.trim()
+        : '';
+      const songCoverUrl = firstVersionCoverImageUrl || coverImageUrl;
+
       batch.set(songRef, {
         title,
         artistName: resolvedArtistName,
@@ -473,6 +525,13 @@ export const songs = functions.https.onRequest(async (req, res) => {
         sqlSongId,
         currentVersionId: firstVersionRef.id,
         currentInstrumentId: firstSqlVersion?.instrumentId ? String(firstSqlVersion.instrumentId) : '',
+        ...(songCoverUrl
+          ? {
+              coverImageUrl: songCoverUrl,
+              thumbnailUrl: songCoverUrl,
+              images: [{ url: songCoverUrl }]
+            }
+          : {}),
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp()
       });
@@ -497,6 +556,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
           tone: vi?.tone ?? null,
           notationType: vi?.notationType ?? null,
           audioReferenceUrl: sv?.audioReferenceUrl ?? vi?.audioReferenceUrl ?? null,
+          coverImageUrl: typeof rv.coverImageUrl === 'string' && rv.coverImageUrl.trim() ? rv.coverImageUrl.trim() : null,
           lyrics: typeof rv.lyrics === 'string' ? rv.lyrics : (typeof body.lyrics === 'string' ? body.lyrics : ''),
           lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null,
           sheetFileUrl: typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null,
@@ -593,6 +653,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
       tone: typeof version.tone === 'string' ? version.tone : undefined,
       notationType: typeof version.notationType === 'string' ? version.notationType : undefined,
       audioReferenceUrl: typeof version.audioReferenceUrl === 'string' ? version.audioReferenceUrl : undefined,
+      coverImageUrl: typeof version.coverImageUrl === 'string' ? version.coverImageUrl : undefined,
       artistName: String(version.artistName ?? songData.artistName ?? ''),
       instrumentName: typeof version.instrumentName === 'string' ? version.instrumentName : undefined,
       label: String(version.label ?? version.versionName ?? 'Versión'),
@@ -642,9 +703,14 @@ export const songs = functions.https.onRequest(async (req, res) => {
     const activeSheet = (activeVersionRaw && typeof activeVersionRaw.sheetFileUrl === 'string' && activeVersionRaw.sheetFileUrl)
       ? (activeVersionRaw.sheetFileUrl as string)
       : (typeof songData.sheet === 'string' ? songData.sheet : undefined);
+    const activeCoverUrl = activeVersionRaw && typeof activeVersionRaw.coverImageUrl === 'string' && activeVersionRaw.coverImageUrl
+      ? (activeVersionRaw.coverImageUrl as string)
+      : undefined;
     const images = normalizeImages(
       songData.images,
-      typeof songData.thumbnailUrl === 'string' ? (songData.thumbnailUrl as string) : undefined
+      activeCoverUrl
+        ?? (typeof songData.coverImageUrl === 'string' ? (songData.coverImageUrl as string) : undefined)
+        ?? (typeof songData.thumbnailUrl === 'string' ? (songData.thumbnailUrl as string) : undefined)
     );
     const totalViews = Number(songData.totalViews ?? 0) || 0;
     const popularity = computePopularity(songData.popularity, totalViews);
@@ -738,6 +804,338 @@ export const songs = functions.https.onRequest(async (req, res) => {
     });
     return;
   }
+/*------*/
+  if (segments.length === 1 && req.method === 'PATCH') {
+    if (!authContext) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const songSnap = await resolveSongSnapshotByAnyId(db, songId);
+    if (!songSnap || !songSnap.exists) {
+      sendError(res, 404, 'not_found', 'Song not found.');
+      return;
+    }
+
+    const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+    const ownerUid = String(songData.ownerUserId ?? songData.createdBy ?? '');
+    const role = (authContext.token.role as string | undefined) ?? undefined;
+
+    if (!isOwnerOrAdmin(ownerUid, authContext.uid, role)) {
+      sendError(res, 403, 'forbidden', 'You cannot modify this song.');
+      return;
+    }
+
+    const sqlSongId = resolveSqlSongIdFromSongSnapshot(songSnap.id, songData);
+    if (!sqlSongId) {
+      sendError(res, 422, 'invalid_state', 'Song has no Cloud SQL projection.');
+      return;
+    }
+
+    const body = getBodyRecord(req);
+    const nextTitle = readOptionalTrimmedString(body.title);
+    const coverImageRaw = body.coverImageUrl;
+    const coverImageUrl = coverImageRaw === null ? null : readOptionalTrimmedString(coverImageRaw);
+    const requestedStatus = readOptionalTrimmedString(body.status);
+    const originalStatus = normalizeSongState(songData.status);
+    const nextStatus = ['APPROVED', 'PUBLISHED'].includes(originalStatus)
+      ? 'DRAFT'
+      : requestedStatus
+        ? normalizeSongState(requestedStatus)
+        : originalStatus;
+
+    const metadataUpdate: UpdateSongMetadataInput = { sqlSongId };
+    if (nextTitle && nextTitle !== String(songData.title ?? '')) {
+      metadataUpdate.title = nextTitle;
+    }
+    if (coverImageRaw !== undefined) {
+      metadataUpdate.coverImageUrl = coverImageUrl ?? null;
+    }
+    if (nextStatus !== originalStatus) {
+      metadataUpdate.status = nextStatus;
+    }
+
+    try {
+      if (
+        metadataUpdate.title !== undefined ||
+        metadataUpdate.coverImageUrl !== undefined ||
+        metadataUpdate.status !== undefined
+      ) {
+        await updateSongMetadataInCloudSql(metadataUpdate);
+      }
+    } catch (error) {
+      console.error('Cloud SQL song metadata update failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to update song metadata.');
+      return;
+    }
+
+    const rawVersions = Array.isArray(body.versions)
+      ? body.versions.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      : [];
+    const shouldLoadVersions = rawVersions.length > 0 || typeof body.currentVersionId === 'string';
+    const versionsCollection = songSnap.ref.collection('versions');
+    const existingVersionsSnap = shouldLoadVersions ? await versionsCollection.get() : null;
+    const existingVersionMap = existingVersionsSnap
+      ? new Map(existingVersionsSnap.docs.map((doc) => [doc.id, doc]))
+      : new Map<string, FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>>();
+
+    const versionDeletes: Array<{ docRef: FirebaseFirestore.DocumentReference; sqlSongVersionId?: number }> = [];
+    const versionSetOps: Array<{ docRef: FirebaseFirestore.DocumentReference; data: Record<string, unknown>; merge: boolean }>
+      = [];
+    const pendingNewVersions: Array<{ docRef: FirebaseFirestore.DocumentReference; data: Record<string, unknown>; input: VersionInput }>
+      = [];
+    const sqlVersionUpdates: UpdateSongVersionInput[] = [];
+    const deletedDocIds = new Set<string>();
+    const updatedDocIds: string[] = [];
+    const defaultArtistIdCandidate = Number(songData.artistId);
+    const defaultArtistId = Number.isFinite(defaultArtistIdCandidate) ? Math.floor(defaultArtistIdCandidate) : null;
+    const defaultArtistName = typeof songData.artistName === 'string' ? songData.artistName : null;
+    const createdByFallback = typeof songData.createdBy === 'string' && songData.createdBy.length > 0
+      ? songData.createdBy
+      : authContext.uid;
+
+    for (const rawVersion of rawVersions) {
+      const docId = readOptionalTrimmedString((rawVersion as Record<string, unknown>).id)
+        ?? readOptionalTrimmedString((rawVersion as Record<string, unknown>).versionId);
+      const markedForDeletion = rawVersion.markedForDeletion === true;
+      const existingDoc = docId ? existingVersionMap.get(docId) : undefined;
+      const normalizedVersionName = readOptionalTrimmedString(rawVersion.versionName)
+        ?? (existingDoc?.data().versionName as string | undefined)
+        ?? 'Versión 1';
+      const normalizedInstrumentName = readOptionalTrimmedString(rawVersion.instrumentName)
+        ?? (existingDoc?.data().instrumentName as string | undefined)
+        ?? 'Letra';
+      const normalizedTone = readNullableTrimmedString(rawVersion.tone);
+      const normalizedNotation = readNullableTrimmedString(rawVersion.notationType);
+      const normalizedAudio = readNullableTrimmedString(rawVersion.audioReferenceUrl);
+      const normalizedCoverUrl = readNullableTrimmedString(rawVersion.coverImageUrl);
+      const normalizedArtistName = readOptionalTrimmedString(rawVersion.artistName) ?? defaultArtistName ?? authContext.uid ?? '';
+      const docRef = docId ? versionsCollection.doc(docId) : versionsCollection.doc();
+      const numericSqlVersionId = Number(rawVersion.sqlSongVersionId ?? rawVersion.sqlVersionId ?? rawVersion.sqlId);
+      const sqlVersionId = Number.isFinite(numericSqlVersionId) && numericSqlVersionId > 0
+        ? Math.floor(numericSqlVersionId)
+        : undefined;
+
+      if (markedForDeletion) {
+        if (existingDoc) {
+          const existingData = existingDoc.data() as Record<string, unknown>;
+          const existingSqlId = Number(existingData.sqlSongVersionId);
+          versionDeletes.push({ docRef: existingDoc.ref, sqlSongVersionId: sqlVersionId ?? (Number.isFinite(existingSqlId) ? Math.floor(existingSqlId) : undefined) });
+          deletedDocIds.add(existingDoc.id);
+        }
+        continue;
+      }
+
+      const versionData: Record<string, unknown> = {
+        songId: songSnap.id,
+        versionId: docRef.id,
+        versionName: normalizedVersionName,
+        label: readOptionalTrimmedString(rawVersion.label) ?? normalizedVersionName,
+        artistName: normalizedArtistName,
+        instrumentName: normalizedInstrumentName,
+        lyrics: typeof rawVersion.lyrics === 'string'
+          ? rawVersion.lyrics
+          : (existingDoc?.data().lyrics as string | undefined) ?? '',
+        audioReferenceUrl: normalizedAudio ?? (existingDoc?.data().audioReferenceUrl as string | null | undefined ?? null),
+        notationType: normalizedNotation ?? (existingDoc?.data().notationType as string | null | undefined ?? null),
+        tone: normalizedTone ?? (existingDoc?.data().tone as string | null | undefined ?? null),
+        coverImageUrl: normalizedCoverUrl ?? (existingDoc?.data().coverImageUrl as string | null | undefined ?? null),
+        updatedAt: FieldValue.serverTimestamp()
+      };
+
+      if (existingDoc) {
+        versionSetOps.push({ docRef: existingDoc.ref, data: versionData, merge: true });
+        updatedDocIds.push(existingDoc.id);
+
+        const existingData = existingDoc.data() as Record<string, unknown>;
+        const fallbackSqlId = Number(existingData.sqlSongVersionId);
+        const resolvedSqlId = sqlVersionId ?? (Number.isFinite(fallbackSqlId) ? Math.floor(fallbackSqlId) : undefined);
+        if (resolvedSqlId) {
+          const sqlPatch: UpdateSongVersionInput = { sqlSongVersionId: resolvedSqlId };
+          if (readOptionalTrimmedString(rawVersion.versionName)) sqlPatch.versionName = normalizedVersionName;
+          if (rawVersion.instrumentName !== undefined) sqlPatch.instrumentName = normalizedInstrumentName;
+          if (normalizedTone !== undefined) sqlPatch.tone = normalizedTone;
+          if (normalizedNotation !== undefined) sqlPatch.notationType = normalizedNotation;
+          if (normalizedAudio !== undefined) sqlPatch.audioReferenceUrl = normalizedAudio;
+          if (Object.keys(sqlPatch).length > 1) {
+            sqlVersionUpdates.push(sqlPatch);
+          }
+        }
+      } else {
+        const newVersionInput: VersionInput = {
+          versionName: normalizedVersionName,
+          instrumentName: normalizedInstrumentName || 'Letra',
+          tone: normalizedTone ?? null,
+          notationType: normalizedNotation ?? null,
+          audioReferenceUrl: normalizedAudio ?? null,
+          artistId: defaultArtistId,
+          artistName: normalizedArtistName
+        };
+
+        const newData: Record<string, unknown> = {
+          ...versionData,
+          sqlSongVersionId: null,
+          createdBy: createdByFallback,
+          createdAt: FieldValue.serverTimestamp(),
+          isPremium: false
+        };
+
+        pendingNewVersions.push({ docRef, data: newData, input: newVersionInput });
+      }
+    }
+
+    const sqlDeleteIds = versionDeletes
+      .map((entry) => entry.sqlSongVersionId)
+      .flatMap((id) => (typeof id === 'number' && Number.isFinite(id) && id > 0 ? [Math.floor(id)] : []));
+
+    try {
+      if (sqlDeleteIds.length > 0) {
+        await deleteVersionsByIdsInCloudSql(sqlDeleteIds);
+      }
+
+      if (sqlVersionUpdates.length > 0) {
+        await Promise.all(sqlVersionUpdates.map((payload) => updateSongVersionInCloudSql(payload)));
+      }
+    } catch (error) {
+      console.error('Cloud SQL version mutation failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to update song versions in Cloud SQL.');
+      return;
+    }
+
+    const createdVersionDocIds: string[] = [];
+    if (pendingNewVersions.length > 0) {
+      try {
+        const sqlNewVersions = await addVersionsToExistingSong(sqlSongId, pendingNewVersions.map((entry) => entry.input));
+        sqlNewVersions.forEach((sqlVersion, index) => {
+          const entry = pendingNewVersions[index];
+          if (!entry) return;
+          entry.data.sqlSongVersionId = sqlVersion.id;
+          entry.data.instrumentId = sqlVersion.instrumentId ? String(sqlVersion.instrumentId) : null;
+          entry.data.artistId = sqlVersion.artistId ? String(sqlVersion.artistId) : null;
+          versionSetOps.push({ docRef: entry.docRef, data: entry.data, merge: true });
+          if (entry.docRef.id) {
+            createdVersionDocIds.push(entry.docRef.id);
+          }
+        });
+      } catch (error) {
+        console.error('Cloud SQL add versions during PATCH failed:', error);
+        sendError(res, 500, 'internal_error', 'Failed to create new song versions.');
+        return;
+      }
+    }
+
+    const batch = db.batch();
+    versionDeletes.forEach(({ docRef }) => batch.delete(docRef));
+    versionSetOps.forEach(({ docRef, data, merge }) => batch.set(docRef, data, { merge }));
+
+    const survivingVersionIds = existingVersionsSnap
+      ? new Set(existingVersionsSnap.docs.map((doc) => doc.id))
+      : new Set<string>();
+    versionDeletes.forEach(({ docRef }) => survivingVersionIds.delete(docRef.id));
+    pendingNewVersions.forEach((entry) => {
+      if (entry.docRef.id) {
+        survivingVersionIds.add(entry.docRef.id);
+      }
+    });
+
+    const requestedCurrentVersionId = readOptionalTrimmedString(body.currentVersionId);
+    let nextCurrentVersionId = requestedCurrentVersionId ?? String(songData.currentVersionId ?? '');
+    if (survivingVersionIds.size > 0) {
+      if (!nextCurrentVersionId || !survivingVersionIds.has(nextCurrentVersionId)) {
+        nextCurrentVersionId = survivingVersionIds.values().next().value as string;
+      }
+    }
+
+    const firestoreUpdate: Record<string, unknown> = {
+      updatedAt: FieldValue.serverTimestamp(),
+      status: nextStatus
+    };
+    if (nextTitle) {
+      firestoreUpdate.title = nextTitle;
+    }
+    if (coverImageRaw !== undefined) {
+      if (coverImageUrl) {
+        firestoreUpdate.coverImageUrl = coverImageUrl;
+        firestoreUpdate.thumbnailUrl = coverImageUrl;
+        firestoreUpdate.images = [{ url: coverImageUrl }];
+      } else {
+        firestoreUpdate.coverImageUrl = FieldValue.delete();
+        firestoreUpdate.thumbnailUrl = FieldValue.delete();
+        firestoreUpdate.images = FieldValue.delete();
+      }
+    }
+    if (nextCurrentVersionId) {
+      firestoreUpdate.currentVersionId = nextCurrentVersionId;
+    }
+
+    batch.update(songSnap.ref, firestoreUpdate);
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      console.error('Firestore song update failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to update song in Firestore.');
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      songId: songSnap.id,
+      status: nextStatus,
+      currentVersionId: nextCurrentVersionId,
+      updatedVersionIds: updatedDocIds,
+      deletedVersionIds: Array.from(deletedDocIds),
+      createdVersionIds: createdVersionDocIds
+    });
+    return;
+  }
+
+  if (segments.length === 1 && req.method === 'DELETE') {
+    if (!authContext) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const songSnap = await resolveSongSnapshotByAnyId(db, songId);
+    if (!songSnap || !songSnap.exists) {
+      sendError(res, 404, 'not_found', 'Song not found.');
+      return;
+    }
+
+    const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+    const ownerUid = String(songData.ownerUserId ?? songData.createdBy ?? '');
+    const role = (authContext.token.role as string | undefined) ?? undefined;
+
+    if (!isOwnerOrAdmin(ownerUid, authContext.uid, role)) {
+      sendError(res, 403, 'forbidden', 'You cannot delete this song.');
+      return;
+    }
+
+    const sqlSongId = resolveSqlSongIdFromSongSnapshot(songSnap.id, songData);
+    if (sqlSongId) {
+      try {
+        await deleteSongByIdInCloudSql(sqlSongId);
+      } catch (error) {
+        console.error('Cloud SQL song delete failed:', error);
+        sendError(res, 500, 'internal_error', 'Failed to delete song in Cloud SQL.');
+        return;
+      }
+    }
+
+    try {
+      const versionsSnap = await songSnap.ref.collection('versions').get();
+      await Promise.all(versionsSnap.docs.map((doc) => doc.ref.delete()));
+      await songSnap.ref.delete();
+    } catch (error) {
+      console.error('Firestore song delete failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to delete song in Firestore.');
+      return;
+    }
+
+    sendJson(res, 200, { ok: true, songId: songSnap.id });
+    return;
+  }
+  /*------*/
 
   if (segments.length === 2 && segments[1] === 'listen' && req.method === 'POST') {
     const songSnap = await resolveSongSnapshotByAnyId(db, songId);
@@ -765,6 +1163,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
       await songSnap.ref.set(
         {
           totalViews: metrics.totalViews,
+          likeCount: metrics.likeCount,
           popularity: metrics.popularity,
           updatedAt: FieldValue.serverTimestamp()
         },

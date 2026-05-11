@@ -9,6 +9,159 @@ export interface VersionInput {
   notationType?: string | null;
   audioReferenceUrl?: string | null;
 }
+/*------*/
+export interface UpdateSongMetadataInput {
+  sqlSongId: number;
+  title?: string;
+  coverImageUrl?: string | null;
+  status?: string | null;
+}
+
+export async function updateSongMetadataInCloudSql(input: UpdateSongMetadataInput): Promise<void> {
+  const songId = Number(input.sqlSongId);
+  if (!Number.isFinite(songId) || songId <= 0) {
+    return;
+  }
+
+  const assignments: string[] = [];
+  const values: unknown[] = [songId];
+  let cursor = 2;
+
+  if (typeof input.title === 'string' && input.title.trim().length > 0) {
+    assignments.push(`title = $${cursor}`);
+    values.push(input.title.trim());
+    cursor += 1;
+  }
+
+  if (input.coverImageUrl !== undefined) {
+    assignments.push(`images_json = $${cursor}::jsonb`);
+    const normalizedCover = typeof input.coverImageUrl === 'string' && input.coverImageUrl.trim().length > 0
+      ? JSON.stringify([{ url: input.coverImageUrl.trim(), width: 480, height: 480 }])
+      : '[]';
+    values.push(normalizedCover);
+    cursor += 1;
+  }
+
+  if (typeof input.status === 'string' && input.status.trim().length > 0) {
+    assignments.push(`state_id = COALESCE((SELECT id FROM song_states WHERE code = UPPER($${cursor}) LIMIT 1), state_id)`);
+    values.push(input.status.trim().toUpperCase());
+    cursor += 1;
+  }
+
+  if (assignments.length === 0) {
+    return;
+  }
+
+  const query = `UPDATE songs SET ${assignments.join(', ')} WHERE id = $1;`;
+  await getPool().query(query, values);
+}
+
+export interface UpdateSongVersionInput {
+  sqlSongVersionId: number;
+  versionName?: string;
+  instrumentName?: string | null;
+  tone?: string | null;
+  notationType?: string | null;
+  audioReferenceUrl?: string | null;
+}
+
+export async function updateSongVersionInCloudSql(input: UpdateSongVersionInput): Promise<void> {
+  const versionId = Number(input.sqlSongVersionId);
+  if (!Number.isFinite(versionId) || versionId <= 0) {
+    return;
+  }
+
+  const client = await getPool().connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const assignments: string[] = [];
+    const values: unknown[] = [versionId];
+    let cursor = 2;
+
+    if (typeof input.versionName === 'string' && input.versionName.trim().length > 0) {
+      assignments.push(`version_name = $${cursor}`);
+      values.push(input.versionName.trim());
+      cursor += 1;
+    }
+
+    if (input.instrumentName !== undefined) {
+      let instrumentId: number | null = null;
+      if (typeof input.instrumentName === 'string' && input.instrumentName.trim().length > 0) {
+        const instrumentResult = await client.query<{ id: number }>(
+          `
+            INSERT INTO instruments (name)
+            VALUES ($1)
+            ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
+            RETURNING id;
+          `,
+          [input.instrumentName.trim()]
+        );
+        instrumentId = instrumentResult.rows[0]?.id ?? null;
+      }
+
+      assignments.push(`instrument_id = $${cursor}`);
+      values.push(instrumentId);
+      cursor += 1;
+    }
+
+    if (input.tone !== undefined) {
+      assignments.push(`tone = $${cursor}`);
+      values.push(input.tone ?? null);
+      cursor += 1;
+    }
+
+    if (input.notationType !== undefined) {
+      assignments.push(`notation_type = $${cursor}`);
+      values.push(input.notationType ?? null);
+      cursor += 1;
+    }
+
+    if (input.audioReferenceUrl !== undefined) {
+      assignments.push(`audio_reference_url = $${cursor}`);
+      values.push(input.audioReferenceUrl ?? null);
+      cursor += 1;
+    }
+
+    if (assignments.length > 0) {
+      const query = `UPDATE song_versions SET ${assignments.join(', ')} WHERE id = $1;`;
+      await client.query(query, values);
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+/*------*/
+
+export interface UserSongStatusCountRow {
+  status: string;
+  total: number;
+}
+
+export async function countSongsByStatusForUser(firebaseUid: string): Promise<UserSongStatusCountRow[]> {
+  const query = `
+    SELECT
+      UPPER(COALESCE(ss.code, 'DRAFT')) AS "status",
+      COUNT(*)::INT AS "total"
+    FROM songs s
+    INNER JOIN users u ON u.id = s.user_id
+    LEFT JOIN song_states ss ON ss.id = s.state_id
+    WHERE u.firebase_uid = $1
+    GROUP BY 1;
+  `;
+
+  const result = await getPool().query<{ status: string | null; total: number }>(query, [firebaseUid]);
+  return result.rows.map((row) => ({
+    status: (row.status ?? 'DRAFT').toUpperCase(),
+    total: Number.isFinite(row.total) ? Number(row.total) : 0
+  }));
+}
 
 interface CreateSongDraftCloudSqlInput {
   firebaseUid: string;
@@ -18,6 +171,7 @@ interface CreateSongDraftCloudSqlInput {
   filePath?: string | null;
   previewUrl?: string | null;
   artistId?: number | null;
+  coverImageUrl?: string | null;
   versions: VersionInput[];
 }
 
@@ -57,6 +211,7 @@ interface CreateRepertoireInCloudSqlInput {
   firebaseUid: string;
   title: string;
   liturgicalType?: string | null;
+  coverUrl?: string | null;
   songIds: number[];
   userEmail?: string | null;
   userName?: string | null;
@@ -159,6 +314,12 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
   const versionInputs = input.versions.length > 0
     ? input.versions
     : [{ versionName: 'Versión 1', instrumentName: 'Letra' }];
+  const normalizedCoverUrl = typeof input.coverImageUrl === 'string' && input.coverImageUrl.trim().length > 0
+    ? input.coverImageUrl.trim()
+    : null;
+  const imagesJson = normalizedCoverUrl
+    ? [{ url: normalizedCoverUrl, width: 480, height: 480 }]
+    : [];
 
   try {
     await client.query('BEGIN');
@@ -176,8 +337,8 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
         WHERE code = 'DRAFT'
         LIMIT 1
       )
-      INSERT INTO songs (user_id, state_id, title, year, liturgical_use, file_path, preview_url, artist_id)
-      SELECT user_row.id, state_row.id, $2, $3, $4, $5, $6, $7
+      INSERT INTO songs (user_id, state_id, title, year, liturgical_use, file_path, preview_url, artist_id, images_json)
+      SELECT user_row.id, state_row.id, $2, $3, $4, $5, $6, $7, $8::jsonb
       FROM user_row, state_row
       RETURNING id, user_id AS "userId", state_id AS "stateId", title, artist_id AS "artistId";
     `;
@@ -189,7 +350,8 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
       input.liturgicalUse ?? null,
       input.filePath ?? '',
       input.previewUrl ?? null,
-      input.artistId ?? null
+      input.artistId ?? null,
+      JSON.stringify(imagesJson)
     ]);
 
     if (!songResult.rows.length) {
@@ -280,9 +442,14 @@ export interface ArtistSongRow {
   year: number | null;
   ownerFirebaseUid: string | null;
   status: string | null;
+  reviewStatus: 'reviewed' | 'pending';
 }
 
-export async function listSongsByArtistId(artistId: number, limit: number = 50): Promise<ArtistSongRow[]> {
+export async function listSongsByArtistId(
+  artistId: number,
+  limit: number = 50,
+  viewerFirebaseUid?: string | null
+): Promise<ArtistSongRow[]> {
   const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 50;
   const result = await getPool().query<ArtistSongRow>(
     `
@@ -292,16 +459,141 @@ export async function listSongsByArtistId(artistId: number, limit: number = 50):
         s.liturgical_use AS "liturgicalUse",
         s.year AS "year",
         u.firebase_uid AS "ownerFirebaseUid",
-        ss.code AS "status"
+        ss.code AS "status",
+        CASE
+          WHEN UPPER(COALESCE(ss.code, '')) = 'APPROVED' THEN 'reviewed'
+          ELSE 'pending'
+        END AS "reviewStatus"
       FROM songs s
       LEFT JOIN users u ON u.id = s.user_id
       LEFT JOIN song_states ss ON ss.id = s.state_id
       WHERE s.artist_id = $1
+        AND (
+          ss.id IS NULL
+          OR UPPER(COALESCE(ss.code, '')) IN ('PUBLISHED', 'APPROVED')
+          OR (
+            UPPER(COALESCE(ss.code, '')) = 'DRAFT'
+            AND $3::TEXT IS NOT NULL
+            AND u.firebase_uid = $3::TEXT
+          )
+        )
       ORDER BY s.title ASC, s.id ASC
       LIMIT $2;
     `,
-    [artistId, safeLimit]
+    [artistId, safeLimit, viewerFirebaseUid ?? null]
   );
+  return result.rows;
+}
+
+export async function refreshFeaturedSongsSnapshot(limit: number = 50, snapshotWeek?: string): Promise<FeaturedSongSnapshotRow[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 50;
+  const normalizedWeek = typeof snapshotWeek === 'string' && snapshotWeek.trim().length > 0
+    ? snapshotWeek.trim()
+    : null;
+
+  const refreshResult = await getPool().query<{
+    snapshotWeek: string;
+    rankPosition: number;
+    songId: number;
+    score: string;
+    popularity: number;
+    totalViews: number;
+    likeCount: number;
+  }>(
+    `
+      SELECT
+        "snapshotWeek",
+        "rankPosition",
+        "songId",
+        "score",
+        "popularity",
+        "totalViews",
+        "likeCount"
+      FROM refresh_featured_songs_snapshot($1, $2);
+    `,
+    [safeLimit, normalizedWeek]
+  );
+
+  const ids = Array.from(new Set(refreshResult.rows.map((row) => row.songId).filter((id) => Number.isFinite(id) && id > 0)));
+
+  if (ids.length === 0) {
+    return [];
+  }
+
+  const metadataResult = await getPool().query<{
+    sqlSongId: number;
+    title: string;
+    artistId: number | null;
+    artistName: string | null;
+  }>(
+    `
+      SELECT
+        s.id AS "sqlSongId",
+        s.title AS "title",
+        s.artist_id AS "artistId",
+        a.name AS "artistName"
+      FROM songs s
+      LEFT JOIN artists a ON a.id = s.artist_id
+      WHERE s.id = ANY($1::INT[]);
+    `,
+    [ids]
+  );
+
+  const metadataBySongId = new Map<number, { title: string; artistId: number | null; artistName: string | null }>();
+  metadataResult.rows.forEach((row) => {
+    metadataBySongId.set(row.sqlSongId, {
+      title: row.title,
+      artistId: row.artistId,
+      artistName: row.artistName
+    });
+  });
+
+  return refreshResult.rows.map((row) => {
+    const meta = metadataBySongId.get(row.songId);
+    return {
+      snapshotWeek: row.snapshotWeek,
+      rankPosition: row.rankPosition,
+      sqlSongId: row.songId,
+      title: meta?.title ?? `Song ${row.songId}`,
+      artistId: meta?.artistId ?? null,
+      artistName: meta?.artistName ?? null,
+      score: Number(row.score),
+      popularity: row.popularity,
+      totalViews: row.totalViews,
+      likeCount: row.likeCount
+    };
+  });
+}
+
+export async function listFeaturedSongsSnapshot(limit: number = 50, snapshotWeek?: string): Promise<FeaturedSongSnapshotRow[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 50;
+  const normalizedWeek = typeof snapshotWeek === 'string' && snapshotWeek.trim().length > 0
+    ? snapshotWeek.trim()
+    : null;
+
+  const result = await getPool().query<FeaturedSongSnapshotRow>(
+    `
+      SELECT
+        fs.snapshot_week::TEXT AS "snapshotWeek",
+        fs.rank_position AS "rankPosition",
+        fs.song_id AS "sqlSongId",
+        s.title AS "title",
+        s.artist_id AS "artistId",
+        a.name AS "artistName",
+        fs.score::FLOAT AS "score",
+        fs.popularity AS "popularity",
+        fs.total_views AS "totalViews",
+        fs.like_count AS "likeCount"
+      FROM featured_songs fs
+      INNER JOIN songs s ON s.id = fs.song_id
+      LEFT JOIN artists a ON a.id = s.artist_id
+      WHERE fs.snapshot_week = COALESCE($2::DATE, (SELECT MAX(snapshot_week) FROM featured_songs))
+      ORDER BY fs.rank_position ASC
+      LIMIT $1;
+    `,
+    [safeLimit, normalizedWeek]
+  );
+
   return result.rows;
 }
 
@@ -342,6 +634,29 @@ export interface SongMetricRow {
   likeCount: number;
   popularity: number;
   artistId: number | null;
+}
+
+export interface TopSongRow {
+  sqlSongId: number;
+  title: string;
+  artistId: number | null;
+  artistName: string | null;
+  totalViews: number;
+  likeCount: number;
+  popularity: number;
+}
+
+export interface FeaturedSongSnapshotRow {
+  snapshotWeek: string;
+  rankPosition: number;
+  sqlSongId: number;
+  title: string;
+  artistId: number | null;
+  artistName: string | null;
+  score: number;
+  popularity: number;
+  totalViews: number;
+  likeCount: number;
 }
 
 function clampMetricScore(value: number): number {
@@ -395,6 +710,45 @@ async function syncArtistMetricsById(
     `,
     [artistId, Number(row.totalViews ?? 0), Number(row.likeCount ?? 0), popularity]
   );
+}
+
+async function ensureCloudSqlUserByFirebaseUid(
+  firebaseUid: string,
+  client: { query: Pool['query'] }
+): Promise<number | null> {
+  const normalizedUid = typeof firebaseUid === 'string' ? firebaseUid.trim() : '';
+  if (!normalizedUid) {
+    return null;
+  }
+
+  const safeEmail = `${normalizedUid}@firebase.local`;
+  const safeName = `user-${normalizedUid.slice(0, 8)}`;
+
+  const result = await client.query<{ id: number }>(
+    `
+      WITH existing AS (
+        SELECT id
+        FROM users
+        WHERE firebase_uid = $1
+        LIMIT 1
+      ),
+      inserted AS (
+        INSERT INTO users (firebase_uid, name, email, auth_provider)
+        SELECT $1, $2, $3, 'firebase_auth'
+        WHERE NOT EXISTS (SELECT 1 FROM existing)
+        ON CONFLICT (email)
+        DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid
+        RETURNING id
+      )
+      SELECT id FROM existing
+      UNION ALL
+      SELECT id FROM inserted
+      LIMIT 1;
+    `,
+    [normalizedUid, safeName, safeEmail]
+  );
+
+  return result.rows[0]?.id ?? null;
 }
 
 export async function incrementSongViewInCloudSql(sqlSongId: number): Promise<SongMetricRow | null> {
@@ -462,17 +816,11 @@ export async function setSongFavoriteInCloudSql(firebaseUid: string, sqlSongId: 
   try {
     await client.query('BEGIN');
 
-    const userResult = await client.query<{ id: number }>(
-      'SELECT id FROM users WHERE firebase_uid = $1 LIMIT 1;',
-      [firebaseUid]
-    );
-
-    if (!userResult.rows.length) {
+    const userId = await ensureCloudSqlUserByFirebaseUid(firebaseUid, client);
+    if (!userId) {
       await client.query('ROLLBACK');
       return null;
     }
-
-    const userId = userResult.rows[0].id;
 
     if (isFavorite) {
       await client.query(
@@ -583,6 +931,36 @@ export async function getSongMetricsBySqlIds(sqlSongIds: number[]): Promise<Map<
   });
 
   return metrics;
+}
+
+export async function listTopSongs(limit: number = 50): Promise<TopSongRow[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 50;
+  const result = await getPool().query<TopSongRow>(
+    `
+      SELECT
+        s.id AS "sqlSongId",
+        s.title AS "title",
+        s.artist_id AS "artistId",
+        a.name AS "artistName",
+        COALESCE(s.total_views, 0)::INT AS "totalViews",
+        COALESCE(s.like_count, 0)::INT AS "likeCount",
+        COALESCE(s.popularity, 0)::INT AS "popularity"
+      FROM songs s
+      LEFT JOIN artists a ON a.id = s.artist_id
+      LEFT JOIN song_states ss ON ss.id = s.state_id
+      WHERE UPPER(COALESCE(ss.code, '')) = 'PUBLISHED'
+      ORDER BY
+        COALESCE(s.popularity, 0) DESC,
+        COALESCE(s.like_count, 0) DESC,
+        COALESCE(s.total_views, 0) DESC,
+        s.created_at DESC,
+        s.id DESC
+      LIMIT $1;
+    `,
+    [safeLimit]
+  );
+
+  return result.rows;
 }
 
 export async function addVersionsToExistingSong(sqlSongId: number, versions: VersionInput[]): Promise<CloudSqlSongVersionRow[]> {
@@ -735,11 +1113,11 @@ export async function createRepertoireInCloudSql(input: CreateRepertoireInCloudS
     const userId = userResult.rows[0].id;
     const repertoireResult = await client.query<CloudSqlRepertoireRow>(
       `
-        INSERT INTO repertoires (user_id, title, type)
-        VALUES ($1, $2, $3)
+        INSERT INTO repertoires (user_id, title, type, cover_url)
+        VALUES ($1, $2, $3, $4)
         RETURNING id;
       `,
-      [userId, input.title, input.liturgicalType ?? null]
+      [userId, input.title, input.liturgicalType ?? null, input.coverUrl ?? null]
     );
 
     if (!repertoireResult.rows.length) {

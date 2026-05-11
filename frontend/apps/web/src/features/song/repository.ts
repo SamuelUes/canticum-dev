@@ -2,6 +2,43 @@ import { songMockById } from './mockData';
 import type { SongDetail, SongImage, SongSimplifiedArtist } from '../../types/song';
 import type { SongRef } from '../../types/repertoire';
 
+export interface SongVersionUpdatePayload {
+  id?: string;
+  versionId?: string;
+  sqlSongVersionId?: number | string;
+  versionName?: string;
+  artistName?: string;
+  instrumentName?: string;
+  label?: string;
+  lyrics?: string;
+  audioReferenceUrl?: string | null;
+  notationType?: string | null;
+  tone?: string | null;
+  coverImageUrl?: string | null;
+  markedForDeletion?: boolean;
+}
+
+export interface SongUpdatePayload {
+  title?: string;
+  coverImageUrl?: string | null;
+  status?: string;
+  currentVersionId?: string;
+  versions?: SongVersionUpdatePayload[];
+}
+
+export interface SongActionResult {
+  ok: boolean;
+  reason?: 'forbidden' | 'unauthorized' | 'not_found' | 'network' | 'unknown';
+  message?: string;
+  data?: {
+    currentVersionId?: string;
+    status?: string;
+    updatedVersionIds?: string[];
+    deletedVersionIds?: string[];
+    createdVersionIds?: string[];
+  };
+}
+
 const functionsBaseUrl = [
   process.env.GCP_FUNCTIONS_BASE_URL,
   process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
@@ -60,6 +97,13 @@ async function buildSongHeaders(baseHeaders: Record<string, string>): Promise<Re
   }
 
   return baseHeaders;
+}
+
+function mapSongStatusToReason(status: number): SongActionResult['reason'] {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  return 'unknown';
 }
 
 function computePopularity(durationOrViews: number | undefined): number {
@@ -162,7 +206,7 @@ async function getSongDetailFromFunctions(songId: string, versionId?: string): P
   }
 
   try {
-    const headers = await buildSongHeaders({ 'Cache-Control': 'no-store' });
+    const headers = await buildSongHeaders({ Accept: 'application/json' });
     const qs = versionId && versionId.trim()
       ? `?versionId=${encodeURIComponent(versionId.trim())}`
       : '';
@@ -268,4 +312,70 @@ export async function getSongTitleById(songId: string, versionId?: string): Prom
     audioUrl: mock.audioUrl,
     ...(versionId ? { versionId } : {})
   };
+}
+
+export async function requestUpdateSong(songId: string, update: SongUpdatePayload): Promise<SongActionResult> {
+  if (!functionsBaseUrl) {
+    return { ok: false, reason: 'network', message: 'Functions base URL no configurada.' };
+  }
+
+  try {
+    const headers = await buildSongHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+
+    const response = await fetch(`${functionsBaseUrl}/songs/${songId}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(update)
+    });
+
+    if (!response.ok) {
+      return { ok: false, reason: mapSongStatusToReason(response.status) };
+    }
+
+    const payload = (await response.json()) as {
+      status?: string;
+      currentVersionId?: string;
+      updatedVersionIds?: string[];
+      deletedVersionIds?: string[];
+      createdVersionIds?: string[];
+    };
+
+    return {
+      ok: true,
+      data: {
+        status: payload.status,
+        currentVersionId: payload.currentVersionId,
+        updatedVersionIds: Array.isArray(payload.updatedVersionIds) ? payload.updatedVersionIds : [],
+        deletedVersionIds: Array.isArray(payload.deletedVersionIds) ? payload.deletedVersionIds : [],
+        createdVersionIds: Array.isArray(payload.createdVersionIds) ? payload.createdVersionIds : []
+      }
+    };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
+}
+
+export async function requestDeleteSong(songId: string): Promise<SongActionResult> {
+  if (!functionsBaseUrl) {
+    return { ok: false, reason: 'network', message: 'Functions base URL no configurada.' };
+  }
+
+  try {
+    const headers = await buildSongHeaders({ Accept: 'application/json' });
+    const response = await fetch(`${functionsBaseUrl}/songs/${songId}`, {
+      method: 'DELETE',
+      headers
+    });
+
+    if (!response.ok) {
+      return { ok: false, reason: mapSongStatusToReason(response.status) };
+    }
+
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
 }

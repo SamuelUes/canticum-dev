@@ -30,10 +30,19 @@ export function FeaturedSection({ title, songs, loading = false }: FeaturedSecti
     <section className="home-section layout-h-margin">
       <h2>{title}</h2>
       <div className="featured-grid">
-        {songs.map((song) => (
+        {songs.map((song, index) => (
           <Link key={song.id} href={`/songs/${song.id}`} className="song-card">
             {song.imageUrl ? (
-              <Image src={song.imageUrl} alt={song.title} className="song-thumb-image" width={300} height={92} />
+              <div className="song-thumb-image-wrap">
+                <Image
+                  src={song.imageUrl}
+                  alt={song.title}
+                  fill
+                  className="song-thumb-image"
+                  sizes="(max-width: 768px) 100vw, (max-width: 1200px) 24vw, 300px"
+                  priority={index === 0}
+                />
+              </div>
             ) : (
               <div className="song-thumb" />
             )}

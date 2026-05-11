@@ -42,6 +42,7 @@ export interface SearchEntityBase {
 export interface SearchSongItem extends SearchEntityBase {
   kind: 'song';
   type: 'song';
+  status?: string;
   isPremium: boolean;
   popularity?: number;
   totalViews?: number;
@@ -65,6 +66,7 @@ export interface SearchAlbumItem extends SearchEntityBase {
 export interface SearchrepertoireItem extends SearchEntityBase {
   kind: 'repertoire';
   type: 'repertoire';
+  status?: string;
   dateLabel: string;
   songsCount: number;
   sheetsCount: number;

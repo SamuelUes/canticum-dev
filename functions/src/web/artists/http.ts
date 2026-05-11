@@ -2,7 +2,7 @@ import * as functions from 'firebase-functions/v1';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { getBodyRecord, getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
-import { createArtist, findArtistByNameSlug, getArtistById, searchArtists } from '../../shared/cloudSql/artists';
+import { createArtist, findArtistByNameSlug, getArtistById, getArtistProfileBundle, searchArtists } from '../../shared/cloudSql/artists';
 import { listSongsByArtistId } from '../../shared/cloudSql/songs';
 
 interface ArtistSongRow {
@@ -14,6 +14,8 @@ interface ArtistSongRow {
   hasLyrics: boolean;
   hasSheet: boolean;
   isVerified?: boolean;
+  moderationState?: string;
+  reviewStatus?: 'reviewed' | 'pending';
 }
 
 interface ArtistDiscographyItem {
@@ -23,6 +25,8 @@ interface ArtistDiscographyItem {
   coverUrl?: string;
   songId?: string;
   albumId?: string;
+  moderationState?: string;
+  reviewStatus?: 'reviewed' | 'pending';
 }
 
 interface SuggestedArtistItem {
@@ -215,10 +219,61 @@ export const artists = functions.https.onRequest(async (req, res) => {
   const artistId = segments[0];
   const subpath = segments[1];
   const db = getAppFirestore();
+  const authContext = await getOptionalAuthContext(req);
+  const viewerFirebaseUid = authContext?.uid ?? null;
 
   // Sub-endpoints: keep the base artist response lean and cacheable.
   if (subpath) {
-    return handleArtistSubEndpoint(artistId, subpath, db, res);
+    return handleArtistSubEndpoint(artistId, subpath, db, res, viewerFirebaseUid);
+  }
+
+  try {
+    const sqlProfile = await getArtistProfileBundle(artistId, viewerFirebaseUid);
+    if (sqlProfile) {
+      const songsCount = Number.isFinite(Number(sqlProfile.artist.songsCount))
+        ? Math.max(Number(sqlProfile.artist.songsCount), sqlProfile.songs.length)
+        : sqlProfile.songs.length;
+
+      const totalViews = Number.isFinite(Number(sqlProfile.artist.totalViews))
+        ? Number(sqlProfile.artist.totalViews)
+        : sqlProfile.songs.reduce((acc, song) => acc + song.views, 0);
+
+      const likeCount = Number.isFinite(Number(sqlProfile.artist.likeCount))
+        ? Number(sqlProfile.artist.likeCount)
+        : 0;
+
+      const popularity = Number.isFinite(Number(sqlProfile.artist.popularity))
+        ? Math.max(0, Math.min(100, Math.round(Number(sqlProfile.artist.popularity))))
+        : computePopularity(totalViews);
+
+      const ministryType = sqlProfile.artist.type || 'General';
+      const genres = Array.isArray(sqlProfile.artist.genres) && sqlProfile.artist.genres.length > 0
+        ? sqlProfile.artist.genres
+        : [ministryType];
+
+      sendJson(res, 200, {
+        type: 'artist',
+        id: String(sqlProfile.artist.id),
+        name: sqlProfile.artist.name,
+        bio: sqlProfile.artist.bio ?? '',
+        ministryType,
+        images: sqlProfile.artist.images ?? [],
+        imageUrl: sqlProfile.artist.imageUrl ?? undefined,
+        songsCount,
+        followers: { total: likeCount },
+        likeCount,
+        totalViews,
+        popularity,
+        genres,
+        discography: sqlProfile.discography,
+        suggestedArtists: sqlProfile.suggestedArtists,
+        highlightedSongs: sqlProfile.highlightedSongIds,
+        songs: sqlProfile.songs
+      });
+      return;
+    }
+  } catch (error) {
+    console.error('Cloud SQL artist bundle lookup failed:', error);
   }
 
   const [artistSnap, songsSnap] = await Promise.all([
@@ -350,7 +405,8 @@ async function handleArtistSubEndpoint(
   artistId: string,
   subpath: string,
   db: FirebaseFirestore.Firestore,
-  res: functions.Response
+  res: functions.Response,
+  viewerFirebaseUid: string | null
 ): Promise<void> {
   // ── /songs sub-endpoint resolves from Cloud SQL by numeric artist id ──
   // (allows listing songs for adding versions, regardless of Firestore artist doc).
@@ -361,7 +417,7 @@ async function handleArtistSubEndpoint(
       return;
     }
     try {
-      const sqlRows = await listSongsByArtistId(numericArtistId, 100);
+      const sqlRows = await listSongsByArtistId(numericArtistId, 100, viewerFirebaseUid);
       // Enrich with Firestore song IDs (lookup by sqlSongId).
       const enriched = await Promise.all(sqlRows.map(async (row) => {
         let firestoreId: string | null = null;
@@ -378,6 +434,7 @@ async function handleArtistSubEndpoint(
           year: row.year,
           liturgicalUse: row.liturgicalUse,
           status: row.status,
+          reviewStatus: row.reviewStatus,
           ownerFirebaseUid: row.ownerFirebaseUid
         };
       }));

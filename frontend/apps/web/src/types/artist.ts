@@ -7,6 +7,8 @@ export interface ArtistSongRow {
   hasLyrics: boolean;
   hasSheet: boolean;
   isVerified?: boolean;
+  moderationState?: string;
+  reviewStatus?: 'reviewed' | 'pending';
 }
 
 export interface ArtistrepertoireRef {
@@ -23,6 +25,8 @@ export interface ArtistDiscographyItem {
   coverUrl?: string;
   songId?: string;
   albumId?: string;
+  moderationState?: string;
+  reviewStatus?: 'reviewed' | 'pending';
 }
 
 export interface SuggestedArtistItem {

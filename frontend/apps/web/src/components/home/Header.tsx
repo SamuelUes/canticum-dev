@@ -36,6 +36,14 @@ export function Header({ text }: HeaderProps) {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [isProfileMenuOpen]);
 
+  useEffect(() => {
+    router.prefetch('/search');
+    router.prefetch('/repertoires');
+    router.prefetch('/profile');
+    router.prefetch('/account');
+    router.prefetch('/auth');
+  }, [router]);
+
   const handleSignOut = async () => {
     setIsProfileMenuOpen(false);
     await signOut();
@@ -53,7 +61,7 @@ export function Header({ text }: HeaderProps) {
     <header className="topbar layout-h-margin">
       <div className="brand-box">
         <Link href="/" aria-label="Ir al inicio">
-          <Image src="/assets/icon/ofcanticumlogo.png" alt={text.brand} className="brand-logo-image" width={88} height={88} />
+          <Image src="/assets/icon/ofcanticumlogo.png" alt={text.brand} className="brand-logo-image" width={88} height={88} priority />
         </Link>
       </div>
 
@@ -129,10 +137,26 @@ export function Header({ text }: HeaderProps) {
 
             {isProfileMenuOpen ? (
               <div className="welcome-dropdown" role="menu" aria-label="Menú de usuario">
-                <button type="button" role="menuitem" className="welcome-dropdown-item">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="welcome-dropdown-item"
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    router.push('/profile');
+                  }}
+                >
                   Ajustes
                 </button>
-                <button type="button" role="menuitem" className="welcome-dropdown-item">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="welcome-dropdown-item"
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    router.push('/account');
+                  }}
+                >
                   Cuenta
                 </button>
                 <button

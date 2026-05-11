@@ -3,7 +3,7 @@ import { HomeFooter } from '../../../src/components/home/Footer';
 import { Header } from '../../../src/components/home/Header';
 import { ArtistProfileWorkspace } from '../../../src/components/artist/ArtistProfileWorkspace';
 import { homeMockData } from '../../../src/features/home/mockData';
-import { getArtistDetailById, getPublicrepertoiresForArtist } from '../../../src/features/artist/repository';
+import { getArtistDetailByRouteLookup, getPublicrepertoiresForArtist } from '../../../src/features/artist/repository';
 import { getHomeText } from '../../../src/i18n/home';
 import type { Locale } from '../../../src/types/home';
 
@@ -22,13 +22,12 @@ export default async function ArtistPage({ params, searchParams }: ArtistPagePro
 
   const rawId = searchParams?.id;
   const explicitId = Array.isArray(rawId) ? rawId[0] : rawId;
-  const lookupId = explicitId && explicitId.trim().length > 0 ? explicitId.trim() : params.artistId;
+  const lookupId = explicitId && explicitId.trim().length > 0 ? explicitId.trim() : undefined;
 
-  let artist = await getArtistDetailById(lookupId);
-
-  if (!artist && lookupId !== params.artistId) {
-    artist = await getArtistDetailById(params.artistId);
-  }
+  const artist = await getArtistDetailByRouteLookup({
+    artistId: lookupId,
+    artistSlug: params.artistId
+  });
 
   if (!artist) {
     notFound();

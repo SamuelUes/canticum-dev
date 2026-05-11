@@ -97,6 +97,12 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     return song.instruments.find((instrument) => instrument.id === selectedInstrumentId) ?? song.instruments[0];
   }, [selectedInstrumentId, song.instruments]);
 
+  const resolveCoverUrl = (value?: string | null) => (typeof value === 'string' && value.trim().length > 0 ? value.trim() : '');
+  const coverImageUrl =
+    resolveCoverUrl(selectedVersion?.coverImageUrl) ||
+    resolveCoverUrl(song.coverImageUrl) ||
+    resolveCoverUrl(song.images?.[0]?.url);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -376,95 +382,118 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
       <article className="song-main-card">
         <header className="song-headline">
-          <div className="song-headline-main">
-            <h1>{song.title}</h1>
-            <strong>
-              <Link
-                href={getArtistProfileHref({
-                  artistId: selectedVersion?.artistId ?? song.artists?.[0]?.id,
-                  artistName: selectedVersion?.artistName ?? song.artistName
-                })}
-              >
-                {selectedVersion?.artistName ?? song.artistName}
-              </Link>
-            </strong>
+          <div className="song-cover-card" aria-label="Portada de la canción">
+            <div className="song-cover-frame">
+              {coverImageUrl ? (
+                <Image
+                  src={coverImageUrl}
+                  alt={`Portada de ${song.title}`}
+                  fill
+                  sizes="(max-width: 768px) 220px, 184px"
+                  className="song-cover-image"
+                  priority
+                />
+              ) : (
+                <div className="song-cover-placeholder">
+                  <span>Aquí el cover</span>
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="song-access-cta-stack">
-            {hasAdvancedAccess ? (
-              <span className="song-premium-badge is-active" title="Tienes acceso Premium">
-                ✓ Premium
-              </span>
-            ) : (
-              <button type="button" className="song-premium-badge" onClick={openPremiumPlans}>
-                Premium
-              </button>
-            )}
+          <div className="song-headline-body">
+            <div className="song-headline-row">
+              <div className="song-headline-main">
+                <h1>{song.title}</h1>
+                <strong>
+                  <Link
+                    href={getArtistProfileHref({
+                      artistId: selectedVersion?.artistId ?? song.artists?.[0]?.id,
+                      artistName: selectedVersion?.artistName ?? song.artistName
+                    })}
+                  >
+                    {selectedVersion?.artistName ?? song.artistName}
+                  </Link>
+                </strong>
+              </div>
 
-            {!hasAdvancedAccess && userAccess.canPurchaseIndividually ? (
-              <button type="button" className="song-premium-badge is-buy" onClick={onStartSongPurchase} disabled={isProcessingPurchase}>
-                {isProcessingPurchase
-                  ? 'Procesando...'
-                  : `Comprar esta canción${typeof userAccess.individualPriceUsd === 'number' ? ` ($${userAccess.individualPriceUsd.toFixed(2)})` : ''}`}
+              <div className="song-access-cta-stack">
+                {hasAdvancedAccess ? (
+                  <span className="song-premium-badge is-active" title="Tienes acceso Premium">
+                    ✓ Premium
+                  </span>
+                ) : (
+                  <button type="button" className="song-premium-badge" onClick={openPremiumPlans}>
+                    Premium
+                  </button>
+                )}
+
+                {!hasAdvancedAccess && userAccess.canPurchaseIndividually ? (
+                  <button type="button" className="song-premium-badge is-buy" onClick={onStartSongPurchase} disabled={isProcessingPurchase}>
+                    {isProcessingPurchase
+                      ? 'Procesando...'
+                      : `Comprar esta canción${typeof userAccess.individualPriceUsd === 'number' ? ` ($${userAccess.individualPriceUsd.toFixed(2)})` : ''}`}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="song-action-row">
+              <button type="button" className="song-scroll-button" onClick={() => setIsAutoScrolling((prev) => !prev)}>
+                <Image src="/assets/utils/arrow-down/arrowdown2x.png" alt="Desplazar" width={16} height={16} />
+                {isAutoScrolling ? 'Detener' : 'Desplazar'}
               </button>
-            ) : null}
+
+              <div className="song-icon-rail" aria-label="acciones rápidas">
+                <button
+                  type="button"
+                  className={isFavorite ? 'song-icon-action is-active' : 'song-icon-action'}
+                  aria-label="Marcar favorito"
+                  aria-pressed={isFavorite}
+                  onClick={onToggleFavorite}
+                >
+                  <Image src="/assets/utils/heart/heart2x.png" alt="Favorito" width={18} height={18} />
+                </button>
+
+                <button
+                  type="button"
+                  className={[
+                    'song-icon-action',
+                    'song-audio-action',
+                    isAudioPlaying ? 'is-playing' : '',
+                    isAudioTriggering ? 'is-triggered' : ''
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  aria-label={isAudioPlaying ? 'Pausar audio' : 'Reproducir audio'}
+                  aria-pressed={isAudioPlaying}
+                  onClick={onPlayReferenceAudio}
+                >
+                  <Image src="/assets/utils/volumeup/volumeup2x.png" alt="Audio" width={28} height={18} />
+                  <span className="song-audio-bars" aria-hidden>
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </button>
+
+                {activeAudioSrc ? (
+                  <div className="song-inline-audio-player">
+                    <AudioPlayer
+                      key={`${activeAudioSrc}-${audioAutoplayToken}`}
+                      src={activeAudioSrc}
+                      title={song.title}
+                      autoPlay
+                      showMainButton={false}
+                      onEnded={() => setIsAudioPlaying(false)}
+                      onPlayingChange={setIsAudioPlaying}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </header>
-
-        <div className="song-action-row">
-          <button type="button" className="song-scroll-button" onClick={() => setIsAutoScrolling((prev) => !prev)}>
-            <Image src="/assets/utils/arrow-down/arrowdown2x.png" alt="Desplazar" width={16} height={16} />
-            {isAutoScrolling ? 'Detener' : 'Desplazar'}
-          </button>
-
-          <div className="song-icon-rail" aria-label="acciones rápidas">
-            <button
-              type="button"
-              className={isFavorite ? 'song-icon-action is-active' : 'song-icon-action'}
-              aria-label="Marcar favorito"
-              aria-pressed={isFavorite}
-              onClick={onToggleFavorite}
-            >
-              <Image src="/assets/utils/heart/heart2x.png" alt="Favorito" width={18} height={18} />
-            </button>
-
-            <button
-              type="button"
-              className={[
-                'song-icon-action',
-                'song-audio-action',
-                isAudioPlaying ? 'is-playing' : '',
-                isAudioTriggering ? 'is-triggered' : ''
-              ]
-                .filter(Boolean)
-                .join(' ')}
-              aria-label={isAudioPlaying ? 'Pausar audio' : 'Reproducir audio'}
-              aria-pressed={isAudioPlaying}
-              onClick={onPlayReferenceAudio}
-            >
-              <Image src="/assets/utils/volumeup/volumeup2x.png" alt="Audio" width={28} height={18} />
-              <span className="song-audio-bars" aria-hidden>
-                <span />
-                <span />
-                <span />
-              </span>
-            </button>
-
-            {activeAudioSrc ? (
-              <div className="song-inline-audio-player">
-                <AudioPlayer
-                  key={`${activeAudioSrc}-${audioAutoplayToken}`}
-                  src={activeAudioSrc}
-                  title={song.title}
-                  autoPlay
-                  showMainButton={false}
-                  onEnded={() => setIsAudioPlaying(false)}
-                  onPlayingChange={setIsAudioPlaying}
-                />
-              </div>
-            ) : null}
-          </div>
-        </div>
 
         {!hasAdvancedAccess && userAccess.isAuthenticated ? (
           <div className="song-paywall-box" aria-label="acceso premium">

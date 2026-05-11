@@ -40,7 +40,62 @@ function normalizeImages(raw: Record<string, unknown>): ArtistImage[] {
   return fallback ? [{ url: fallback }] : [];
 }
 
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+const functionsBaseUrl = [
+  process.env.GCP_FUNCTIONS_BASE_URL,
+  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
+]
+  .map((value) => (typeof value === 'string' ? value.trim() : ''))
+  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
+
+async function getServerSessionToken(): Promise<string | null> {
+  if (typeof window !== 'undefined') {
+    return null;
+  }
+
+  try {
+    const { cookies } = await import('next/headers');
+    return cookies().get('__session')?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getAuthToken(): Promise<string | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const { auth } = await import('../../services/firebase');
+    if (!auth?.currentUser) {
+      return null;
+    }
+
+    return auth.currentUser.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
+async function buildArtistHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
+  const clientToken = await getAuthToken();
+  if (clientToken) {
+    return {
+      ...baseHeaders,
+      Authorization: `Bearer ${clientToken}`
+    };
+  }
+
+  const serverToken = await getServerSessionToken();
+  if (serverToken) {
+    return {
+      ...baseHeaders,
+      Authorization: `Bearer ${serverToken}`
+    };
+  }
+
+  return baseHeaders;
+}
 
 function normalizeSongRow(raw: Record<string, unknown>): ArtistSongRow {
   return {
@@ -51,7 +106,9 @@ function normalizeSongRow(raw: Record<string, unknown>): ArtistSongRow {
     tone: String(raw.tone ?? ''),
     hasLyrics: Boolean(raw.hasLyrics),
     hasSheet: Boolean(raw.hasSheet),
-    isVerified: Boolean(raw.isVerified)
+    isVerified: Boolean(raw.isVerified),
+    moderationState: typeof raw.moderationState === 'string' ? raw.moderationState : undefined,
+    reviewStatus: raw.reviewStatus === 'reviewed' ? 'reviewed' : 'pending'
   };
 }
 
@@ -65,7 +122,9 @@ function normalizeDiscographyItem(raw: Record<string, unknown>, index: number): 
     year: Number.isFinite(year) ? year : currentYear,
     coverUrl: typeof raw.coverUrl === 'string' && raw.coverUrl ? raw.coverUrl : undefined,
     songId: typeof raw.songId === 'string' && raw.songId ? raw.songId : undefined,
-    albumId: typeof raw.albumId === 'string' && raw.albumId ? raw.albumId : undefined
+    albumId: typeof raw.albumId === 'string' && raw.albumId ? raw.albumId : undefined,
+    moderationState: typeof raw.moderationState === 'string' ? raw.moderationState : undefined,
+    reviewStatus: raw.reviewStatus === 'reviewed' ? 'reviewed' : 'pending'
   };
 }
 
@@ -183,8 +242,10 @@ async function getArtistDetailFromFunctions(artistId: string): Promise<ArtistDet
   }
 
   try {
-    const response = await fetch(`${functionsBaseUrl}/artists/${artistId}`, {
+    const headers = await buildArtistHeaders({ 'Cache-Control': 'no-store' });
+    const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(artistId)}`, {
       method: 'GET',
+      headers,
       cache: 'no-store'
     });
 
@@ -209,6 +270,29 @@ export async function getArtistDetailById(artistId: string): Promise<ArtistDetai
   return artistMockById[artistId] ?? null;
 }
 
+interface ArtistRouteLookupInput {
+  artistId?: string;
+  artistSlug?: string;
+}
+
+export async function getArtistDetailByRouteLookup({ artistId, artistSlug }: ArtistRouteLookupInput): Promise<ArtistDetail | null> {
+  const candidates = Array.from(new Set(
+    [artistId, artistSlug]
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+  ));
+
+  for (const candidate of candidates) {
+    const detail = await getArtistDetailById(candidate);
+    if (detail) {
+      return detail;
+    }
+  }
+
+  return null;
+}
+
 /** Lightweight row returned by GET /artists/:id/songs. */
 export interface ArtistSongLookup {
   sqlSongId: number;
@@ -217,6 +301,7 @@ export interface ArtistSongLookup {
   year: number | null;
   liturgicalUse: string | null;
   status: string | null;
+  reviewStatus: 'reviewed' | 'pending';
   ownerFirebaseUid: string | null;
 }
 
@@ -235,8 +320,10 @@ export async function fetchSongsByArtist(artistId: string | number): Promise<Art
   }
 
   try {
+    const headers = await buildArtistHeaders({ 'Cache-Control': 'no-store' });
     const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(id)}/songs`, {
       method: 'GET',
+      headers,
       cache: 'no-store'
     });
     if (!response.ok) {
@@ -255,6 +342,7 @@ export async function fetchSongsByArtist(artistId: string | number): Promise<Art
         year: typeof row.year === 'number' ? row.year : null,
         liturgicalUse: typeof row.liturgicalUse === 'string' ? row.liturgicalUse : null,
         status: typeof row.status === 'string' ? row.status : null,
+        reviewStatus: row.reviewStatus === 'reviewed' ? 'reviewed' : 'pending',
         ownerFirebaseUid: typeof row.ownerFirebaseUid === 'string' ? row.ownerFirebaseUid : null
       }))
       .filter((row) => Number.isFinite(row.sqlSongId) && row.sqlSongId > 0);

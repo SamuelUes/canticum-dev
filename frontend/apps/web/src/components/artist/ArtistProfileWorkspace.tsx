@@ -3,7 +3,22 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
+import { getArtistProfileHref } from '../../features/artist/routing';
 import type { ArtistDetail, ArtistImage, ArtistrepertoireRef, ArtistSongRow } from '../../types/artist';
+
+function getModerationStateLabel(state?: string): string {
+  const normalized = (state ?? '').trim().toUpperCase();
+  if (normalized === 'APPROVED') return 'Aprobada';
+  if (normalized === 'PUBLISHED') return 'Publicada';
+  if (normalized === 'DRAFT') return 'Borrador';
+  if (normalized === 'IN_REVIEW') return 'En revisión';
+  if (normalized === 'REJECTED') return 'Rechazada';
+  return 'Pendiente';
+}
+
+function getReviewLabel(reviewStatus?: 'reviewed' | 'pending'): string {
+  return reviewStatus === 'reviewed' ? 'Revisada' : 'No revisada';
+}
 
 function pickImage(images: ArtistImage[] | undefined, targetSize: number, fallback?: string): string | undefined {
   if (!images || images.length === 0) {
@@ -146,6 +161,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
               <span className="artist-col-num" />
               <span className="artist-col-thumb" />
               <span className="artist-col-song">Canción</span>
+              <span className="artist-col-status">Estado</span>
               <span className="artist-col-views">Visualizaciones</span>
               <span className="artist-col-tone">Tono</span>
             </div>
@@ -168,6 +184,9 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
                     {song.isVerified ? <span className="artist-verified-badge" title="Verificado">✔</span> : null}
                   </Link>
 
+                  <span className={`artist-col-status artist-status-chip ${song.reviewStatus === 'reviewed' ? 'is-reviewed' : 'is-pending'}`}>
+                    {getModerationStateLabel(song.moderationState)} · {getReviewLabel(song.reviewStatus)}
+                  </span>
                   <span className="artist-col-views">{song.views.toLocaleString()}</span>
                   <span className="artist-col-tone">{song.tone}</span>
                 </li>
@@ -234,6 +253,9 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
                     )}
                     <strong>{album.title}</strong>
                     <small>{album.year} • Álbum</small>
+                    <small className={`artist-status-chip ${album.reviewStatus === 'reviewed' ? 'is-reviewed' : 'is-pending'}`}>
+                      {getModerationStateLabel(album.moderationState)} · {getReviewLabel(album.reviewStatus)}
+                    </small>
                   </Link>
                 ))}
               </div>
@@ -246,7 +268,12 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
 
               <div className="artist-related-row">
                 {relatedArtists.map((relatedArtist) => (
-                  <button key={relatedArtist.id} type="button" className="artist-related-item" aria-label={relatedArtist.name}>
+                  <Link
+                    key={relatedArtist.id}
+                    href={getArtistProfileHref({ artistId: relatedArtist.id, artistName: relatedArtist.name })}
+                    className="artist-related-item"
+                    aria-label={relatedArtist.name}
+                  >
                     {relatedArtist.imageUrl ? (
                       <Image src={relatedArtist.imageUrl} alt={relatedArtist.name} width={108} height={108} className="artist-related-avatar artist-related-avatar--img" unoptimized={relatedArtist.imageUrl.startsWith('http')} />
                     ) : (
@@ -255,7 +282,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
                       </div>
                     )}
                     <span>{relatedArtist.name}</span>
-                  </button>
+                  </Link>
                 ))}
               </div>
             </section>
@@ -263,7 +290,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
             <section className="artist-metrics-band" aria-label="estadísticas del artista">
               <article className="artist-metric artist-metric--fans">
                 <strong>{fanCount.toLocaleString()}</strong>
-                <small>fans estimados</small>
+                <small>Fans estimados</small>
               </article>
               <article className="artist-metric">
                 <strong>{totalViews.toLocaleString()}</strong>

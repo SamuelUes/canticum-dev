@@ -26,6 +26,7 @@ interface RepertoireSummary {
   isPublic?: boolean;
   liturgicalType?: string;
   status?: string;
+  coverImageUrl?: string;
   songs: Song[];
 }
 
@@ -197,6 +198,11 @@ export function RepertoireDetailClientFallback({ repertoireId }: RepertoireDetai
         isPublic: Boolean(raw.isPublic),
         liturgicalType: String(raw.liturgicalType ?? 'General'),
         status: String(raw.status ?? 'Borrador'),
+        coverImageUrl: typeof raw.coverImageUrl === 'string' && raw.coverImageUrl.trim().length > 0
+          ? raw.coverImageUrl
+          : Array.isArray(raw.images)
+            ? String(((raw.images[0] ?? {}) as { url?: unknown }).url ?? '')
+            : undefined,
         songs
       });
       setStatus('ready');
@@ -250,24 +256,44 @@ export function RepertoireDetailClientFallback({ repertoireId }: RepertoireDetai
           </Link>
         </div>
 
-        <div className="repertoire-detail-meta-row">
-          <span className="repertoire-detail-meta-label">Tipo</span>
-          <strong>{repertoire.liturgicalType}</strong>
+        <div className="repertoire-detail-meta-top">
+          <div className="repertoire-detail-meta-main">
+            <div className="repertoire-detail-meta-row">
+              <span className="repertoire-detail-meta-label">Tipo</span>
+              <strong>{repertoire.liturgicalType}</strong>
+            </div>
+
+            {repertoire.description ? (
+              <div className="repertoire-detail-meta-row">
+                <span className="repertoire-detail-meta-label">Descripción</span>
+                <p>{repertoire.description}</p>
+              </div>
+            ) : null}
+
+            {repertoire.createdBy ? (
+              <div className="repertoire-detail-meta-row">
+                <span className="repertoire-detail-meta-label">Creado por</span>
+                <span>{repertoire.createdBy}</span>
+              </div>
+            ) : null}
+          </div>
+
+          {repertoire.coverImageUrl ? (
+            <div className="repertoires-card-image-wrap repertoire-detail-cover-wrap">
+              <Image
+                src={repertoire.coverImageUrl}
+                alt={`Portada de ${repertoire.title}`}
+                fill
+                className="repertoires-card-image"
+                sizes="(max-width: 900px) 100vw, 320px"
+              />
+            </div>
+          ) : (
+            <div className="repertoires-card-image-wrap repertoire-detail-cover-wrap is-empty" aria-hidden>
+              <span>Sin imagen</span>
+            </div>
+          )}
         </div>
-
-        {repertoire.description ? (
-          <div className="repertoire-detail-meta-row">
-            <span className="repertoire-detail-meta-label">Descripción</span>
-            <p>{repertoire.description}</p>
-          </div>
-        ) : null}
-
-        {repertoire.createdBy ? (
-          <div className="repertoire-detail-meta-row">
-            <span className="repertoire-detail-meta-label">Creado por</span>
-            <span>{repertoire.createdBy}</span>
-          </div>
-        ) : null}
 
         <div className="repertoire-detail-meta-grid">
           <div className="repertoire-detail-meta-pill">

@@ -239,6 +239,21 @@ CREATE TABLE album_songs (
   FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
 );
 
+CREATE TABLE featured_songs (
+  snapshot_week DATE NOT NULL,
+  rank_position INT NOT NULL,
+  song_id INT NOT NULL,
+  score NUMERIC(10,4) NOT NULL,
+  popularity SMALLINT NOT NULL,
+  total_views INT NOT NULL,
+  like_count INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (snapshot_week, rank_position),
+  UNIQUE (snapshot_week, song_id),
+  FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+);
+
 -- ================================
 -- INSTRUMENTS
 -- ================================
@@ -319,6 +334,7 @@ CREATE TABLE repertoires (
   user_id INT NOT NULL,
   title VARCHAR(200) NOT NULL,
   type VARCHAR(80),
+  cover_url TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -349,6 +365,262 @@ CREATE TABLE favorites (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
 );
+
+CREATE OR REPLACE FUNCTION clamp_metric_score(raw_value NUMERIC)
+RETURNS SMALLINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  safe_value NUMERIC;
+BEGIN
+  safe_value := COALESCE(raw_value, 0);
+  IF safe_value < 0 THEN
+    safe_value := 0;
+  ELSIF safe_value > 100 THEN
+    safe_value := 100;
+  END IF;
+
+  RETURN ROUND(safe_value)::SMALLINT;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION compute_song_popularity(total_views_value INT, like_count_value INT)
+RETURNS SMALLINT
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT clamp_metric_score(
+    LOG(10, GREATEST(COALESCE(total_views_value, 0), 0) + 1) * 20
+    + LOG(10, GREATEST(COALESCE(like_count_value, 0), 0) + 1) * 12
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION compute_artist_popularity(total_views_value INT, like_count_value INT)
+RETURNS SMALLINT
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT clamp_metric_score(
+    LOG(10, GREATEST(COALESCE(total_views_value, 0), 0) + 1) * 20
+    + LOG(10, GREATEST(COALESCE(like_count_value, 0), 0) + 1) * 10
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION sync_artist_metrics_by_id(target_artist_id INT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  artist_total_views INT := 0;
+  artist_like_count INT := 0;
+BEGIN
+  IF target_artist_id IS NULL OR target_artist_id <= 0 THEN
+    RETURN;
+  END IF;
+
+  SELECT
+    COALESCE(SUM(total_views), 0)::INT,
+    COALESCE(SUM(like_count), 0)::INT
+  INTO artist_total_views, artist_like_count
+  FROM songs
+  WHERE artist_id = target_artist_id;
+
+  UPDATE artists
+  SET
+    total_views = artist_total_views,
+    like_count = artist_like_count,
+    popularity = compute_artist_popularity(artist_total_views, artist_like_count)
+  WHERE id = target_artist_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION sync_song_metrics_by_id(target_song_id INT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  song_artist_id INT;
+  song_total_views INT := 0;
+  song_like_count INT := 0;
+BEGIN
+  IF target_song_id IS NULL OR target_song_id <= 0 THEN
+    RETURN;
+  END IF;
+
+  SELECT artist_id, COALESCE(total_views, 0)::INT
+  INTO song_artist_id, song_total_views
+  FROM songs
+  WHERE id = target_song_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  SELECT COUNT(*)::INT
+  INTO song_like_count
+  FROM favorites
+  WHERE song_id = target_song_id;
+
+  UPDATE songs
+  SET
+    like_count = song_like_count,
+    popularity = compute_song_popularity(song_total_views, song_like_count)
+  WHERE id = target_song_id;
+
+  PERFORM sync_artist_metrics_by_id(song_artist_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_songs_prepare_metrics()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.total_views := GREATEST(COALESCE(NEW.total_views, 0), 0);
+  NEW.like_count := GREATEST(COALESCE(NEW.like_count, 0), 0);
+  NEW.popularity := compute_song_popularity(NEW.total_views, NEW.like_count);
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER songs_prepare_metrics_before_write
+BEFORE INSERT OR UPDATE OF total_views, like_count
+ON songs
+FOR EACH ROW
+EXECUTE FUNCTION trg_songs_prepare_metrics();
+
+CREATE OR REPLACE FUNCTION trg_songs_sync_artist_metrics()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM sync_artist_metrics_by_id(NEW.artist_id);
+
+  IF TG_OP = 'UPDATE' AND OLD.artist_id IS DISTINCT FROM NEW.artist_id THEN
+    PERFORM sync_artist_metrics_by_id(OLD.artist_id);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER songs_sync_artist_metrics_after_write
+AFTER INSERT OR UPDATE OF total_views, like_count, artist_id
+ON songs
+FOR EACH ROW
+EXECUTE FUNCTION trg_songs_sync_artist_metrics();
+
+CREATE OR REPLACE FUNCTION trg_favorites_sync_song_metrics()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    PERFORM sync_song_metrics_by_id(NEW.song_id);
+  ELSIF TG_OP = 'DELETE' THEN
+    PERFORM sync_song_metrics_by_id(OLD.song_id);
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+CREATE TRIGGER favorites_sync_song_metrics_after_write
+AFTER INSERT OR DELETE
+ON favorites
+FOR EACH ROW
+EXECUTE FUNCTION trg_favorites_sync_song_metrics();
+
+CREATE OR REPLACE FUNCTION refresh_featured_songs_snapshot(
+  snapshot_limit INT DEFAULT 50,
+  target_week DATE DEFAULT date_trunc('week', CURRENT_DATE)::DATE
+)
+RETURNS TABLE (
+  snapshotWeek DATE,
+  rankPosition INT,
+  songId INT,
+  score NUMERIC(10,4),
+  popularity SMALLINT,
+  totalViews INT,
+  likeCount INT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  safe_limit INT;
+BEGIN
+  safe_limit := GREATEST(1, LEAST(COALESCE(snapshot_limit, 50), 200));
+
+  DELETE FROM featured_songs
+  WHERE snapshot_week = target_week;
+
+  INSERT INTO featured_songs (
+    snapshot_week,
+    rank_position,
+    song_id,
+    score,
+    popularity,
+    total_views,
+    like_count,
+    updated_at
+  )
+  SELECT
+    target_week,
+    ROW_NUMBER() OVER (
+      ORDER BY
+        ranked.score DESC,
+        ranked.popularity DESC,
+        ranked.like_count DESC,
+        ranked.total_views DESC,
+        ranked.song_id DESC
+    )::INT AS rank_position,
+    ranked.song_id,
+    ranked.score,
+    ranked.popularity,
+    ranked.total_views,
+    ranked.like_count,
+    CURRENT_TIMESTAMP
+  FROM (
+    SELECT
+      s.id AS song_id,
+      COALESCE(s.popularity, 0)::SMALLINT AS popularity,
+      COALESCE(s.total_views, 0)::INT AS total_views,
+      COALESCE(s.like_count, 0)::INT AS like_count,
+      ROUND(
+        (
+          COALESCE(s.popularity, 0)::NUMERIC * 0.60
+          + LOG(10, COALESCE(s.total_views, 0) + 1)::NUMERIC * 25
+          + LOG(10, COALESCE(s.like_count, 0) + 1)::NUMERIC * 15
+        ),
+        4
+      ) AS score
+    FROM songs s
+    LEFT JOIN song_states ss ON ss.id = s.state_id
+    WHERE UPPER(COALESCE(ss.code, '')) = 'PUBLISHED'
+  ) ranked
+  ORDER BY
+    ranked.score DESC,
+    ranked.popularity DESC,
+    ranked.like_count DESC,
+    ranked.total_views DESC,
+    ranked.song_id DESC
+  LIMIT safe_limit;
+
+  RETURN QUERY
+  SELECT
+    fs.snapshot_week AS "snapshotWeek",
+    fs.rank_position AS "rankPosition",
+    fs.song_id AS "songId",
+    fs.score,
+    fs.popularity,
+    fs.total_views AS "totalViews",
+    fs.like_count AS "likeCount"
+  FROM featured_songs fs
+  WHERE fs.snapshot_week = target_week
+  ORDER BY fs.rank_position ASC;
+END;
+$$;
 
 ALTER TABLE songs
   ADD CONSTRAINT fk_songs_artist FOREIGN KEY (artist_id) REFERENCES artists(id);
@@ -397,6 +669,8 @@ CREATE INDEX idx_artist_likes_user ON artist_likes(user_id);
 
 CREATE INDEX idx_favorites_user ON favorites(user_id);
 CREATE INDEX idx_favorites_song ON favorites(song_id);
+CREATE INDEX idx_featured_songs_week ON featured_songs(snapshot_week);
+CREATE INDEX idx_featured_songs_song ON featured_songs(song_id);
 
 CREATE INDEX idx_albums_artist ON albums(artist_id);
 CREATE INDEX idx_albums_status ON albums(status);

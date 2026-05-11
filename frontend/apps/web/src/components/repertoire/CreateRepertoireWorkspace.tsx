@@ -1,5 +1,6 @@
 'use client';
 
+import { collection, doc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
@@ -8,7 +9,9 @@ import {
   requestSearchRepertoireSongs,
   type CreaterepertoirePayload
 } from '../../features/repertoire/clientPersistence';
+import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import type { RepertoireSongSearchOption, SongRef } from '../../types/repertoire';
+import { db } from '../../services/firebase';
 
 const LITURGICAL_TYPES = [
   'Misa Dominical',
@@ -28,10 +31,18 @@ const LITURGICAL_TYPES = [
   'General'
 ];
 
+function generateFirestoreDocId(collectionPath: string): string {
+  if (!db) {
+    return `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  return doc(collection(db, collectionPath)).id;
+}
+
 export function CreaterepertoireWorkspace() {
   const router = useRouter();
   const { user } = useAuth();
 
+  const [repertoireDocId, setRepertoireDocId] = useState<string>(() => generateFirestoreDocId('repertoires'));
   const [title, setTitle] = useState('');
   const [liturgicalType, setLiturgicalType] = useState('');
   const [isPublic, setIsPublic] = useState(false);
@@ -42,12 +53,17 @@ export function CreaterepertoireWorkspace() {
   const [highlightedOptionIndex, setHighlightedOptionIndex] = useState(-1);
   const [addedSongs, setAddedSongs] = useState<SongRef[]>([]);
 
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
+  const [coverError, setCoverError] = useState('');
+  const [coverPreparing, setCoverPreparing] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const searchWrapRef = useRef<HTMLDivElement | null>(null);
 
-  const canSubmit = title.trim().length > 0 && !submitting;
+  const canSubmit = title.trim().length > 0 && !submitting && !coverPreparing;
 
   const hasQuery = songSearchInput.trim().length > 0;
 
@@ -125,6 +141,42 @@ export function CreaterepertoireWorkspace() {
     };
   }, []);
 
+  useEffect(() => () => {
+    if (coverPreviewUrl) {
+      URL.revokeObjectURL(coverPreviewUrl);
+    }
+  }, [coverPreviewUrl]);
+
+  const handleCoverSelection = async (file: File | null) => {
+    setCoverError('');
+
+    if (coverPreviewUrl) {
+      URL.revokeObjectURL(coverPreviewUrl);
+    }
+
+    if (!file) {
+      setCoverFile(null);
+      setCoverPreviewUrl('');
+      setCoverPreparing(false);
+      return;
+    }
+
+    setCoverPreparing(true);
+
+    const prepared = await prepareCoverImageFile(file);
+    if (!prepared.ok) {
+      setCoverFile(null);
+      setCoverPreviewUrl('');
+      setCoverError(prepared.error);
+      setCoverPreparing(false);
+      return;
+    }
+
+    setCoverFile(prepared.file);
+    setCoverPreviewUrl(URL.createObjectURL(prepared.file));
+    setCoverPreparing(false);
+  };
+
   const handleRemoveSong = (songId: string) => {
     setAddedSongs((prev) => prev.filter((s) => s.id !== songId));
   };
@@ -149,6 +201,7 @@ export function CreaterepertoireWorkspace() {
 
     const payload: CreaterepertoirePayload = {
       title: title.trim(),
+      repertoireDocId,
       isPublic
     };
 
@@ -161,6 +214,23 @@ export function CreaterepertoireWorkspace() {
       }));
     }
 
+    if (coverFile) {
+      const coverResult = await uploadCoverImage({
+        file: coverFile,
+        entity: 'repertoires',
+        entityId: repertoireDocId,
+        filenameBase: title.trim() || 'repertoire-cover'
+      });
+
+      if (!coverResult.ok || !coverResult.url) {
+        setSubmitting(false);
+        setErrorMessage(coverResult.error ?? 'No se pudo subir la portada.');
+        return;
+      }
+
+      payload.coverImageUrl = coverResult.url;
+    }
+
     const result = await requestCreaterepertoire(payload);
 
     setSubmitting(false);
@@ -170,6 +240,11 @@ export function CreaterepertoireWorkspace() {
       if (result.repertoireId) {
         setTimeout(() => router.push(`/repertoires/${result.repertoireId}`), 1200);
       }
+      setCoverFile(null);
+      setCoverPreviewUrl('');
+      setCoverError('');
+      setCoverPreparing(false);
+      setRepertoireDocId(generateFirestoreDocId('repertoires'));
     } else {
       const messages: Record<string, string> = {
         plan_limit: result.message ?? 'Has alcanzado el límite de repertorios en tu plan.',
@@ -213,6 +288,45 @@ export function CreaterepertoireWorkspace() {
             ))}
           </select>
         </label>
+
+        <div className="create-cover-field">
+          <span>Portada (opcional)</span>
+          <div className="create-cover-upload-row">
+            <input
+              id="repertoire-cover-upload"
+              className="create-cover-input"
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              onChange={(event) => void handleCoverSelection(event.target.files?.[0] ?? null)}
+              disabled={submitting || coverPreparing}
+            />
+            <label htmlFor="repertoire-cover-upload" className="create-cover-upload-button">
+              {coverPreparing ? 'Procesando...' : 'Seleccionar imagen'}
+            </label>
+            <span className="create-cover-upload-meta">
+              Se guarda en 480x480 • mínimo 120x120 • máx 5MB
+            </span>
+          </div>
+
+          {coverPreviewUrl && (
+            <div className="create-cover-preview">
+              <img src={coverPreviewUrl} alt="Previsualización de portada del repertorio" />
+              <div className="create-cover-preview-actions">
+                <span>{coverFile?.name ?? 'portada.jpg'}</span>
+                <button
+                  type="button"
+                  className="create-form-cancel"
+                  onClick={() => void handleCoverSelection(null)}
+                  disabled={submitting || coverPreparing}
+                >
+                  Quitar imagen
+                </button>
+              </div>
+            </div>
+          )}
+
+          {coverError && <p className="create-form-error">{coverError}</p>}
+        </div>
 
         <fieldset className="create-visibility-fieldset">
           <legend>Visibilidad</legend>

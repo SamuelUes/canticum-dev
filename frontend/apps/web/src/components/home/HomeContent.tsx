@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
+import { useAuth } from '../../context/AuthContext';
+import { getCachedSearchDatasetClient, getSearchDatasetClient } from '../../features/search/repository';
 import type {
   SearchDataset,
   SearchEntityItem,
@@ -13,6 +14,7 @@ import { ArtistsSection } from './ArtistsSection';
 import { DualListSection } from './DualListSection';
 import { FeaturedSection } from './FeaturedSection';
 import { MySection } from './mySection';
+import { getArtistProfileHref } from '../../features/artist/routing';
 
 interface HomeContentProps {
   text: HomeText;
@@ -48,22 +50,25 @@ function songToListItem(song: SearchSongItem): ListItemData {
 }
 
 export function HomeContent({ text }: HomeContentProps) {
+  const { user } = useAuth();
   const [dataset, setDataset] = useState<SearchDataset | null>(null);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const currentUserId = user?.uid ?? null;
 
   useEffect(() => {
     let disposed = false;
 
     const hydrate = async () => {
+      const cached = getCachedSearchDatasetClient('home');
+      if (!disposed && cached) {
+        setDataset(cached);
+        setLoading(false);
+      }
+
       try {
-        const [resolvedDataset, resolvedUserId] = await Promise.all([
-          getSearchDatasetClient(),
-          getClientCurrentUserId()
-        ]);
+        const resolvedDataset = await getSearchDatasetClient({ forceRefresh: true, scope: 'home' });
         if (disposed) return;
         setDataset(resolvedDataset);
-        setCurrentUserId(resolvedUserId);
       } finally {
         if (!disposed) {
           setLoading(false);
@@ -158,7 +163,16 @@ export function HomeContent({ text }: HomeContentProps) {
 
       <DualListSection
         loading={loading}
-        left={{ title: text.trendsTitle, viewAllLabel: text.viewAll, items: trends }}
+        left={{
+          title: text.trendsTitle,
+          viewAllLabel: text.viewAll,
+          items: trends,
+          resolveItemHref: (item) =>
+            getArtistProfileHref({
+              artistId: item.id,
+              artistName: item.title
+            })
+        }}
         right={{
           title: text.recentTitle,
           viewAllLabel: text.viewAll,

@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import type { SearchEntityItem, SearchrepertoireItem, SearchSongItem } from '../../types/search';
+import { HorizontalConveyor } from '../ui/HorizontalConveyor';
 
 interface MySectionProps {
   title?: string;
@@ -11,7 +12,19 @@ interface MySectionProps {
 }
 
 function pickImage(item: SearchEntityItem): string | undefined {
-  return item.images && item.images.length > 0 ? item.images[0]?.url : undefined;
+  if (item.images && item.images.length > 0) {
+    return item.images[0]?.url;
+  }
+
+  const raw = item as SearchEntityItem & { coverImageUrl?: string; coverUrl?: string };
+  if (typeof raw.coverImageUrl === 'string' && raw.coverImageUrl.trim().length > 0) {
+    return raw.coverImageUrl;
+  }
+  if (typeof raw.coverUrl === 'string' && raw.coverUrl.trim().length > 0) {
+    return raw.coverUrl;
+  }
+
+  return undefined;
 }
 
 function formatTimestamp(value?: string | null): number {
@@ -42,53 +55,85 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
       <h2>{title}</h2>
 
       {orderedSongs.length > 0 ? (
-        <>
-          <h3 style={{ marginTop: 8 }}>Mis canciones</h3>
-          <div className="featured-grid">
-            {orderedSongs.slice(0, 8).map((song) => {
-              const imageUrl = pickImage(song);
-              return (
-                <Link key={song.id} href={`/songs/${song.songId ?? song.id}`} className="song-card">
-                  {imageUrl ? (
-                    <Image src={imageUrl} alt={song.title} className="song-thumb-image" width={300} height={92} />
-                  ) : (
-                    <div className="song-thumb" />
-                  )}
-                  <div className="song-card-body">
-                    <strong>{song.title}</strong>
-                    <small>{song.subtitle || song.authorOrChoir}</small>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        </>
+        <div className="my-section-block">
+          <h3 className="my-section-heading">Mis canciones</h3>
+          <HorizontalConveyor ariaLabel="Mis canciones" className="my-section-conveyor">
+            <div className="my-section-track" role="listbox" aria-label="Mis canciones">
+              {orderedSongs.slice(0, 8).map((song) => {
+                const imageUrl = pickImage(song);
+                return (
+                  <Link
+                    key={song.id}
+                    href={`/songs/${song.songId ?? song.id}`}
+                    className="song-card my-section-card"
+                    role="option"
+                    aria-label={song.title}
+                  >
+                    {imageUrl ? (
+                      <div className="song-thumb-image-wrap my-section-thumb">
+                        <Image
+                          src={imageUrl}
+                          alt={song.title}
+                          fill
+                          className="song-thumb-image"
+                          sizes="(max-width: 768px) 60vw, 180px"
+                        />
+                      </div>
+                    ) : (
+                      <div className="song-thumb my-section-thumb" />
+                    )}
+                    <div className="song-card-body">
+                      <strong>{song.title}</strong>
+                      <small>{song.subtitle || song.authorOrChoir}</small>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </HorizontalConveyor>
+        </div>
       ) : null}
 
       {orderedRepertoires.length > 0 ? (
-        <>
-          <h3 style={{ marginTop: 16 }}>Mis repertorios</h3>
-          <div className="featured-grid">
-            {orderedRepertoires.slice(0, 8).map((repertoire) => {
-              const imageUrl = pickImage(repertoire);
-              return (
-                <Link key={repertoire.id} href={`/repertoires/${repertoire.repertoireId ?? repertoire.id}`} className="song-card">
-                  {imageUrl ? (
-                    <Image src={imageUrl} alt={repertoire.title} className="song-thumb-image" width={300} height={92} />
-                  ) : (
-                    <div className="song-thumb" />
-                  )}
-                  <div className="song-card-body">
-                    <strong>{repertoire.title}</strong>
-                    <small>
-                      {repertoire.isPublic ? 'Público' : 'Privado'} · {repertoire.songsCount} canciones
-                    </small>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        </>
+        <div className="my-section-block">
+          <h3 className="my-section-heading">Mis repertorios</h3>
+          <HorizontalConveyor ariaLabel="Mis repertorios" className="my-section-conveyor">
+            <div className="my-section-track" role="listbox" aria-label="Mis repertorios">
+              {orderedRepertoires.slice(0, 8).map((repertoire) => {
+                const imageUrl = pickImage(repertoire);
+                return (
+                  <Link
+                    key={repertoire.id}
+                    href={`/repertoires/${repertoire.repertoireId ?? repertoire.id}`}
+                    className="song-card my-section-card"
+                    role="option"
+                    aria-label={repertoire.title}
+                  >
+                    {imageUrl ? (
+                      <div className="song-thumb-image-wrap my-section-thumb">
+                        <Image
+                          src={imageUrl}
+                          alt={repertoire.title}
+                          fill
+                          className="song-thumb-image"
+                          sizes="(max-width: 768px) 60vw, 180px"
+                        />
+                      </div>
+                    ) : (
+                      <div className="song-thumb my-section-thumb" />
+                    )}
+                    <div className="song-card-body">
+                      <strong>{repertoire.title}</strong>
+                      <small>
+                        {repertoire.isPublic ? 'Público' : 'Privado'} · {repertoire.songsCount} canciones
+                      </small>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </HorizontalConveyor>
+        </div>
       ) : null}
     </section>
   );

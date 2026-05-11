@@ -430,6 +430,7 @@ export interface CreateSongPayloadVersion {
   tone?: string;
   notationType?: string;
   audioReferenceUrl?: string;
+  coverImageUrl?: string;
   /** Per-version lyrics text (replaces the previous song-level `lyrics`). */
   lyrics?: string;
   /** Optional uploaded lyrics file URL. */
@@ -450,6 +451,7 @@ export interface CreateSongPayload {
   artistName?: string;
   year?: number;
   liturgicalUse?: string;
+  coverImageUrl?: string;
   /** @deprecated Use per-version `lyrics` instead. Kept for legacy callers. */
   lyrics?: string;
   versionName?: string;

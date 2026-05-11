@@ -19,6 +19,46 @@ import {
 } from '../../shared/plan/planLimits';
 import { createRepertoireInCloudSql, searchSongsForRepertoire } from '../../shared/cloudSql/songs';
 
+function isMissingIndexError(error: unknown): boolean {
+  const errorWithCode = error as { code?: unknown; message?: unknown };
+  const code = typeof errorWithCode.code === 'string' || typeof errorWithCode.code === 'number'
+    ? String(errorWithCode.code).toLowerCase()
+    : '';
+  const message = typeof errorWithCode.message === 'string' ? errorWithCode.message.toLowerCase() : '';
+
+  return code === 'failed-precondition' || code === '9' || message.includes('failed_precondition');
+}
+
+function asMillis(value: unknown): number {
+  if (!value) {
+    return 0;
+  }
+
+  if (typeof value === 'object') {
+    const maybeToMillis = value as { toMillis?: unknown; _seconds?: unknown; seconds?: unknown };
+
+    if (typeof maybeToMillis.toMillis === 'function') {
+      try {
+        return Number(maybeToMillis.toMillis());
+      } catch {
+        return 0;
+      }
+    }
+
+    const seconds = Number(maybeToMillis._seconds ?? maybeToMillis.seconds);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return seconds * 1000;
+    }
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const millis = new Date(value).getTime();
+    return Number.isFinite(millis) ? millis : 0;
+  }
+
+  return 0;
+}
+
 function normalizerepertoireResponse(repertoireId: string, raw: Record<string, unknown>): Record<string, unknown> {
   const songIds = Array.isArray(raw.songIds) ? raw.songIds.map((value) => String(value)) : [];
   const selectedSongs = Array.isArray(raw.songs)
@@ -47,12 +87,14 @@ function normalizerepertoireResponse(repertoireId: string, raw: Record<string, u
     userId: String(raw.userId ?? raw.ownerUserId ?? ''),
     isPublic,
     visibility: isPublic ? 'public' : 'private',
+    status: String(raw.status ?? (isPublic ? 'PUBLISHED' : 'DRAFT')).toUpperCase(),
     liturgicalType: String(raw.liturgicalType ?? raw.type ?? 'General'),
     songsCount: Number(raw.songsCount ?? songIds.length),
     sheetsCount: Number(raw.sheetsCount ?? 0),
     songIds,
     selectedSongs,
-    description: String(raw.description ?? '')
+    description: String(raw.description ?? ''),
+    coverImageUrl: typeof raw.coverImageUrl === 'string' ? raw.coverImageUrl : undefined
   };
 }
 
@@ -92,31 +134,65 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
 
     let repertoiresSnap: FirebaseFirestore.QuerySnapshot;
 
-    if (isPublicFilter) {
-      repertoiresSnap = await db
-        .collection('repertoires')
-        .where('isPublic', '==', true)
-        .orderBy('updatedAt', 'desc')
-        .limit(100)
-        .get();
-    } else if (requestUserId) {
-      repertoiresSnap = await db
-        .collection('repertoires')
-        .where('userId', '==', requestUserId)
-        .orderBy('updatedAt', 'desc')
-        .limit(100)
-        .get();
-    } else {
-      sendError(res, 400, 'invalid_argument', 'userId query param or public=true is required.');
+    try {
+      if (isPublicFilter) {
+        try {
+          repertoiresSnap = await db
+            .collection('repertoires')
+            .where('isPublic', '==', true)
+            .orderBy('updatedAt', 'desc')
+            .limit(100)
+            .get();
+        } catch (error) {
+          if (!isMissingIndexError(error)) {
+            throw error;
+          }
+
+          repertoiresSnap = await db
+            .collection('repertoires')
+            .where('isPublic', '==', true)
+            .limit(100)
+            .get();
+        }
+      } else if (requestUserId) {
+        try {
+          repertoiresSnap = await db
+            .collection('repertoires')
+            .where('userId', '==', requestUserId)
+            .orderBy('updatedAt', 'desc')
+            .limit(100)
+            .get();
+        } catch (error) {
+          if (!isMissingIndexError(error)) {
+            throw error;
+          }
+
+          repertoiresSnap = await db
+            .collection('repertoires')
+            .where('userId', '==', requestUserId)
+            .limit(100)
+            .get();
+        }
+      } else {
+        sendError(res, 400, 'invalid_argument', 'userId query param or public=true is required.');
+        return;
+      }
+
+      const repertoires = repertoiresSnap.docs
+        .map((doc) => normalizerepertoireResponse(doc.id, (doc.data() ?? {}) as Record<string, unknown>))
+        .sort((a, b) => {
+          const aTs = asMillis(a.updatedAt ?? a.createdAt);
+          const bTs = asMillis(b.updatedAt ?? b.createdAt);
+          return bTs - aTs;
+        });
+
+      sendJson(res, 200, { repertoires });
+      return;
+    } catch (error) {
+      console.error('GET /repertoires failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to list repertoires.');
       return;
     }
-
-    const repertoires = repertoiresSnap.docs.map((doc) =>
-      normalizerepertoireResponse(doc.id, (doc.data() ?? {}) as Record<string, unknown>)
-    );
-
-    sendJson(res, 200, { repertoires });
-    return;
   }
 
   if (segments.length === 0 && req.method === 'POST') {
@@ -159,7 +235,12 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
       }
     }
 
-    const newrepertoireRef = getAppFirestore().collection('repertoires').doc();
+    const requestedId = typeof body.repertoireDocId === 'string' && body.repertoireDocId.trim() ? body.repertoireDocId.trim() : '';
+    const coverImageUrl = typeof body.coverImageUrl === 'string' ? body.coverImageUrl.trim() : '';
+
+    const newrepertoireRef = requestedId
+      ? getAppFirestore().collection('repertoires').doc(requestedId)
+      : getAppFirestore().collection('repertoires').doc();
 
     await newrepertoireRef.set({
       title,
@@ -169,11 +250,13 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
       sheetsCount: 0,
       isPublic,
       visibility: isPublic ? 'public' : 'private',
+      status: isPublic ? 'PUBLISHED' : 'DRAFT',
       liturgicalType,
       type: liturgicalType,
       userId: requestUserId,
       ownerUserId: requestUserId,
       createdBy: requestUserId,
+      ...(coverImageUrl ? { coverImageUrl } : {}),
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
     });
@@ -184,6 +267,7 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
         firebaseUid: requestUserId,
         title,
         liturgicalType,
+        coverUrl: coverImageUrl || null,
         songIds: songIds
           .map((value) => Number.parseInt(String(value), 10))
           .filter((value) => Number.isFinite(value) && value > 0),
@@ -207,7 +291,8 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
         isPublic,
         liturgicalType,
         userId: requestUserId,
-        ownerUserId: requestUserId
+        ownerUserId: requestUserId,
+        ...(coverImageUrl ? { coverImageUrl } : {})
       })
     });
     return;
@@ -292,11 +377,38 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
     const body = getBodyRecord(req);
     const update = (body.repertoire ?? {}) as Record<string, unknown>;
 
+    const updatedSelectedSongs = Array.isArray(update.songs)
+      ? update.songs
+        .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
+        .map((value) => {
+          const songId = String(value.songId ?? '').trim();
+          const versionId = typeof value.versionId === 'string' ? value.versionId.trim() : '';
+          return {
+            songId,
+            ...(versionId ? { versionId } : {})
+          };
+        })
+        .filter((value) => value.songId.length > 0)
+      : Array.isArray(repertoireData.songs)
+        ? (repertoireData.songs as Array<Record<string, unknown>>)
+          .map((value) => {
+            const songId = String(value.songId ?? '').trim();
+            const versionId = typeof value.versionId === 'string' ? value.versionId.trim() : '';
+            return {
+              songId,
+              ...(versionId ? { versionId } : {})
+            };
+          })
+          .filter((value) => value.songId.length > 0)
+        : [];
+
     const nextSongIds = Array.isArray(update.songIds)
       ? update.songIds.map((value) => String(value))
-      : Array.isArray(repertoireData.songIds)
-        ? repertoireData.songIds.map((value) => String(value))
-        : [];
+      : updatedSelectedSongs.length > 0
+        ? updatedSelectedSongs.map((value) => value.songId)
+        : Array.isArray(repertoireData.songIds)
+          ? repertoireData.songIds.map((value) => String(value))
+          : [];
 
     const premiumPatch = await resolveIsPremium(requestUserId!, auth?.token ?? null);
     if (!premiumPatch && nextSongIds.length > FREE_MAX_SONGS_PER_repertoire) {
@@ -313,7 +425,8 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
       isPublic,
       visibility: isPublic ? 'public' : 'private',
       songsCount: nextSongIds.length,
-      songIds: nextSongIds
+      songIds: nextSongIds,
+      ...(updatedSelectedSongs.length > 0 ? { songs: updatedSelectedSongs } : {})
     };
 
     if (typeof update.title === 'string') {
@@ -327,6 +440,16 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
     if (typeof update.liturgicalType === 'string') {
       payload.liturgicalType = update.liturgicalType;
       payload.type = update.liturgicalType;
+    }
+
+    if (typeof update.coverImageUrl === 'string') {
+      payload.coverImageUrl = update.coverImageUrl;
+    }
+
+    if (typeof update.status === 'string' && update.status.trim()) {
+      payload.status = update.status.trim().toUpperCase();
+    } else if (isPublic && String(repertoireData.status ?? '').toUpperCase() === 'DRAFT') {
+      payload.status = 'PUBLISHED';
     }
 
     await repertoireRef.set(payload, { merge: true });

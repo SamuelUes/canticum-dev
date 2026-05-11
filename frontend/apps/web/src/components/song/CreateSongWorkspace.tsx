@@ -11,6 +11,7 @@ import {
   type CreateSongPayloadVersion
 } from '../../features/song/clientPersistence';
 import { uploadVersionAsset } from '../../features/song/versionAssetUpload';
+import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import { db } from '../../services/firebase';
 import { ArtistAutocomplete, type ArtistOption } from '../shared/ArtistAutocomplete';
 
@@ -99,6 +100,11 @@ export function CreateSongWorkspace() {
   const [year, setYear] = useState('');
   const [liturgicalUse, setLiturgicalUse] = useState('');
 
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
+  const [coverError, setCoverError] = useState('');
+  const [coverPreparing, setCoverPreparing] = useState(false);
+
   // Add-version fields.
   const [existingArtistOption, setExistingArtistOption] = useState<ArtistOption | null>(null);
   const [existingArtistSongs, setExistingArtistSongs] = useState<ArtistSongLookup[]>([]);
@@ -157,6 +163,10 @@ export function CreateSongWorkspace() {
         docId: generateFirestoreDocId(`songs/${fresh}/versions`),
         versionName: v.versionName || `Versión ${i + 1}`
       })));
+      setCoverFile(null);
+      setCoverPreviewUrl('');
+      setCoverError('');
+      setCoverPreparing(false);
     }
     // For addVersion, songDocId follows selectedExistingSongId (see below).
   }, [mode]);
@@ -171,6 +181,12 @@ export function CreateSongWorkspace() {
       docId: generateFirestoreDocId(`songs/${selectedExistingSongId}/versions`)
     })));
   }, [mode, selectedExistingSongId]);
+
+  useEffect(() => () => {
+    if (coverPreviewUrl) {
+      URL.revokeObjectURL(coverPreviewUrl);
+    }
+  }, [coverPreviewUrl]);
 
   // ── Validation ──
 
@@ -192,12 +208,40 @@ export function CreateSongWorkspace() {
       );
     });
 
-  const canSubmit = hasTargetSong && hasSongArtist && hasValidVersions && !submitting;
+  const canSubmit = hasTargetSong && hasSongArtist && hasValidVersions && !submitting && !coverPreparing;
 
   const updateVersion = (localId: string, update: Partial<DraftVersion>) => {
     setVersions((prev) => prev.map((version) => (
       version.localId === localId ? { ...version, ...update } : version
     )));
+  };
+
+  const handleCoverSelection = async (file: File | null) => {
+    setCoverError('');
+    if (coverPreviewUrl) {
+      URL.revokeObjectURL(coverPreviewUrl);
+    }
+
+    if (!file) {
+      setCoverFile(null);
+      setCoverPreviewUrl('');
+      return;
+    }
+
+    setCoverPreparing(true);
+
+    const prepared = await prepareCoverImageFile(file);
+    if (!prepared.ok) {
+      setCoverFile(null);
+      setCoverPreviewUrl('');
+      setCoverError(prepared.error);
+      setCoverPreparing(false);
+      return;
+    }
+
+    setCoverFile(prepared.file);
+    setCoverPreviewUrl(URL.createObjectURL(prepared.file));
+    setCoverPreparing(false);
   };
 
   const removeVersion = (localId: string) => {
@@ -241,6 +285,34 @@ export function CreateSongWorkspace() {
     }
 
     const resolvedVersions: CreateSongPayloadVersion[] = [];
+
+    let coverImageUrl: string | undefined;
+    let coverVersionDocId: string | undefined;
+
+    if (mode === 'new' && coverFile) {
+      coverVersionDocId = versions[0]?.docId;
+      if (!coverVersionDocId) {
+        setSubmitting(false);
+        setErrorMessage('No se pudo resolver la versión para guardar la portada.');
+        return;
+      }
+
+      const coverResult = await uploadCoverImage({
+        file: coverFile,
+        entity: 'songs',
+        entityId: songDocId,
+        versionId: coverVersionDocId,
+        filenameBase: title.trim() || 'cover'
+      });
+
+      if (!coverResult.ok || !coverResult.url) {
+        setSubmitting(false);
+        setErrorMessage(coverResult.error ?? 'No se pudo subir la portada.');
+        return;
+      }
+
+      coverImageUrl = coverResult.url;
+    }
 
     for (const version of versions) {
       // 1) Audio (file or URL).
@@ -321,6 +393,7 @@ export function CreateSongWorkspace() {
         tone: version.tone.trim() || undefined,
         notationType: version.notationType || undefined,
         audioReferenceUrl: audioUrl,
+        coverImageUrl: coverImageUrl && coverVersionDocId === version.docId ? coverImageUrl : undefined,
         lyrics: version.lyrics.trim(),
         lyricsFileUrl,
         sheetFileUrl
@@ -328,12 +401,21 @@ export function CreateSongWorkspace() {
     }
 
     payload.versions = resolvedVersions;
+    if (coverImageUrl) {
+      payload.coverImageUrl = coverImageUrl;
+    }
 
     const result = await requestCreateSong(payload);
     setSubmitting(false);
 
     if (result.ok) {
       setSuccessMessage(mode === 'new' ? '¡Canción creada exitosamente!' : '¡Versión agregada exitosamente!');
+      if (mode === 'new') {
+        setCoverFile(null);
+        setCoverPreviewUrl('');
+        setCoverError('');
+        setCoverPreparing(false);
+      }
       const finalSongId = result.songId ?? targetSongId;
       const newestVersionId = result.versionIds && result.versionIds.length > 0
         ? result.versionIds[result.versionIds.length - 1]
@@ -443,6 +525,45 @@ export function CreateSongWorkspace() {
             </label>
 
             <div className="create-form-field" />
+
+            <div className="create-cover-field">
+              <span>Portada (opcional)</span>
+              <div className="create-cover-upload-row">
+                <input
+                  id="song-cover-upload"
+                  className="create-cover-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/webp"
+                  onChange={(event) => void handleCoverSelection(event.target.files?.[0] ?? null)}
+                  disabled={submitting || coverPreparing}
+                />
+                <label htmlFor="song-cover-upload" className="create-cover-upload-button">
+                  {coverPreparing ? 'Procesando...' : 'Seleccionar imagen'}
+                </label>
+                <span className="create-cover-upload-meta">
+                  Se guarda en 480x480 • mínimo 120x120 • máx 5MB
+                </span>
+              </div>
+
+              {coverPreviewUrl && (
+                <div className="create-cover-preview">
+                  <img src={coverPreviewUrl} alt="Previsualización de portada" />
+                  <div className="create-cover-preview-actions">
+                    <span>{coverFile?.name ?? 'portada.jpg'}</span>
+                    <button
+                      type="button"
+                      className="create-form-cancel"
+                      onClick={() => void handleCoverSelection(null)}
+                      disabled={submitting || coverPreparing}
+                    >
+                      Quitar imagen
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {coverError && <p className="create-form-error">{coverError}</p>}
+            </div>
           </div>
         )}
 

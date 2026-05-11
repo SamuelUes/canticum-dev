@@ -25,6 +25,10 @@ service firebase.storage {
         && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)/songUnlocks/$(songId));
     }
 
+    function canUploadRepertoireCover(repertoireId) {
+      return isAdminOrEditor() || isAuthenticated();
+    }
+
     match /songs/{songId}/lyrics/{allPaths=**} {
       allow read: if true;
       allow write: if isAdminOrEditor();
@@ -61,6 +65,26 @@ service firebase.storage {
     match /songs/{songId}/versions/{versionId}/sheet/{allPaths=**} {
       allow read: if true;
       allow write: if isAuthenticated();
+    }
+
+    match /songs/{songId}/versions/{versionId}/cover/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /songs/{songId}/cover/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /albums/{albumId}/cover/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdminOrEditor();
+    }
+
+    match /repertoires/{repertoireId}/cover/{allPaths=**} {
+      allow read: if true;
+      allow write: if canUploadRepertoireCover(repertoireId);
     }
 
     match /users/{userId}/{allPaths=**} {

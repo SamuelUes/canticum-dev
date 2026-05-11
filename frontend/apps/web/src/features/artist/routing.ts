@@ -1,6 +1,11 @@
 import { artistMockById } from './mockData';
 
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+const functionsBaseUrl = [
+  process.env.GCP_FUNCTIONS_BASE_URL,
+  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
+]
+  .map((value) => (typeof value === 'string' ? value.trim() : ''))
+  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
 
 function normalizeArtistName(value: string): string {
   return value
@@ -99,8 +104,10 @@ export function getArtistProfileHref({ artistId, artistName }: ArtistProfileRout
 }
 
 export async function getArtistProfileHrefAsync({ artistId, artistName }: ArtistProfileRouteInput): Promise<string> {
+  const slug = artistName?.trim() ? toArtistSlug(artistName) : '';
+
   if (artistId) {
-    return `/artists/${artistId}`;
+    return `/artists/${encodeURIComponent(slug || 'artist')}?id=${encodeURIComponent(artistId)}`;
   }
 
   if (!artistName?.trim()) {
@@ -109,12 +116,12 @@ export async function getArtistProfileHrefAsync({ artistId, artistName }: Artist
 
   const remoteId = await resolveArtistIdFromSearch(artistName);
   if (remoteId) {
-    return `/artists/${remoteId}`;
+    return `/artists/${encodeURIComponent(slug || remoteId)}?id=${encodeURIComponent(remoteId)}`;
   }
 
   const mockId = resolveArtistIdFromMock(artistName);
   if (mockId) {
-    return `/artists/${mockId}`;
+    return `/artists/${encodeURIComponent(slug || mockId)}?id=${encodeURIComponent(mockId)}`;
   }
 
   return `/search?q=${encodeURIComponent(artistName.trim())}`;

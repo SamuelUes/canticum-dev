@@ -28,7 +28,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
       try {
         const fetched = await requestUserRepertoires();
         if (disposed) return;
-        if (fetched && fetched.length > 0) {
+        if (Array.isArray(fetched)) {
           setItems(fetched);
         }
       } finally {
@@ -183,7 +183,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
 
         {!isLoading && filteredItems.length === 0 ? (
           <p className="repertoires-empty-state" style={{ padding: '24px 0', opacity: 0.75 }}>
-            Aún no tienes repertorios. Crea uno con el botón "+ Crear Nuevo repertorio".
+            Aún no tienes repertorios. Crea uno con el botón &quot;+ Crear Nuevo repertorio&quot;.
           </p>
         ) : null}
 
@@ -198,7 +198,13 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
 
               {item.coverImageUrl ? (
                 <div className="repertoires-card-image-wrap">
-                  <Image src={item.coverImageUrl} alt={item.title} fill className="repertoires-card-image" />
+                  <Image
+                    src={item.coverImageUrl}
+                    alt={`Portada de ${item.title}`}
+                    fill
+                    className="repertoires-card-image"
+                    sizes="(max-width: 768px) 100vw, 320px"
+                  />
                 </div>
               ) : (
                 <div className="repertoires-card-image-wrap is-empty" aria-hidden>
