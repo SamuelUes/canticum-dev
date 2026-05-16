@@ -685,31 +685,151 @@ async function syncArtistMetricsById(
   artistId: number,
   client: { query: Pool['query'] }
 ): Promise<void> {
-  const aggregate = await client.query<{ totalViews: number; likeCount: number }>(
+  const aggregate = await client.query<{ totalViews: number }>(
     `
       SELECT
-        COALESCE(SUM(total_views), 0)::INT AS "totalViews",
-        COALESCE(SUM(like_count), 0)::INT AS "likeCount"
-      FROM songs
-      WHERE artist_id = $1;
+        COALESCE(SUM(song_metrics.total_views), 0)::INT AS "totalViews"
+      FROM (
+        SELECT DISTINCT
+          s.id,
+          COALESCE(s.total_views, 0)::INT AS total_views
+        FROM songs s
+        LEFT JOIN song_versions sv ON sv.song_id = s.id
+        WHERE s.artist_id = $1
+          OR sv.artist_id = $1
+      ) AS song_metrics;
     `,
     [artistId]
   );
 
-  const row = aggregate.rows[0] ?? { totalViews: 0, likeCount: 0 };
-  const popularity = computeArtistPopularity(Number(row.totalViews ?? 0), Number(row.likeCount ?? 0));
+  const aggregateViews = Number(aggregate.rows[0]?.totalViews ?? 0);
+  const currentArtist = await client.query<{ totalViews: number; likeCount: number }>(
+    `
+      SELECT
+        COALESCE(total_views, 0)::INT AS "totalViews",
+        COALESCE(like_count, 0)::INT AS "likeCount"
+      FROM artists
+      WHERE id = $1
+      LIMIT 1;
+    `,
+    [artistId]
+  );
+
+  const currentViews = Number(currentArtist.rows[0]?.totalViews ?? 0);
+  const currentLikes = Number(currentArtist.rows[0]?.likeCount ?? 0);
+  const resolvedViews = Math.max(aggregateViews, currentViews, 0);
+  const popularity = computeArtistPopularity(resolvedViews, currentLikes);
 
   await client.query(
     `
       UPDATE artists
       SET
         total_views = $2,
-        like_count = $3,
-        popularity = $4
+        popularity = $3
       WHERE id = $1;
     `,
-    [artistId, Number(row.totalViews ?? 0), Number(row.likeCount ?? 0), popularity]
+    [artistId, resolvedViews, popularity]
   );
+}
+
+export async function refreshArtistSuggestionsSnapshot(limitPerArtist: number = 12): Promise<number> {
+  const safeLimit = Number.isFinite(limitPerArtist)
+    ? Math.min(Math.max(Math.floor(limitPerArtist), 1), 50)
+    : 12;
+
+  const result = await getPool().query<{ inserted: number }>(
+    `
+      WITH user_artist_signals AS (
+        SELECT
+          al.user_id AS user_id,
+          al.artist_id AS artist_id,
+          1.0::NUMERIC AS weight
+        FROM artist_likes al
+
+        UNION ALL
+
+        SELECT
+          f.user_id AS user_id,
+          COALESCE(s.artist_id, sv_artist.artist_id) AS artist_id,
+          0.7::NUMERIC AS weight
+        FROM favorites f
+        INNER JOIN songs s ON s.id = f.song_id
+        LEFT JOIN LATERAL (
+          SELECT sv.artist_id
+          FROM song_versions sv
+          WHERE sv.song_id = s.id
+            AND sv.artist_id IS NOT NULL
+          ORDER BY sv.id ASC
+          LIMIT 1
+        ) sv_artist ON TRUE
+        WHERE COALESCE(s.artist_id, sv_artist.artist_id) IS NOT NULL
+      ),
+      aggregated AS (
+        SELECT
+          uas.user_id,
+          uas.artist_id,
+          SUM(uas.weight)::NUMERIC AS affinity
+        FROM user_artist_signals uas
+        GROUP BY uas.user_id, uas.artist_id
+      ),
+      paired AS (
+        SELECT
+          a1.artist_id AS artist_id,
+          a2.artist_id AS suggested_artist_id,
+          COUNT(*)::INT AS overlap_users,
+          SUM(LEAST(a1.affinity, a2.affinity))::NUMERIC AS overlap_score
+        FROM aggregated a1
+        INNER JOIN aggregated a2
+          ON a1.user_id = a2.user_id
+         AND a1.artist_id <> a2.artist_id
+        GROUP BY a1.artist_id, a2.artist_id
+      ),
+      ranked AS (
+        SELECT
+          p.artist_id,
+          p.suggested_artist_id,
+          ROUND(
+            p.overlap_score * 10
+            + LOG(10, COALESCE(a.total_views, 0) + 1) * 2
+            + LOG(10, COALESCE(a.like_count, 0) + 1) * 3,
+            2
+          ) AS relevance_score,
+          ROW_NUMBER() OVER (
+            PARTITION BY p.artist_id
+            ORDER BY
+              p.overlap_score DESC,
+              p.overlap_users DESC,
+              COALESCE(a.popularity, 0) DESC,
+              p.suggested_artist_id ASC
+          ) AS row_num
+        FROM paired p
+        INNER JOIN artists a ON a.id = p.suggested_artist_id
+      ),
+      deleted AS (
+        DELETE FROM artist_suggestions
+      ),
+      inserted_rows AS (
+        INSERT INTO artist_suggestions (artist_id, suggested_artist_id, relevance_score)
+        SELECT
+          r.artist_id,
+          r.suggested_artist_id,
+          r.relevance_score
+        FROM ranked r
+        WHERE r.row_num <= $1
+          AND r.relevance_score > 0
+        ON CONFLICT (artist_id, suggested_artist_id)
+        DO UPDATE SET
+          relevance_score = EXCLUDED.relevance_score,
+          created_at = CURRENT_TIMESTAMP
+        RETURNING 1
+      )
+      SELECT COUNT(*)::INT AS inserted
+      FROM inserted_rows;
+    `,
+    [safeLimit]
+  );
+
+  return result.rows[0]?.inserted ?? 0;
 }
 
 async function ensureCloudSqlUserByFirebaseUid(

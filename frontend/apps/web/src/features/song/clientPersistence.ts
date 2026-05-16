@@ -1,3 +1,5 @@
+import { invalidateAccountSummaryCache } from '../account/repository';
+
 export interface SongUserPreferences {
   currentVersionId?: string;
   currentInstrumentId?: string;
@@ -215,6 +217,10 @@ export async function loadSongUserPreferences(songId: string): Promise<SongUserP
   const loadTask = (async () => {
     try {
       const userId = await getCurrentUserId();
+      if (userId === 'anonymous') {
+        return local;
+      }
+
       const headers = await buildAuthHeaders({
         Accept: 'application/json'
       });
@@ -268,6 +274,10 @@ export async function saveSongUserPreferences(songId: string, preferences: SongU
 
     try {
       const userId = await getCurrentUserId();
+      if (userId === 'anonymous') {
+        return;
+      }
+
       const headers = await buildAuthHeaders({
         'Content-Type': 'application/json'
       });
@@ -507,6 +517,7 @@ export async function requestCreateSong(payload: CreateSongPayload): Promise<Son
       songId?: string;
       versionIds?: string[];
     };
+    invalidateAccountSummaryCache();
     return {
       ok: true,
       songId: data.song?.id ?? data.songId,

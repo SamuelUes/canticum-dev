@@ -1068,7 +1068,8 @@ h2 {
   opacity: 0.95;
 }
 
-.song-icon-action.is-active {
+.song-icon-action.is-active,
+.artist-action-btn.is-active {
   background: rgb(167, 64, 64);
   animation: favoritePop 0.28s ease;
 }
@@ -2066,13 +2067,23 @@ h2 {
   margin-top: 0.4rem;
 }
 
-.artist-action-btn {
-  border: 1px solid #c8d4e2;
-  border-radius: 0.55rem;
-  background: #fff;
-  padding: 0.45rem 0.55rem;
+.artist-action-control {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.artist-action-btn {
+  width: 64px;
+  height: 48px;
+  border: 1px solid #adadad;
+  border-radius: 2rem;
+  background: #ffffff0a;
+  padding: 0.50rem 1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
   gap: 0.25rem;
   cursor: pointer;
@@ -2080,13 +2091,21 @@ h2 {
 }
 
 .artist-action-btn:hover {
-  background: #f0f4f9;
+  background: #ffffff;
 }
 
 .artist-action-btn span {
   font-size: 0.65rem;
   color: #3b5874;
   white-space: nowrap;
+}
+
+.artist-action-label {
+  font-size: 0.65rem;
+  color: #3b5874;
+  text-align: center;
+  line-height: 1.1;
+  max-width: 72px;
 }
 
 /* main content */
@@ -3024,7 +3043,8 @@ h2 {
   color: var(--color-bg);
 }
 
-.song-icon-action.is-active {
+.song-icon-action.is-active,
+.artist-action-btn.is-active {
   background: #df7462;
 }
 

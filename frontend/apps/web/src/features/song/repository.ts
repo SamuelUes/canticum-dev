@@ -1,6 +1,8 @@
 import { songMockById } from './mockData';
 import type { SongDetail, SongImage, SongSimplifiedArtist } from '../../types/song';
 import type { SongRef } from '../../types/repertoire';
+import { invalidateAccountSummaryCache } from '../account/repository';
+import { readClientCache, removeClientCacheByPrefix, writeClientCache } from '../shared/clientCache';
 
 export interface SongVersionUpdatePayload {
   id?: string;
@@ -45,6 +47,29 @@ const functionsBaseUrl = [
 ]
   .map((value) => (typeof value === 'string' ? value.trim() : ''))
   .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
+
+const SONG_DETAIL_CACHE_PREFIX = 'canticum:song:detail:v1:';
+const SONG_TITLE_CACHE_PREFIX = 'canticum:song:title:v1:';
+const SONG_DETAIL_CACHE_TTL_MS = 180_000;
+
+function getSongDetailCacheKey(songId: string, versionId?: string): string {
+  return `${SONG_DETAIL_CACHE_PREFIX}${songId}:${versionId?.trim() || 'base'}`;
+}
+
+function getSongTitleCacheKey(songId: string, versionId?: string): string {
+  return `${SONG_TITLE_CACHE_PREFIX}${songId}:${versionId?.trim() || 'base'}`;
+}
+
+export function invalidateSongCache(songId?: string): void {
+  if (songId && songId.trim().length > 0) {
+    removeClientCacheByPrefix(`${SONG_DETAIL_CACHE_PREFIX}${songId.trim()}:`);
+    removeClientCacheByPrefix(`${SONG_TITLE_CACHE_PREFIX}${songId.trim()}:`);
+    return;
+  }
+
+  removeClientCacheByPrefix(SONG_DETAIL_CACHE_PREFIX);
+  removeClientCacheByPrefix(SONG_TITLE_CACHE_PREFIX);
+}
 
 function normalizeImages(raw: unknown): SongImage[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -205,6 +230,12 @@ async function getSongDetailFromFunctions(songId: string, versionId?: string): P
     return null;
   }
 
+  const cacheKey = getSongDetailCacheKey(songId, versionId);
+  const cached = readClientCache<SongDetail>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const headers = await buildSongHeaders({ Accept: 'application/json' });
     const qs = versionId && versionId.trim()
@@ -228,7 +259,9 @@ async function getSongDetailFromFunctions(songId: string, versionId?: string): P
       return null;
     }
 
-    return normalizeSongDetail(song);
+    const normalized = normalizeSongDetail(song);
+    writeClientCache(cacheKey, normalized, SONG_DETAIL_CACHE_TTL_MS);
+    return normalized;
   } catch {
     return null;
   }
@@ -251,6 +284,12 @@ export async function getSongDetailById(songId: string, versionId?: string): Pro
 }
 
 export async function getSongTitleById(songId: string, versionId?: string): Promise<SongRef | null> {
+  const cacheKey = getSongTitleCacheKey(songId, versionId);
+  const cached = readClientCache<SongRef>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   if (functionsBaseUrl) {
     try {
       const headers = await buildSongHeaders({ Accept: 'application/json' });
@@ -287,13 +326,15 @@ export async function getSongTitleById(songId: string, versionId?: string): Prom
             return canonical || versionId;
           })();
 
-          return {
+          const result: SongRef = {
             id: raw.id,
             title: raw.title,
             artistName: typeof raw.artistName === 'string' ? raw.artistName : undefined,
             audioUrl: typeof raw.audioUrl === 'string' ? raw.audioUrl : undefined,
             ...(resolvedVersionId ? { versionId: resolvedVersionId } : {})
           };
+          writeClientCache(cacheKey, result, SONG_DETAIL_CACHE_TTL_MS);
+          return result;
         }
       }
     } catch {
@@ -305,13 +346,15 @@ export async function getSongTitleById(songId: string, versionId?: string): Prom
     return null;
   }
 
-  return {
+  const fallback: SongRef = {
     id: mock.id,
     title: mock.title,
     artistName: mock.artistName,
     audioUrl: mock.audioUrl,
     ...(versionId ? { versionId } : {})
   };
+  writeClientCache(cacheKey, fallback, SONG_DETAIL_CACHE_TTL_MS);
+  return fallback;
 }
 
 export async function requestUpdateSong(songId: string, update: SongUpdatePayload): Promise<SongActionResult> {
@@ -343,6 +386,8 @@ export async function requestUpdateSong(songId: string, update: SongUpdatePayloa
       createdVersionIds?: string[];
     };
 
+    invalidateSongCache(songId);
+    invalidateAccountSummaryCache();
     return {
       ok: true,
       data: {
@@ -374,6 +419,8 @@ export async function requestDeleteSong(songId: string): Promise<SongActionResul
       return { ok: false, reason: mapSongStatusToReason(response.status) };
     }
 
+    invalidateSongCache(songId);
+    invalidateAccountSummaryCache();
     return { ok: true };
   } catch {
     return { ok: false, reason: 'network' };

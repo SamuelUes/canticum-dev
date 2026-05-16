@@ -61,7 +61,7 @@ export function Header({ text }: HeaderProps) {
     <header className="topbar layout-h-margin">
       <div className="brand-box">
         <Link href="/" aria-label="Ir al inicio">
-          <Image src="/assets/icon/ofcanticumlogo.png" alt={text.brand} className="brand-logo-image" width={88} height={88} priority />
+          <Image src="/assets/icon/ofcanticumlogo.png" alt={text.brand} className="brand-logo-image" width={128} height={128} priority />
         </Link>
       </div>
 

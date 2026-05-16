@@ -2,14 +2,23 @@ import * as functions from 'firebase-functions/v1';
 import { FieldValue } from 'firebase-admin/firestore';
 import '../shared/firebaseAdmin';
 import { getAppFirestore } from '../shared/firestore';
-import { refreshFeaturedSongsSnapshot } from '../shared/cloudSql/songs';
+import { refreshArtistSuggestionsSnapshot, refreshFeaturedSongsSnapshot } from '../shared/cloudSql/songs';
 
 function getRefreshLimit(): number {
   const raw = Number(process.env.FEATURED_REFRESH_LIMIT ?? '100');
   if (!Number.isFinite(raw)) {
     return 100;
   }
+
   return Math.min(Math.max(Math.floor(raw), 1), 200);
+}
+
+function getSuggestionsLimit(): number {
+  const raw = Number(process.env.ARTIST_SUGGESTIONS_LIMIT ?? '12');
+  if (!Number.isFinite(raw)) {
+    return 12;
+  }
+  return Math.min(Math.max(Math.floor(raw), 1), 50);
 }
 
 function normalizeSnapshotWeek(snapshotWeek: string | Date): string {
@@ -31,12 +40,16 @@ export const refreshFeaturedSongsWeekly = functions
   .timeZone(process.env.FEATURED_REFRESH_TZ || 'America/Mexico_City')
   .onRun(async () => {
     const limit = getRefreshLimit();
+    const suggestionsLimit = getSuggestionsLimit();
     const rows = await refreshFeaturedSongsSnapshot(limit);
+    const insertedSuggestions = await refreshArtistSuggestionsSnapshot(suggestionsLimit);
 
     functions.logger.info('Featured snapshot refreshed in Cloud SQL', {
       limit,
       rows: rows.length,
-      snapshotWeek: rows[0]?.snapshotWeek ?? null
+      snapshotWeek: rows[0]?.snapshotWeek ?? null,
+      insertedSuggestions,
+      suggestionsLimit
     });
 
     if (rows.length === 0) {

@@ -49,6 +49,37 @@ interface SearchItem {
   artistName?: string;
 }
 
+function resolveArtistName(raw: Record<string, unknown>, fallback: string = 'Artista'): string {
+  const candidates = [raw.name, raw.artistName, raw.displayName, raw.stageName, raw.title, raw.authorOrChoir]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return candidates[0] ?? fallback;
+}
+
+function isMeaningfulArtistName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized.length > 0
+    && normalized !== 'artista'
+    && normalized !== 'artista sugerido'
+    && normalized !== 'unknown';
+}
+
+function normalizeArtistSubtitle(value: unknown, fallback: string = 'General'): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) {
+    return fallback;
+  }
+
+  const normalized = raw.toLowerCase();
+  if (normalized === 'unknown' || normalized === 'artista') {
+    return fallback;
+  }
+
+  return raw;
+}
+
 function computePopularity(raw: unknown, totalViews: number): number {
   const stored = Number(raw);
   if (Number.isFinite(stored) && stored >= 0) return Math.min(100, Math.round(stored));
@@ -481,18 +512,24 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   artistsSnap.docs.forEach((doc) => {
     const data = doc.data() as Record<string, unknown>;
+    const artistName = resolveArtistName(data, 'Artista');
+    if (!isMeaningfulArtistName(artistName)) {
+      return;
+    }
+
+    const artistSubtitle = normalizeArtistSubtitle(data.ministryType ?? data.type ?? data.subtitle, 'General');
     const item: SearchItem = {
       id: doc.id,
       kind: 'artist',
       type: 'artist',
       artistId: doc.id,
-      title: String(data.name ?? ''),
-      subtitle: String(data.ministryType ?? data.type ?? 'Artista'),
+      title: artistName,
+      subtitle: artistSubtitle,
       images: normalizeImages(data.images, typeof data.imageUrl === 'string' ? data.imageUrl : undefined),
       liturgicalType: 'General',
       liturgicalTime: 'Ordinario',
-      authorOrChoir: String(data.name ?? ''),
-      searchableText: `${String(data.name ?? '')} ${String(data.bio ?? '')}`.trim(),
+      authorOrChoir: artistName,
+      searchableText: `${artistName} ${artistSubtitle} ${String(data.bio ?? '')}`.trim(),
       songsCount: Number(data.songsCount ?? 0)
     };
     if (matchesQuery(item, query)) artists.push(item);
@@ -500,32 +537,46 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const sqlArtists = await sqlArtistsPromise;
   if (sqlArtists) {
-    const seenArtistIds = new Set(artists.map((item) => item.artistId ?? item.id));
+    const artistIndexById = new Map<string, number>();
+    artists.forEach((item, index) => {
+      artistIndexById.set(item.artistId ?? item.id, index);
+    });
 
     sqlArtists.forEach((artist) => {
       const artistId = String(artist.id);
-      if (seenArtistIds.has(artistId)) {
+      const artistName = resolveArtistName({ name: artist.name }, 'Artista');
+      if (!isMeaningfulArtistName(artistName)) {
         return;
       }
 
-      const item: SearchItem = {
+      const sqlItem: SearchItem = {
         id: artistId,
         kind: 'artist',
         type: 'artist',
         artistId,
-        title: artist.name,
-        subtitle: artist.type || 'Artista',
+        title: artistName,
+        subtitle: normalizeArtistSubtitle(artist.type, 'General'),
         images: artist.imageUrl ? [{ url: artist.imageUrl }] : undefined,
         liturgicalType: 'General',
         liturgicalTime: 'Ordinario',
-        authorOrChoir: artist.name,
-        searchableText: `${artist.name} ${artist.type}`.trim(),
+        authorOrChoir: artistName,
+        searchableText: `${artistName} ${String(artist.type ?? '')}`.trim(),
         songsCount: 0
       };
 
-      if (matchesQuery(item, query)) {
-        artists.push(item);
-        seenArtistIds.add(artistId);
+      const existingIndex = artistIndexById.get(artistId);
+      if (existingIndex !== undefined) {
+        const existing = artists[existingIndex];
+        const shouldReplace = !isMeaningfulArtistName(existing.title) && isMeaningfulArtistName(sqlItem.title);
+        if (shouldReplace) {
+          artists[existingIndex] = sqlItem;
+        }
+        return;
+      }
+
+      if (matchesQuery(sqlItem, query)) {
+        artists.push(sqlItem);
+        artistIndexById.set(artistId, artists.length - 1);
       }
     });
   }

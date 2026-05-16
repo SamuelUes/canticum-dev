@@ -52,6 +52,30 @@ function normalizeImages(raw: unknown): SearchImage[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function resolveArtistName(raw: Record<string, unknown>): string {
+  const candidates = [raw.title, raw.name, raw.artistName, raw.displayName, raw.stageName, raw.authorOrChoir]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return candidates[0] ?? 'Artista';
+}
+
+function resolveArtistSubtitle(raw: Record<string, unknown>): string {
+  const candidates = [raw.subtitle, raw.ministryType, raw.type, raw.liturgicalType]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  const resolved = candidates[0] ?? 'General';
+  const normalized = resolved.toLowerCase();
+  if (normalized === 'unknown' || normalized === 'artista') {
+    return 'General';
+  }
+
+  return resolved;
+}
+
 export async function getSearchDatasetClient(options: SearchDatasetClientOptions = {}): Promise<SearchDataset> {
   const { forceRefresh = false, timeoutMs = SEARCH_DATASET_FETCH_TIMEOUT_MS, scope = 'catalog' } = options;
   const cached = getCachedSearchDatasetClient(scope);
@@ -330,10 +354,16 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
   }
 
   if (kind === 'artist') {
+    const artistName = resolveArtistName(rawItem);
+    const artistSubtitle = resolveArtistSubtitle(rawItem);
     return {
       ...base,
       kind: 'artist',
       type: 'artist',
+      title: artistName,
+      subtitle: artistSubtitle,
+      authorOrChoir: artistName,
+      searchableText: `${artistName} ${artistSubtitle} ${String(rawItem.searchableText ?? '')}`.trim(),
       songsCount: Number(rawItem.songsCount ?? 0)
     };
   }

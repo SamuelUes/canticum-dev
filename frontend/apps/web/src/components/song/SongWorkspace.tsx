@@ -67,6 +67,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
   const lyricsRef = useRef<HTMLDivElement>(null);
   const audioTriggerTimeoutRef = useRef<number | null>(null);
+  const hasTrackedEntryRef = useRef(false);
 
   const userAccess = useMemo(() => {
     const isPremiumUser = Boolean(song.userAccess?.isPremiumUser) || Boolean(user?.isPremium);
@@ -185,6 +186,14 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   }, []);
 
   useEffect(() => {
+    if (hasTrackedEntryRef.current) {
+      return;
+    }
+    hasTrackedEntryRef.current = true;
+    void requestTrackSongListen(song.id);
+  }, [song.id]);
+
+  useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ message?: string }>).detail;
       if (detail?.message) {
@@ -229,7 +238,6 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     setAudioAutoplayToken((prev) => prev + 1);
     setSongAccessMessage('');
     triggerAudioFeedback();
-    void requestTrackSongListen(song.id);
   };
 
   const onToggleFavorite = () => {

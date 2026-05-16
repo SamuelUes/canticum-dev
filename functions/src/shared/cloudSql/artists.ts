@@ -14,6 +14,89 @@ export interface CloudSqlArtistRow {
   popularity?: number;
 }
 
+export interface ArtistViewMetricRow {
+  artistId: number;
+  totalViews: number;
+  likeCount: number;
+  popularity: number;
+}
+
+function clampMetricScore(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function computeArtistPopularity(totalViews: number, likeCount: number): number {
+  const safeViews = Number.isFinite(totalViews) && totalViews > 0 ? totalViews : 0;
+  const safeLikes = Number.isFinite(likeCount) && likeCount > 0 ? likeCount : 0;
+  const score = Math.log10(safeViews + 1) * 20 + Math.log10(safeLikes + 1) * 10;
+  return clampMetricScore(score);
+}
+
+export async function incrementArtistViewInCloudSql(artistId: number): Promise<ArtistViewMetricRow | null> {
+  const numericArtistId = Number(artistId);
+  if (!Number.isFinite(numericArtistId) || numericArtistId <= 0) {
+    return null;
+  }
+
+  const client = await getPool().connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const incrementResult = await client.query<{
+      id: number;
+      totalViews: number;
+      likeCount: number;
+    }>(
+      `
+        UPDATE artists
+        SET total_views = COALESCE(total_views, 0) + 1
+        WHERE id = $1
+        RETURNING
+          id,
+          COALESCE(total_views, 0)::INT AS "totalViews",
+          COALESCE(like_count, 0)::INT AS "likeCount";
+      `,
+      [numericArtistId]
+    );
+
+    if (!incrementResult.rows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const updated = incrementResult.rows[0];
+    const popularity = computeArtistPopularity(updated.totalViews, updated.likeCount);
+
+    await client.query(
+      `
+        UPDATE artists
+        SET popularity = $2
+        WHERE id = $1;
+      `,
+      [numericArtistId, popularity]
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      artistId: numericArtistId,
+      totalViews: updated.totalViews,
+      likeCount: updated.likeCount,
+      popularity
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export interface CloudSqlArtistSongProfileRow {
   id: string;
   title: string;
@@ -32,6 +115,7 @@ export interface CloudSqlArtistDiscographyProfileRow {
   title: string;
   year: number;
   coverUrl?: string;
+  albumId?: string;
   songId?: string;
   moderationState?: string;
   reviewStatus?: 'reviewed' | 'pending';
@@ -49,6 +133,11 @@ export interface CloudSqlArtistProfileBundle {
   discography: CloudSqlArtistDiscographyProfileRow[];
   suggestedArtists: CloudSqlSuggestedArtistProfileRow[];
   highlightedSongIds: string[];
+}
+
+export interface CloudSqlArtistLikeState {
+  isLiked: boolean;
+  likeCount: number;
 }
 
 let pool: Pool | null = null;
@@ -169,6 +258,25 @@ function getPool(): Pool {
   return pool;
 }
 
+async function resolveCloudSqlUserIdByFirebaseUid(firebaseUid: string): Promise<number | null> {
+  const uid = firebaseUid.trim();
+  if (!uid) {
+    return null;
+  }
+
+  const result = await getPool().query<{ id: number }>(
+    `
+      SELECT id
+      FROM users
+      WHERE firebase_uid = $1
+      LIMIT 1;
+    `,
+    [uid]
+  );
+
+  return result.rows[0]?.id ?? null;
+}
+
 export async function searchArtists(query: string, limit: number = 10): Promise<CloudSqlArtistRow[]> {
   const trimmed = query.trim();
   if (!trimmed) {
@@ -191,7 +299,19 @@ export async function searchArtists(query: string, limit: number = 10): Promise<
 
 export async function getArtistById(artistId: number): Promise<CloudSqlArtistRow | null> {
   const result = await getPool().query<CloudSqlArtistRow>(
-    `SELECT id, name, type, image_url AS "imageUrl" FROM artists WHERE id = $1 LIMIT 1;`,
+    `
+      SELECT
+        id,
+        name,
+        type,
+        image_url AS "imageUrl",
+        COALESCE(like_count, 0)::INT AS "likeCount",
+        COALESCE(total_views, 0)::INT AS "totalViews",
+        COALESCE(popularity, 0)::INT AS "popularity"
+      FROM artists
+      WHERE id = $1
+      LIMIT 1;
+    `,
     [artistId]
   );
 
@@ -222,7 +342,14 @@ export async function findArtistByNameSlug(slug: string): Promise<CloudSqlArtist
   const normalizedSlug = toArtistSlug(trimmed);
   const result = await getPool().query<CloudSqlArtistRow>(
     `
-      SELECT id, name, type, image_url AS "imageUrl"
+      SELECT
+        id,
+        name,
+        type,
+        image_url AS "imageUrl",
+        COALESCE(like_count, 0)::INT AS "likeCount",
+        COALESCE(total_views, 0)::INT AS "totalViews",
+        COALESCE(popularity, 0)::INT AS "popularity"
       FROM artists
       WHERE LOWER(name) = LOWER($1)
          OR LOWER(name) = LOWER($2)
@@ -235,6 +362,64 @@ export async function findArtistByNameSlug(slug: string): Promise<CloudSqlArtist
   );
 
   return result.rows[0] ?? null;
+}
+
+interface ArtistAlbumDiscographyQueryRow {
+  id: number;
+  title: string;
+  year: number | null;
+  coverUrl: string | null;
+  albumId: number;
+  moderationState: string | null;
+  reviewStatus: 'reviewed' | 'pending';
+}
+
+function mapAlbumDiscographyRows(rows: ArtistAlbumDiscographyQueryRow[]): CloudSqlArtistDiscographyProfileRow[] {
+  return rows.map((row, index) => ({
+    id: String(row.id ?? `discography-${index}`),
+    title: row.title,
+    year: Number.isFinite(row.year) ? Number(row.year) : new Date().getFullYear(),
+    coverUrl: row.coverUrl ?? undefined,
+    albumId: Number.isFinite(row.albumId) && Number(row.albumId) > 0 ? String(row.albumId) : undefined,
+    moderationState: row.moderationState ?? undefined,
+    reviewStatus: row.reviewStatus
+  }));
+}
+
+async function listArtistAlbumDiscographyRows(artistId: number): Promise<ArtistAlbumDiscographyQueryRow[]> {
+  const result = await getPool().query<ArtistAlbumDiscographyQueryRow>(
+    `
+      SELECT
+        a.id AS "id",
+        a.title AS "title",
+        COALESCE(a.release_year, EXTRACT(YEAR FROM a.release_date)::INT) AS "year",
+        NULLIF(COALESCE(a.cover_url, a.images_json -> 0 ->> 'url', ''), '') AS "coverUrl",
+        a.id AS "albumId",
+        NULLIF(UPPER(COALESCE(a.status, '')), '') AS "moderationState",
+        CASE
+          WHEN UPPER(COALESCE(a.status, '')) IN ('APPROVED', 'PUBLISHED') THEN 'reviewed'
+          ELSE 'pending'
+        END AS "reviewStatus"
+      FROM albums a
+      WHERE a.artist_id = $1
+        AND (
+          a.status IS NULL
+          OR UPPER(COALESCE(a.status, '')) IN ('APPROVED', 'PUBLISHED')
+        )
+      ORDER BY
+        COALESCE(a.release_year, EXTRACT(YEAR FROM a.release_date)::INT) DESC NULLS LAST,
+        a.id DESC
+      LIMIT 20;
+    `,
+    [artistId]
+  );
+
+  return result.rows;
+}
+
+export async function listArtistAlbumsByArtistId(artistId: number): Promise<CloudSqlArtistDiscographyProfileRow[]> {
+  const rows = await listArtistAlbumDiscographyRows(artistId);
+  return mapAlbumDiscographyRows(rows);
 }
 
 export async function getArtistProfileBundle(
@@ -259,7 +444,7 @@ export async function getArtistProfileBundle(
 
   const artistId = artist.id;
 
-  const [artistMetaResult, songsResult, discographyResult, suggestionsResult, featuredResult] = await Promise.all([
+  const [artistMetaResult, songsResult, discographyRows, suggestionsResult, featuredResult] = await Promise.all([
     getPool().query<{
       bio: string | null;
       imageUrl: string | null;
@@ -338,7 +523,10 @@ export async function getArtistProfileBundle(
         LEFT JOIN instruments i ON i.id = sv.instrument_id
         LEFT JOIN song_states ss ON ss.id = s.state_id
         LEFT JOIN users u ON u.id = s.user_id
-        WHERE s.artist_id = $1
+        WHERE (
+            s.artist_id = $1
+            OR sv.artist_id = $1
+          )
           AND (
             ss.id IS NULL
             OR UPPER(COALESCE(ss.code, '')) IN ('PUBLISHED', 'APPROVED')
@@ -359,47 +547,7 @@ export async function getArtistProfileBundle(
       `,
       [artistId, viewerFirebaseUid ?? null]
     ),
-    getPool().query<{
-      id: number;
-      title: string;
-      year: number | null;
-      coverUrl: string | null;
-      songId: number | null;
-      moderationState: string | null;
-      reviewStatus: 'reviewed' | 'pending';
-    }>(
-      `
-        SELECT
-          ad.id AS "id",
-          ad.title AS "title",
-          ad.release_year AS "year",
-          ad.cover_url AS "coverUrl",
-          ad.song_id AS "songId",
-          NULLIF(UPPER(COALESCE(ss.code, '')), '') AS "moderationState",
-          CASE
-            WHEN UPPER(COALESCE(ss.code, '')) = 'APPROVED' THEN 'reviewed'
-            ELSE 'pending'
-          END AS "reviewStatus"
-        FROM artist_discography ad
-        LEFT JOIN songs s ON s.id = ad.song_id
-        LEFT JOIN song_states ss ON ss.id = s.state_id
-        LEFT JOIN users u ON u.id = s.user_id
-        WHERE ad.artist_id = $1
-          AND (
-            ad.song_id IS NULL
-            OR ss.id IS NULL
-            OR UPPER(COALESCE(ss.code, '')) IN ('PUBLISHED', 'APPROVED')
-            OR (
-              UPPER(COALESCE(ss.code, '')) = 'DRAFT'
-              AND $2::TEXT IS NOT NULL
-              AND u.firebase_uid = $2::TEXT
-            )
-          )
-        ORDER BY ad.order_index ASC, ad.release_year DESC, ad.id DESC
-        LIMIT 20;
-      `,
-      [artistId, viewerFirebaseUid ?? null]
-    ),
+    listArtistAlbumDiscographyRows(artistId),
     getPool().query<{
       id: number;
       name: string;
@@ -447,21 +595,77 @@ export async function getArtistProfileBundle(
     reviewStatus: row.reviewStatus
   }));
 
-  const discography: CloudSqlArtistDiscographyProfileRow[] = discographyResult.rows.map((row, index) => ({
-    id: String(row.id ?? `discography-${index}`),
-    title: row.title,
-    year: Number.isFinite(row.year) ? Number(row.year) : new Date().getFullYear(),
-    coverUrl: row.coverUrl ?? undefined,
-    songId: Number.isFinite(row.songId) && Number(row.songId) > 0 ? String(row.songId) : undefined,
-    moderationState: row.moderationState ?? undefined,
-    reviewStatus: row.reviewStatus
-  }));
+  const discography = mapAlbumDiscographyRows(discographyRows);
 
   const suggestedArtists: CloudSqlSuggestedArtistProfileRow[] = suggestionsResult.rows.map((row) => ({
     id: String(row.id),
     name: row.name,
     imageUrl: row.imageUrl ?? undefined
   }));
+
+  if (suggestedArtists.length === 0) {
+    const normalizedGenres = normalizeGenres(artistMeta?.genres)
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => value.length > 0);
+
+    try {
+      const fallbackSuggestionsResult = await getPool().query<{
+        id: number;
+        name: string;
+        imageUrl: string | null;
+      }>(
+        `
+          SELECT
+            a.id AS "id",
+            a.name AS "name",
+            a.image_url AS "imageUrl"
+          FROM artists a
+          WHERE a.id <> $1
+            AND (
+              COALESCE(array_length($2::TEXT[], 1), 0) = 0
+              OR EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(
+                  CASE
+                    WHEN jsonb_typeof(a.genres_json) = 'array' THEN a.genres_json
+                    ELSE '[]'::jsonb
+                  END
+                ) AS g(value)
+                WHERE LOWER(TRIM(g.value)) = ANY($2::TEXT[])
+              )
+            )
+          ORDER BY
+            CASE
+              WHEN COALESCE(array_length($2::TEXT[], 1), 0) = 0 THEN 0
+              ELSE (
+                SELECT COUNT(*)::INT
+                FROM jsonb_array_elements_text(
+                  CASE
+                    WHEN jsonb_typeof(a.genres_json) = 'array' THEN a.genres_json
+                    ELSE '[]'::jsonb
+                  END
+                ) AS g2(value)
+                WHERE LOWER(TRIM(g2.value)) = ANY($2::TEXT[])
+              )
+            END DESC,
+            COALESCE(a.popularity, 0) DESC,
+            a.name ASC
+          LIMIT 12;
+        `,
+        [artistId, normalizedGenres]
+      );
+
+      fallbackSuggestionsResult.rows.forEach((row) => {
+        suggestedArtists.push({
+          id: String(row.id),
+          name: row.name,
+          imageUrl: row.imageUrl ?? undefined
+        });
+      });
+    } catch {
+      // Keep profile bundle available even if fallback suggestions fail.
+    }
+  }
 
   const highlightedFromFeatured = featuredResult.rows
     .map((row) => Number(row.songId))
@@ -517,4 +721,132 @@ export async function createArtist(name: string, type: string = 'unknown'): Prom
   }
 
   return result.rows[0];
+}
+
+export async function getArtistLikeState(artistId: number, viewerFirebaseUid: string): Promise<CloudSqlArtistLikeState> {
+  const uid = viewerFirebaseUid.trim();
+  if (!uid) {
+    return { isLiked: false, likeCount: 0 };
+  }
+
+  const userId = await resolveCloudSqlUserIdByFirebaseUid(uid);
+  if (!userId) {
+    return { isLiked: false, likeCount: 0 };
+  }
+
+  const result = await getPool().query<{
+    isLiked: boolean;
+    likeCount: number;
+  }>(
+    `
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM artist_likes al
+          WHERE al.artist_id = $1
+            AND al.user_id = $2
+        ) AS "isLiked",
+        COALESCE((
+          SELECT COUNT(*)::INT
+          FROM artist_likes al
+          WHERE al.artist_id = $1
+        ), 0) AS "likeCount";
+    `,
+    [artistId, userId]
+  );
+
+  return {
+    isLiked: Boolean(result.rows[0]?.isLiked),
+    likeCount: Number(result.rows[0]?.likeCount ?? 0)
+  };
+}
+
+export async function setArtistLike(artistId: number, viewerFirebaseUid: string): Promise<CloudSqlArtistLikeState> {
+  const uid = viewerFirebaseUid.trim();
+  if (!uid) {
+    throw new Error('Authenticated viewer uid is required to like an artist.');
+  }
+
+  const userId = await resolveCloudSqlUserIdByFirebaseUid(uid);
+  if (!userId) {
+    throw new Error('Cloud SQL user mapping not found for authenticated viewer.');
+  }
+
+  await getPool().query(
+    `
+      INSERT INTO artist_likes (artist_id, user_id)
+      VALUES ($1, $2)
+      ON CONFLICT (artist_id, user_id) DO NOTHING;
+    `,
+    [artistId, userId]
+  );
+
+  const syncResult = await getPool().query<{ likeCount: number }>(
+    `
+      WITH computed AS (
+        SELECT COUNT(*)::INT AS "likeCount"
+        FROM artist_likes
+        WHERE artist_id = $1
+      ),
+      updated AS (
+        UPDATE artists a
+        SET like_count = computed."likeCount"
+        FROM computed
+        WHERE a.id = $1
+        RETURNING a.like_count AS "likeCount"
+      )
+      SELECT "likeCount" FROM updated;
+    `,
+    [artistId]
+  );
+
+  return {
+    isLiked: true,
+    likeCount: Number(syncResult.rows[0]?.likeCount ?? 0)
+  };
+}
+
+export async function removeArtistLike(artistId: number, viewerFirebaseUid: string): Promise<CloudSqlArtistLikeState> {
+  const uid = viewerFirebaseUid.trim();
+  if (!uid) {
+    throw new Error('Authenticated viewer uid is required to unlike an artist.');
+  }
+
+  const userId = await resolveCloudSqlUserIdByFirebaseUid(uid);
+  if (!userId) {
+    throw new Error('Cloud SQL user mapping not found for authenticated viewer.');
+  }
+
+  await getPool().query(
+    `
+      DELETE FROM artist_likes
+      WHERE artist_id = $1
+        AND user_id = $2;
+    `,
+    [artistId, userId]
+  );
+
+  const syncResult = await getPool().query<{ likeCount: number }>(
+    `
+      WITH computed AS (
+        SELECT COUNT(*)::INT AS "likeCount"
+        FROM artist_likes
+        WHERE artist_id = $1
+      ),
+      updated AS (
+        UPDATE artists a
+        SET like_count = computed."likeCount"
+        FROM computed
+        WHERE a.id = $1
+        RETURNING a.like_count AS "likeCount"
+      )
+      SELECT "likeCount" FROM updated;
+    `,
+    [artistId]
+  );
+
+  return {
+    isLiked: false,
+    likeCount: Number(syncResult.rows[0]?.likeCount ?? 0)
+  };
 }

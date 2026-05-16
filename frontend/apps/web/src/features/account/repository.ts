@@ -1,9 +1,14 @@
+import { readClientCache, removeClientCacheByPrefix, writeClientCache } from '../shared/clientCache';
+
 const functionsBaseUrl = [
   process.env.GCP_FUNCTIONS_BASE_URL,
   process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
 ]
   .map((value) => (typeof value === 'string' ? value.trim() : ''))
   .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
+
+const ACCOUNT_SUMMARY_CACHE_PREFIX = 'canticum:account:summary:v1:';
+const ACCOUNT_SUMMARY_CACHE_TTL_MS = 45_000;
 
 export type AccountSongSummary = {
   id: string;
@@ -101,6 +106,12 @@ export async function fetchAccountSummary(userId?: string): Promise<AccountSumma
     return null;
   }
 
+  const cacheKey = `${ACCOUNT_SUMMARY_CACHE_PREFIX}${userId ?? 'self'}`;
+  const cached = readClientCache<AccountSummary>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const headers = await buildAuthHeaders({ Accept: 'application/json' });
     if (!headers.Authorization) {
@@ -125,6 +136,7 @@ export async function fetchAccountSummary(userId?: string): Promise<AccountSumma
 
     const payload = (await response.json()) as unknown;
     if (isAccountSummary(payload)) {
+      writeClientCache(cacheKey, payload, ACCOUNT_SUMMARY_CACHE_TTL_MS);
       return payload;
     }
 
@@ -135,4 +147,8 @@ export async function fetchAccountSummary(userId?: string): Promise<AccountSumma
     }
     throw new Error('No se pudo cargar la cuenta.');
   }
+}
+
+export function invalidateAccountSummaryCache(): void {
+  removeClientCacheByPrefix(ACCOUNT_SUMMARY_CACHE_PREFIX);
 }

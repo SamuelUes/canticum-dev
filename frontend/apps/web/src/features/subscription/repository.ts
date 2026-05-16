@@ -1,4 +1,5 @@
 import type { SubscriptionPlan, UserSubscription, PaymentIntent } from '../../types/subscription';
+import { readClientCache, writeClientCache } from '../shared/clientCache';
 
 // Import mock data directly to avoid potential cache issues
 const subscriptionPlansMock: SubscriptionPlan[] = [
@@ -219,6 +220,8 @@ const subscriptionPlansMock: SubscriptionPlan[] = [
 ];
 
 const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+const SUBSCRIPTION_PLANS_CACHE_KEY = 'canticum:subscription:plans:v1';
+const SUBSCRIPTION_PLANS_CACHE_TTL_MS = 1_800_000;
 
 async function getAuthToken(): Promise<string | null> {
   try {
@@ -263,12 +266,19 @@ async function getSubscriptionPlansFromFunctions(): Promise<SubscriptionPlan[]> 
 }
 
 export async function getSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+  const cached = readClientCache<SubscriptionPlan[]>(SUBSCRIPTION_PLANS_CACHE_KEY);
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+
   const remotePlans = await getSubscriptionPlansFromFunctions();
 
   if (remotePlans.length > 0) {
+    writeClientCache(SUBSCRIPTION_PLANS_CACHE_KEY, remotePlans, SUBSCRIPTION_PLANS_CACHE_TTL_MS);
     return remotePlans;
   }
 
+  writeClientCache(SUBSCRIPTION_PLANS_CACHE_KEY, subscriptionPlansMock, SUBSCRIPTION_PLANS_CACHE_TTL_MS);
   return subscriptionPlansMock;
 }
 

@@ -1,4 +1,5 @@
 import { artistMockById, artistrepertoiresMock } from './mockData';
+import { readClientCache, writeClientCache } from '../shared/clientCache';
 import type {
   ArtistDetail,
   ArtistDiscographyItem,
@@ -12,6 +13,7 @@ function computePopularity(totalViews: number): number {
   if (!Number.isFinite(totalViews) || totalViews <= 0) {
     return 0;
   }
+
   const score = Math.round(Math.log10(totalViews + 1) * 20);
   return Math.max(0, Math.min(100, score));
 }
@@ -46,6 +48,18 @@ const functionsBaseUrl = [
 ]
   .map((value) => (typeof value === 'string' ? value.trim() : ''))
   .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
+
+const ARTIST_DETAIL_CACHE_PREFIX = 'canticum:artist:detail:v1:';
+const ARTIST_DETAIL_CACHE_TTL_MS = 300_000;
+const ARTIST_FAVORITE_CACHE_PREFIX = 'canticum:artist:favorite:v1:';
+
+function getArtistDetailCacheKey(artistId: string): string {
+  return `${ARTIST_DETAIL_CACHE_PREFIX}${artistId}`;
+}
+
+function getArtistFavoriteStorageKey(artistId: string): string {
+  return `${ARTIST_FAVORITE_CACHE_PREFIX}${artistId}`;
+}
 
 async function getServerSessionToken(): Promise<string | null> {
   if (typeof window !== 'undefined') {
@@ -128,11 +142,25 @@ function normalizeDiscographyItem(raw: Record<string, unknown>, index: number): 
   };
 }
 
+function resolveArtistName(raw: Record<string, unknown>, fallback: string): string {
+  const candidates = [raw.name, raw.artistName, raw.displayName, raw.stageName]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return candidates[0] ?? fallback;
+}
+
+function hasMeaningfulArtistName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized.length > 0 && normalized !== 'artista' && normalized !== 'artista sugerido';
+}
+
 function normalizeSuggestedArtist(raw: Record<string, unknown>, index: number): SuggestedArtistItem {
   const images = normalizeImages(raw);
   return {
     id: String(raw.id ?? `suggested-${index}`),
-    name: String(raw.name ?? 'Artista sugerido'),
+    name: resolveArtistName(raw, 'Artista sugerido'),
     imageUrl: images[0]?.url,
     images: images.length > 0 ? images : undefined
   };
@@ -196,7 +224,7 @@ function normalizeArtistDetail(raw: Record<string, unknown>): ArtistDetail {
   return {
     type: 'artist',
     id: String(raw.id ?? ''),
-    name: String(raw.name ?? ''),
+    name: resolveArtistName(raw, 'Artista'),
     bio: String(raw.bio ?? ''),
     ministryType,
     images,
@@ -241,6 +269,12 @@ async function getArtistDetailFromFunctions(artistId: string): Promise<ArtistDet
     return null;
   }
 
+  const cacheKey = getArtistDetailCacheKey(artistId);
+  const cached = readClientCache<ArtistDetail>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const headers = await buildArtistHeaders({ 'Cache-Control': 'no-store' });
     const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(artistId)}`, {
@@ -255,7 +289,13 @@ async function getArtistDetailFromFunctions(artistId: string): Promise<ArtistDet
 
     const payload = (await response.json()) as unknown;
     const raw = extractArtistPayload(payload);
-    return raw ? normalizeArtistDetail(raw) : null;
+    if (!raw) {
+      return null;
+    }
+
+    const normalized = normalizeArtistDetail(raw);
+    writeClientCache(cacheKey, normalized, ARTIST_DETAIL_CACHE_TTL_MS);
+    return normalized;
   } catch {
     return null;
   }
@@ -276,21 +316,201 @@ interface ArtistRouteLookupInput {
 }
 
 export async function getArtistDetailByRouteLookup({ artistId, artistSlug }: ArtistRouteLookupInput): Promise<ArtistDetail | null> {
-  const candidates = Array.from(new Set(
-    [artistId, artistSlug]
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0)
+  const normalizedArtistId = typeof artistId === 'string' ? artistId.trim() : '';
+  const normalizedSlug = typeof artistSlug === 'string' ? artistSlug.trim() : '';
+  const isNumericArtistId = /^[1-9]\d*$/.test(normalizedArtistId);
+
+  const orderedCandidates = Array.from(new Set(
+    [
+      isNumericArtistId ? normalizedArtistId : '',
+      normalizedSlug,
+      normalizedArtistId
+    ].filter((value) => value.length > 0)
   ));
 
-  for (const candidate of candidates) {
+  const scoreDetail = (detail: ArtistDetail): number => {
+    const songsScore = Math.max(detail.songs.length, 0) * 100_000;
+    const viewsScore = Math.max(Number(detail.totalViews) || 0, 0) * 10;
+    const likesScore = Math.max(Number(detail.likeCount) || 0, 0);
+    return songsScore + viewsScore + likesScore;
+  };
+
+  let bestMatch: ArtistDetail | null = null;
+  let bestScore = -1;
+  let namedMatch: ArtistDetail | null = null;
+
+  for (const candidate of orderedCandidates) {
     const detail = await getArtistDetailById(candidate);
-    if (detail) {
+    if (!detail) {
+      continue;
+    }
+
+    const score = scoreDetail(detail);
+    if (!bestMatch || score > bestScore) {
+      bestMatch = detail;
+      bestScore = score;
+    }
+
+    if (hasMeaningfulArtistName(detail.name)) {
+      namedMatch = detail;
+    }
+
+    if (detail.songs.length > 0 && detail.totalViews > 0) {
       return detail;
     }
   }
 
-  return null;
+  if (bestMatch && !hasMeaningfulArtistName(bestMatch.name) && namedMatch && hasMeaningfulArtistName(namedMatch.name)) {
+    return {
+      ...bestMatch,
+      name: namedMatch.name
+    };
+  }
+
+  return bestMatch;
+}
+
+export async function requestTrackArtistProfileView(artistId: string): Promise<boolean> {
+  const normalizedArtistId = artistId.trim();
+  if (!functionsBaseUrl || !normalizedArtistId) {
+    return false;
+  }
+
+  try {
+    const headers = await buildArtistHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+    const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(normalizedArtistId)}/listen`, {
+      method: 'POST',
+      headers,
+      cache: 'no-store'
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export interface ArtistFavoriteState {
+  isFavorite: boolean;
+  likeCount: number;
+}
+
+function readLocalArtistFavorite(artistId: string): ArtistFavoriteState | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getArtistFavoriteStorageKey(artistId));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<ArtistFavoriteState>;
+    if (typeof parsed.isFavorite !== 'boolean') {
+      return null;
+    }
+    return {
+      isFavorite: parsed.isFavorite,
+      likeCount: Number.isFinite(Number(parsed.likeCount)) ? Number(parsed.likeCount) : 0
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalArtistFavorite(artistId: string, state: ArtistFavoriteState): ArtistFavoriteState {
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(getArtistFavoriteStorageKey(artistId), JSON.stringify(state));
+    } catch {
+      // no-op
+    }
+  }
+  return state;
+}
+
+export async function loadArtistFavoriteState(artistId: string): Promise<ArtistFavoriteState | null> {
+  const normalizedArtistId = artistId.trim();
+  if (!normalizedArtistId) {
+    return null;
+  }
+
+  const local = readLocalArtistFavorite(normalizedArtistId);
+
+  if (!functionsBaseUrl) {
+    return local;
+  }
+
+  try {
+    const headers = await buildArtistHeaders({ Accept: 'application/json' });
+    if (!headers.Authorization) {
+      return local;
+    }
+
+    const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(normalizedArtistId)}/favorite`, {
+      method: 'GET',
+      headers,
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      return local;
+    }
+
+    const payload = (await response.json()) as { isFavorite?: boolean; likeCount?: number };
+    if (typeof payload.isFavorite !== 'boolean') {
+      return local;
+    }
+
+    return saveLocalArtistFavorite(normalizedArtistId, {
+      isFavorite: payload.isFavorite,
+      likeCount: Number.isFinite(Number(payload.likeCount)) ? Number(payload.likeCount) : 0
+    });
+  } catch {
+    return local;
+  }
+}
+
+export async function saveArtistFavoriteState(artistId: string, isFavorite: boolean): Promise<ArtistFavoriteState | null> {
+  const normalizedArtistId = artistId.trim();
+  if (!normalizedArtistId) {
+    return null;
+  }
+
+  if (!functionsBaseUrl) {
+    const local = readLocalArtistFavorite(normalizedArtistId) ?? { isFavorite: false, likeCount: 0 };
+    const nextLikeCount = Math.max(local.likeCount + (isFavorite ? 1 : -1), 0);
+    return saveLocalArtistFavorite(normalizedArtistId, { isFavorite, likeCount: nextLikeCount });
+  }
+
+  try {
+    const headers = await buildArtistHeaders({ Accept: 'application/json' });
+    if (!headers.Authorization) {
+      return null;
+    }
+
+    const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(normalizedArtistId)}/favorite`, {
+      method: isFavorite ? 'PUT' : 'DELETE',
+      headers,
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { isFavorite?: boolean; likeCount?: number };
+    const nextState: ArtistFavoriteState = {
+      isFavorite: typeof payload.isFavorite === 'boolean' ? payload.isFavorite : isFavorite,
+      likeCount: Number.isFinite(Number(payload.likeCount)) ? Number(payload.likeCount) : 0
+    };
+
+    return saveLocalArtistFavorite(normalizedArtistId, nextState);
+  } catch {
+    return null;
+  }
 }
 
 /** Lightweight row returned by GET /artists/:id/songs. */

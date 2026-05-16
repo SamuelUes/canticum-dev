@@ -30,6 +30,35 @@ function timestampOf(value?: string | null): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function resolveArtistDisplayName(item: SearchEntityItem): string {
+  const candidates = [item.title, item.authorOrChoir]
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  if (candidates.length === 0) {
+    return 'Artista';
+  }
+
+  if (candidates[0].toLowerCase() === 'artista' && candidates[1]) {
+    return candidates[1];
+  }
+
+  return candidates[0];
+}
+
+function resolveArtistDisplaySubtitle(item: SearchEntityItem): string {
+  const raw = item.subtitle.trim();
+  if (!raw) {
+    return 'General';
+  }
+
+  if (raw.toLowerCase() === 'unknown') {
+    return 'General';
+  }
+
+  return raw;
+}
+
 function songToFeaturedCard(song: SearchSongItem): FeaturedSongCardData {
   return {
     id: song.songId ?? song.id,
@@ -50,12 +79,16 @@ function songToListItem(song: SearchSongItem): ListItemData {
 }
 
 export function HomeContent({ text }: HomeContentProps) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [dataset, setDataset] = useState<SearchDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const currentUserId = user?.uid ?? null;
 
   useEffect(() => {
+    if (authLoading) {
+      return;
+    }
+
     let disposed = false;
 
     const hydrate = async () => {
@@ -63,6 +96,8 @@ export function HomeContent({ text }: HomeContentProps) {
       if (!disposed && cached) {
         setDataset(cached);
         setLoading(false);
+      } else if (!disposed) {
+        setLoading(true);
       }
 
       try {
@@ -81,7 +116,7 @@ export function HomeContent({ text }: HomeContentProps) {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [authLoading, currentUserId]);
 
   const songs = useMemo<SearchSongItem[]>(() => {
     if (!dataset) return [];
@@ -100,7 +135,7 @@ export function HomeContent({ text }: HomeContentProps) {
       .slice(0, 24)
       .map((item) => ({
         id: item.artistId ?? item.id,
-        name: item.title,
+        name: resolveArtistDisplayName(item),
         avatarUrl: pickImage(item)
       }));
   }, [dataset]);
@@ -128,8 +163,8 @@ export function HomeContent({ text }: HomeContentProps) {
       .slice(0, 6)
       .map((item) => ({
         id: item.artistId ?? item.id,
-        title: item.title,
-        subtitle: item.subtitle || 'Artista',
+        title: resolveArtistDisplayName(item),
+        subtitle: resolveArtistDisplaySubtitle(item),
         avatarUrl: pickImage(item)
       }));
   }, [dataset]);

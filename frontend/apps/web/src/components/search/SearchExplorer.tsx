@@ -42,6 +42,29 @@ function includesQuery(item: SearchEntityItem, query: string) {
   return normalize(item.searchableText).includes(normalizedQuery) || normalize(item.title).includes(normalizedQuery);
 }
 
+function resolveArtistName(item: SearchEntityItem): string {
+  const title = item.title.trim();
+  const fallback = item.authorOrChoir.trim();
+
+  if (!title) {
+    return fallback || 'Artista';
+  }
+
+  if (title.toLowerCase() === 'artista' && fallback) {
+    return fallback;
+  }
+
+  return title;
+}
+
+function resolveArtistSubtitle(item: SearchEntityItem): string {
+  const subtitle = item.subtitle.trim();
+  if (!subtitle || subtitle.toLowerCase() === 'unknown') {
+    return 'General';
+  }
+  return subtitle;
+}
+
 export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerProps) {
   const router = useRouter();
   const cachedDataset = useMemo(() => dataset ?? getCachedSearchDatasetClient('catalog') ?? EMPTY_DATASET, [dataset]);
@@ -146,10 +169,11 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
     }
 
     if (item.kind === 'artist') {
+      const artistName = resolveArtistName(item);
       router.push(
         getArtistProfileHref({
           artistId: item.artistId ?? item.id,
-          artistName: item.title
+          artistName: artistName
         })
       );
       return;
@@ -345,8 +369,8 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           <div className="search-generic-grid">
             {grouped.artists.map((item) => (
               <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
-                <strong>{item.title}</strong>
-                <small>{item.subtitle}</small>
+                <strong>{resolveArtistName(item)}</strong>
+                <small>{resolveArtistSubtitle(item)}</small>
               </button>
             ))}
 

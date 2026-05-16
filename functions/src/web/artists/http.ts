@@ -2,7 +2,18 @@ import * as functions from 'firebase-functions/v1';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { getBodyRecord, getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
-import { createArtist, findArtistByNameSlug, getArtistById, getArtistProfileBundle, searchArtists } from '../../shared/cloudSql/artists';
+import {
+  createArtist,
+  findArtistByNameSlug,
+  getArtistById,
+  getArtistLikeState,
+  listArtistAlbumsByArtistId,
+  getArtistProfileBundle,
+  incrementArtistViewInCloudSql,
+  removeArtistLike,
+  searchArtists,
+  setArtistLike
+} from '../../shared/cloudSql/artists';
 import { listSongsByArtistId } from '../../shared/cloudSql/songs';
 
 interface ArtistSongRow {
@@ -50,6 +61,7 @@ function computePopularity(totalViews: number): number {
   if (!Number.isFinite(totalViews) || totalViews <= 0) {
     return 0;
   }
+
   const score = Math.round(Math.log10(totalViews + 1) * 20);
   return Math.max(0, Math.min(100, score));
 }
@@ -90,6 +102,15 @@ function normalizeImages(artistData: Record<string, unknown>): ArtistImage[] {
   return fallback ? [{ url: fallback }] : [];
 }
 
+function resolveArtistName(raw: Record<string, unknown>, fallback: string): string {
+  const candidates = [raw.name, raw.artistName, raw.displayName, raw.stageName]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return candidates[0] ?? fallback;
+}
+
 function buildSongRow(docId: string, data: Record<string, unknown>): ArtistSongRow {
   return {
     id: docId,
@@ -101,6 +122,47 @@ function buildSongRow(docId: string, data: Record<string, unknown>): ArtistSongR
     hasSheet: Boolean(data.hasSheet ?? (typeof data.sheetUrl === 'string' && (data.sheetUrl as string).length > 0)),
     isVerified: Boolean(data.isVerified)
   };
+}
+
+function resolveSongOwnerUid(data: Record<string, unknown>): string {
+  if (typeof data.ownerUserId === 'string' && data.ownerUserId.trim().length > 0) {
+    return data.ownerUserId.trim();
+  }
+  if (typeof data.createdBy === 'string' && data.createdBy.trim().length > 0) {
+    return data.createdBy.trim();
+  }
+  return '';
+}
+
+function isSongVisibleForViewer(data: Record<string, unknown>, viewerFirebaseUid: string | null): boolean {
+  const status = typeof data.status === 'string' ? data.status.trim().toUpperCase() : '';
+  if (status === 'APPROVED' || status === 'PUBLISHED') {
+    return true;
+  }
+  if (status === 'DRAFT' && viewerFirebaseUid) {
+    return resolveSongOwnerUid(data) === viewerFirebaseUid;
+  }
+  return false;
+}
+
+async function listVisibleFirestoreSongsByArtist(
+  db: FirebaseFirestore.Firestore,
+  artistId: string,
+  viewerFirebaseUid: string | null,
+  limit: number
+): Promise<ArtistSongRow[]> {
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 20;
+  const songsSnap = await db.collection('songs')
+    .where('artistId', '==', artistId)
+    .limit(Math.max(safeLimit * 5, safeLimit))
+    .get();
+
+  return songsSnap.docs
+    .map((doc) => ({ id: doc.id, data: (doc.data() ?? {}) as Record<string, unknown> }))
+    .filter((entry) => isSongVisibleForViewer(entry.data, viewerFirebaseUid))
+    .map((entry) => buildSongRow(entry.id, entry.data))
+    .sort((a, b) => b.views - a.views)
+    .slice(0, safeLimit);
 }
 
 function normalizeDiscographyItem(raw: Record<string, unknown>, index: number): ArtistDiscographyItem {
@@ -133,7 +195,7 @@ async function resolveSuggestedArtists(
 
     return rawSuggestions.map((item, index) => ({
       id: String(item.id ?? `suggested-${index}`),
-      name: String(item.name ?? 'Artista sugerido'),
+      name: resolveArtistName(item, 'Artista sugerido'),
       imageUrl: typeof item.imageUrl === 'string' && item.imageUrl ? item.imageUrl : undefined
     }));
   }
@@ -148,13 +210,28 @@ async function resolveSuggestedArtists(
       const data = (snap.data() ?? {}) as Record<string, unknown>;
       return {
         id: snap.id,
-        name: String(data.name ?? 'Artista sugerido'),
+        name: resolveArtistName(data, 'Artista sugerido'),
         imageUrl: typeof data.imageUrl === 'string' && data.imageUrl ? data.imageUrl : undefined
       } satisfies SuggestedArtistItem;
     })
   );
 
   return suggestions.filter((item): item is SuggestedArtistItem => item !== null);
+}
+
+async function resolveNumericArtistId(artistLookup: string): Promise<number | null> {
+  const normalized = artistLookup.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const numeric = Number.parseInt(normalized, 10);
+  if (Number.isFinite(numeric) && numeric > 0 && String(numeric) === normalized) {
+    return numeric;
+  }
+
+  const artist = await findArtistByNameSlug(decodeURIComponent(normalized));
+  return artist?.id ?? null;
 }
 
 export const artists = functions.https.onRequest(async (req, res) => {
@@ -206,11 +283,6 @@ export const artists = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  if (req.method !== 'GET') {
-    sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
-    return;
-  }
-
   if (segments.length < 1 || segments.length > 2) {
     sendError(res, 404, 'not_found', 'Endpoint not found.');
     return;
@@ -222,9 +294,124 @@ export const artists = functions.https.onRequest(async (req, res) => {
   const authContext = await getOptionalAuthContext(req);
   const viewerFirebaseUid = authContext?.uid ?? null;
 
+  if (subpath === 'favorite') {
+    if (!authContext?.uid) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const numericArtistId = await resolveNumericArtistId(artistId);
+    if (!numericArtistId) {
+      sendError(res, 404, 'not_found', 'Artist not found.');
+      return;
+    }
+
+    try {
+      if (req.method === 'GET') {
+        const state = await getArtistLikeState(numericArtistId, authContext.uid);
+        sendJson(res, 200, {
+          artistId: String(numericArtistId),
+          isFavorite: state.isLiked,
+          likeCount: state.likeCount
+        });
+        return;
+      }
+
+      if (req.method === 'PUT') {
+        const state = await setArtistLike(numericArtistId, authContext.uid);
+        sendJson(res, 200, {
+          ok: true,
+          artistId: String(numericArtistId),
+          isFavorite: state.isLiked,
+          likeCount: state.likeCount
+        });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        const state = await removeArtistLike(numericArtistId, authContext.uid);
+        sendJson(res, 200, {
+          ok: true,
+          artistId: String(numericArtistId),
+          isFavorite: state.isLiked,
+          likeCount: state.likeCount
+        });
+        return;
+      }
+
+      sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('user mapping not found')) {
+        sendError(res, 409, 'invalid_state', 'Authenticated user is not yet projected to Cloud SQL.');
+        return;
+      }
+      console.error('Artist favorite operation failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to persist artist favorite.');
+      return;
+    }
+  }
+
+  if (subpath === 'listen') {
+    if (req.method !== 'POST') {
+      sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
+      return;
+    }
+
+    const numericArtistId = await resolveNumericArtistId(artistId);
+    if (!numericArtistId) {
+      sendError(res, 404, 'not_found', 'Artist not found.');
+      return;
+    }
+
+    try {
+      const metrics = await incrementArtistViewInCloudSql(numericArtistId);
+      if (!metrics) {
+        sendError(res, 404, 'not_found', 'Artist not found.');
+        return;
+      }
+
+      try {
+        await db.collection('artists').doc(String(numericArtistId)).set(
+          {
+            totalViews: metrics.totalViews,
+            likeCount: metrics.likeCount,
+            popularity: metrics.popularity
+          },
+          { merge: true }
+        );
+      } catch {
+        // best-effort Firestore projection
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        artistId: String(metrics.artistId),
+        totalViews: metrics.totalViews,
+        likeCount: metrics.likeCount,
+        popularity: metrics.popularity
+      });
+      return;
+    } catch (error) {
+      console.error('Artist listen tracking failed:', error);
+      sendError(res, 500, 'internal_error', 'Failed to register artist listen.');
+      return;
+    }
+  }
+
   // Sub-endpoints: keep the base artist response lean and cacheable.
   if (subpath) {
+    if (req.method !== 'GET') {
+      sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
+      return;
+    }
     return handleArtistSubEndpoint(artistId, subpath, db, res, viewerFirebaseUid);
+  }
+
+  if (req.method !== 'GET') {
+    sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
+    return;
   }
 
   try {
@@ -276,15 +463,7 @@ export const artists = functions.https.onRequest(async (req, res) => {
     console.error('Cloud SQL artist bundle lookup failed:', error);
   }
 
-  const [artistSnap, songsSnap] = await Promise.all([
-    db.collection('artists').doc(artistId).get(),
-    db.collection('songs')
-      .where('artistId', '==', artistId)
-      .where('status', '==', 'PUBLISHED')
-      .orderBy('views', 'desc')
-      .limit(20)
-      .get()
-  ]);
+  const artistSnap = await db.collection('artists').doc(artistId).get();
 
   if (!artistSnap.exists) {
     const numericArtistId = Number.parseInt(artistId, 10);
@@ -324,16 +503,40 @@ export const artists = functions.https.onRequest(async (req, res) => {
   }
 
   const artistData = (artistSnap.data() ?? {}) as Record<string, unknown>;
+  const numericArtistId = Number.parseInt(artistId, 10);
+  const isNumericArtistId = Number.isFinite(numericArtistId) && numericArtistId > 0 && String(numericArtistId) === artistId;
 
-  const songs: ArtistSongRow[] = songsSnap.docs.map((doc) =>
-    buildSongRow(doc.id, (doc.data() ?? {}) as Record<string, unknown>)
-  );
+  let fallbackSqlArtist: Awaited<ReturnType<typeof getArtistById>> | null = null;
+  let sqlDiscography: ArtistDiscographyItem[] = [];
+
+  try {
+    fallbackSqlArtist = isNumericArtistId
+      ? await getArtistById(numericArtistId)
+      : await findArtistByNameSlug(decodeURIComponent(artistId));
+
+    if (fallbackSqlArtist?.id) {
+      const sqlAlbums = await listArtistAlbumsByArtistId(fallbackSqlArtist.id);
+      sqlDiscography = sqlAlbums.map((album) => ({
+        id: album.id,
+        title: album.title,
+        year: album.year,
+        coverUrl: album.coverUrl,
+        albumId: album.albumId,
+        moderationState: album.moderationState,
+        reviewStatus: album.reviewStatus
+      }));
+    }
+  } catch {
+    // keep Firestore fallback available even if SQL enrichment fails
+  }
+
+  const songs = await listVisibleFirestoreSongsByArtist(db, artistId, viewerFirebaseUid, 20);
 
   const totalViewsFromSongs = songs.reduce((acc, song) => acc + song.views, 0);
-  const totalViewsRaw = Number(artistData.totalViews ?? totalViewsFromSongs);
+  const totalViewsRaw = Number(artistData.totalViews ?? fallbackSqlArtist?.totalViews ?? totalViewsFromSongs);
   const totalViews = Number.isFinite(totalViewsRaw) ? totalViewsRaw : totalViewsFromSongs;
 
-  const likesRaw = Number(artistData.likeCount ?? artistData.likes ?? 0);
+  const likesRaw = Number(artistData.likeCount ?? artistData.likes ?? fallbackSqlArtist?.likeCount ?? 0);
   let likeCount = Number.isFinite(likesRaw) ? likesRaw : 0;
 
   if (likeCount === 0) {
@@ -351,7 +554,7 @@ export const artists = functions.https.onRequest(async (req, res) => {
         .map((value) => value.trim())
     : [];
 
-  const discography: ArtistDiscographyItem[] = Array.isArray(artistData.discography)
+  const firestoreDiscography: ArtistDiscographyItem[] = Array.isArray(artistData.discography)
     ? (artistData.discography as unknown[])
         .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
         .map(normalizeDiscographyItem)
@@ -362,23 +565,32 @@ export const artists = functions.https.onRequest(async (req, res) => {
         coverUrl: song.thumbnailUrl,
         songId: song.id
       }));
+  const discography = sqlDiscography.length > 0 ? sqlDiscography : firestoreDiscography;
 
   const suggestedArtists = await resolveSuggestedArtists(db, artistData);
 
   const highlightedSongs = songs.slice(0, 6).map((s) => s.id);
 
-  const ministryType = String(artistData.ministryType ?? artistData.type ?? 'General');
+  const ministryType = String(artistData.ministryType ?? artistData.type ?? fallbackSqlArtist?.type ?? 'General');
   const images = normalizeImages(artistData);
-  const imageUrl = images[0]?.url;
-  const popularityRaw = Number(artistData.popularity);
+  const imageUrl = images[0]?.url ?? fallbackSqlArtist?.imageUrl ?? undefined;
+  const popularityRaw = Number(artistData.popularity ?? fallbackSqlArtist?.popularity ?? computePopularity(totalViews));
   const popularity = Number.isFinite(popularityRaw) && popularityRaw >= 0
     ? Math.max(0, Math.min(100, Math.round(popularityRaw)))
     : computePopularity(totalViews);
 
+  const resolvedName = resolveArtistName(
+    {
+      ...artistData,
+      ...(fallbackSqlArtist?.name ? { name: fallbackSqlArtist.name } : {})
+    },
+    'Artista'
+  );
+
   sendJson(res, 200, {
     type: 'artist',
     id: artistSnap.id,
-    name: String(artistData.name ?? ''),
+    name: resolvedName,
     bio: String(artistData.bio ?? ''),
     ministryType,
     images,
@@ -455,18 +667,33 @@ async function handleArtistSubEndpoint(
   const artistData = (artistSnap.data() ?? {}) as Record<string, unknown>;
 
   if (subpath === 'top-songs') {
-    const songsSnap = await db.collection('songs')
-      .where('artistId', '==', artistId)
-      .where('status', '==', 'PUBLISHED')
-      .orderBy('views', 'desc')
-      .limit(20)
-      .get();
-    const songs = songsSnap.docs.map((doc) => buildSongRow(doc.id, (doc.data() ?? {}) as Record<string, unknown>));
+    const songs = await listVisibleFirestoreSongsByArtist(db, artistId, viewerFirebaseUid, 20);
     sendJson(res, 200, { items: songs });
     return;
   }
 
   if (subpath === 'discography') {
+    try {
+      const numericArtistId = await resolveNumericArtistId(artistId);
+      if (numericArtistId) {
+        const albums = await listArtistAlbumsByArtistId(numericArtistId);
+        sendJson(res, 200, {
+          items: albums.map((album) => ({
+            id: album.id,
+            title: album.title,
+            year: album.year,
+            coverUrl: album.coverUrl,
+            albumId: album.albumId,
+            moderationState: album.moderationState,
+            reviewStatus: album.reviewStatus
+          }))
+        });
+        return;
+      }
+    } catch {
+      // fallback to Firestore if SQL lookup is unavailable
+    }
+
     const discography: ArtistDiscographyItem[] = Array.isArray(artistData.discography)
       ? (artistData.discography as unknown[])
           .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')

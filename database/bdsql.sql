@@ -419,11 +419,23 @@ BEGIN
   END IF;
 
   SELECT
-    COALESCE(SUM(total_views), 0)::INT,
-    COALESCE(SUM(like_count), 0)::INT
-  INTO artist_total_views, artist_like_count
-  FROM songs
-  WHERE artist_id = target_artist_id;
+    COALESCE(SUM(song_metrics.total_views), 0)::INT
+  INTO artist_total_views
+  FROM (
+    SELECT DISTINCT
+      s.id,
+      COALESCE(s.total_views, 0)::INT AS total_views
+    FROM songs s
+    LEFT JOIN song_versions sv ON sv.song_id = s.id
+    WHERE s.artist_id = target_artist_id
+      OR sv.artist_id = target_artist_id
+  ) song_metrics;
+
+  SELECT
+    COUNT(*)::INT
+  INTO artist_like_count
+  FROM artist_likes al
+  WHERE al.artist_id = target_artist_id;
 
   UPDATE artists
   SET
@@ -597,7 +609,7 @@ BEGIN
       ) AS score
     FROM songs s
     LEFT JOIN song_states ss ON ss.id = s.state_id
-    WHERE UPPER(COALESCE(ss.code, '')) = 'PUBLISHED'
+    WHERE UPPER(COALESCE(ss.code, '')) IN ('PUBLISHED', 'APPROVED')
   ) ranked
   ORDER BY
     ranked.score DESC,

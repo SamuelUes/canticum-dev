@@ -1,4 +1,5 @@
 import type { repertoireListItem, RepertoireSongSearchOption } from '../../types/repertoire';
+import { invalidateAccountSummaryCache } from '../account/repository';
 
 export interface repertoireUpdatePayload {
   title?: string;
@@ -349,6 +350,7 @@ export async function requestDeleterepertoire(repertoireId: string): Promise<rep
 
     removeLocalCache(`${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`);
     removeLocalCache(`${REPERTOIRE_DETAIL_CACHE_PREFIX}${repertoireId}`);
+    invalidateAccountSummaryCache();
 
     return { ok: true };
   } catch {
@@ -460,6 +462,7 @@ export async function requestUpdaterepertoire(repertoireId: string, update: repe
 
     removeLocalCache(`${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`);
     removeLocalCache(`${REPERTOIRE_DETAIL_CACHE_PREFIX}${repertoireId}`);
+    invalidateAccountSummaryCache();
 
     return { ok: true };
   } catch {
@@ -506,6 +509,7 @@ export async function requestCreaterepertoire(payload: CreaterepertoirePayload):
 
     const data = (await response.json()) as { repertoire?: { id?: string } };
     removeLocalCache(`${REPERTOIRE_LIST_CACHE_PREFIX}${userId}`);
+    invalidateAccountSummaryCache();
     return { ok: true, repertoireId: data.repertoire?.id };
   } catch {
     return { ok: false, reason: 'network' };

@@ -2,7 +2,14 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  getArtistDetailById,
+  getPublicrepertoiresForArtist,
+  loadArtistFavoriteState,
+  requestTrackArtistProfileView,
+  saveArtistFavoriteState
+} from '../../features/artist/repository';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import type { ArtistDetail, ArtistImage, ArtistrepertoireRef, ArtistSongRow } from '../../types/artist';
 
@@ -42,13 +49,52 @@ interface ArtistProfileWorkspaceProps {
 
 export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWorkspaceProps) {
   const [activeFilter, setActiveFilter] = useState<FilterPill>('Letra');
+  const [favoriteState, setFavoriteState] = useState<{ isFavorite: boolean; likeCount: number }>({
+    isFavorite: false,
+    likeCount: artist.likeCount
+  });
+  const [isFavoritePending, setIsFavoritePending] = useState(false);
+  const [resolvedArtist, setResolvedArtist] = useState<ArtistDetail>(artist);
+  const [resolvedRepertoires, setResolvedRepertoires] = useState<ArtistrepertoireRef[]>(repertoires);
   const pills: FilterPill[] = ['Letra', 'Partituras', 'Repertorios'];
 
-  const totalViews = artist.totalViews;
-  const avatarSrc = pickImage(artist.images, 160, artist.imageUrl);
+  const artistData = resolvedArtist;
+
+  useEffect(() => {
+    setResolvedArtist(artist);
+    setResolvedRepertoires(repertoires);
+  }, [artist, repertoires]);
+
+  useEffect(() => {
+    let active = true;
+
+    const hydrateArtist = async (): Promise<void> => {
+      const fetchedArtist = await getArtistDetailById(artist.id);
+      if (!active || !fetchedArtist) {
+        return;
+      }
+
+      setResolvedArtist(fetchedArtist);
+      const fetchedRepertoires = await getPublicrepertoiresForArtist(fetchedArtist.songs.map((song) => song.id));
+      if (!active) {
+        return;
+      }
+      setResolvedRepertoires(fetchedRepertoires);
+    };
+
+    void hydrateArtist();
+
+    return () => {
+      active = false;
+    };
+  }, [artist.id]);
+
+  const totalViews = Number.isFinite(artistData.totalViews) ? artistData.totalViews : 0;
+  const displayArtistName = artistData.name.trim().length > 0 ? artistData.name : 'Artista';
+  const avatarSrc = pickImage(artistData.images, 160, artistData.imageUrl);
 
   const discographyCards = useMemo(() => {
-    return artist.discography.slice(0, 5).map((album, index) => ({
+    return artistData.discography.slice(0, 5).map((album, index) => ({
       id: album.id || `album-${index}`,
       title: album.title,
       year: album.year,
@@ -59,47 +105,124 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
         ? `/albums/${album.albumId}`
         : album.songId
           ? `/songs/${album.songId}`
-          : `/search?artist=${encodeURIComponent(artist.name)}`
+          : `/search?artist=${encodeURIComponent(displayArtistName)}`
     }));
-  }, [artist.discography, artist.name]);
+  }, [artistData.discography, displayArtistName]);
 
   const relatedArtists = useMemo(() => {
-    return artist.suggestedArtists
-      .filter((item) => item.name.toLowerCase() !== artist.name.toLowerCase())
+    return artistData.suggestedArtists
+      .filter((item) => item.name.toLowerCase() !== displayArtistName.toLowerCase())
       .slice(0, 5)
       .map((item, index) => ({
         id: item.id || `related-${index}`,
         name: item.name,
         imageUrl: pickImage(item.images, 160, item.imageUrl)
       }));
-  }, [artist.name, artist.suggestedArtists]);
+  }, [displayArtistName, artistData.suggestedArtists]);
 
-  const fanCount = artist.followers?.total ?? artist.likeCount;
+  useEffect(() => {
+    void requestTrackArtistProfileView(artistData.id);
+  }, [artistData.id]);
+
+  useEffect(() => {
+    let active = true;
+
+    setFavoriteState((prev) => ({
+      isFavorite: prev.isFavorite,
+      likeCount: artist.likeCount
+    }));
+
+    loadArtistFavoriteState(artist.id).then((state) => {
+      if (!active || !state) {
+        return;
+      }
+      setFavoriteState(state);
+    }).catch(() => {
+      // no-op
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [artist.id, artist.likeCount]);
+
+  const fanCount = Math.max(artistData.followers?.total ?? artistData.likeCount, favoriteState.likeCount, 0);
 
   const filteredSongs: ArtistSongRow[] = useMemo(() => {
     if (activeFilter === 'Letra') {
-      return artist.songs.filter((song) => song.hasLyrics);
+      return artistData.songs.filter((song) => song.hasLyrics);
     }
 
     if (activeFilter === 'Partituras') {
-      return artist.songs.filter((song) => song.hasSheet);
+      return artistData.songs.filter((song) => song.hasSheet);
     }
 
     return [];
-  }, [activeFilter, artist.songs]);
+  }, [activeFilter, artistData.songs]);
 
   const relevantrepertoires: ArtistrepertoireRef[] = useMemo(() => {
     if (activeFilter !== 'Repertorios') {
       return [];
     }
 
-    const artistSongIdSet = new Set(artist.songs.map((song) => song.id));
-    return repertoires.filter((repertoire) =>
+    const artistSongIdSet = new Set(artistData.songs.map((song) => song.id));
+    return resolvedRepertoires.filter((repertoire) =>
       repertoire.songIds.some((songId) => artistSongIdSet.has(songId))
     );
-  }, [activeFilter, artist.songs, repertoires]);
+  }, [activeFilter, artistData.songs, resolvedRepertoires]);
+
+  const songsToRender = useMemo(() => {
+    if (filteredSongs.length > 0) {
+      return filteredSongs;
+    }
+
+    if (activeFilter === 'Letra' || activeFilter === 'Partituras') {
+      return artistData.songs;
+    }
+
+    return [] as ArtistSongRow[];
+  }, [activeFilter, filteredSongs, artistData.songs]);
+
+  const metricGenreLabel = useMemo(() => {
+    const genres = Array.isArray(artistData.genres)
+      ? artistData.genres
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .filter((value) => value.length > 0)
+      : [];
+
+    return genres.slice(0, 2).join(' / ') || artistData.ministryType || 'General';
+  }, [artistData.genres, artistData.ministryType]);
 
   const padNumber = (index: number): string => String(index + 1).padStart(2, '0');
+
+  const handleToggleFavorite = async (): Promise<void> => {
+    if (isFavoritePending) {
+      return;
+    }
+
+    const nextIsFavorite = !favoriteState.isFavorite;
+    const fallbackLikeCount = Math.max(favoriteState.likeCount + (nextIsFavorite ? 1 : -1), 0);
+
+    setIsFavoritePending(true);
+    setFavoriteState({
+      isFavorite: nextIsFavorite,
+      likeCount: fallbackLikeCount
+    });
+
+    try {
+      const persisted = await saveArtistFavoriteState(artistData.id, nextIsFavorite);
+      if (persisted) {
+        setFavoriteState(persisted);
+      }
+    } catch {
+      setFavoriteState((prev) => ({
+        isFavorite: !nextIsFavorite,
+        likeCount: Math.max(prev.likeCount + (nextIsFavorite ? -1 : 1), 0)
+      }));
+    } finally {
+      setIsFavoritePending(false);
+    }
+  };
 
   return (
     <div className="artist-profile-layout">
@@ -107,29 +230,41 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
       <aside className="artist-sidebar">
         <div className="artist-avatar-wrap">
           {avatarSrc ? (
-            <Image src={avatarSrc} alt={artist.name} width={60} height={60} className="artist-avatar-img" />
+            <Image src={avatarSrc} alt={displayArtistName} width={60} height={60} className="artist-avatar-img" />
           ) : (
             <div className="artist-avatar-placeholder" aria-hidden>
-              <span>{artist.name.charAt(0)}</span>
+              <span>{displayArtistName.charAt(0)}</span>
             </div>
           )}
         </div>
 
-        <h1 className="artist-sidebar-name">{artist.name}</h1>
+        <h1 className="artist-sidebar-name">{displayArtistName}</h1>
 
         <div className="artist-sidebar-actions">
-          <button type="button" className="artist-action-btn" aria-label="Agregar a Favoritos">
-            <Image src="/assets/utils/heart/heart2x.png" alt="" width={20} height={20} />
-            <span>Agregar a Favoritos</span>
-          </button>
-          <button type="button" className="artist-action-btn" aria-label="Compartir">
-            <Image src="/assets/utils/iconshare-social/iconshare2x.png" alt="" width={20} height={20} />
-            <span>Compartir</span>
-          </button>
+          <div className="artist-action-control">
+            <button
+              type="button"
+              className={favoriteState.isFavorite ? 'artist-action-btn artist-action-btn--favorite is-active' : 'artist-action-btn artist-action-btn--favorite'}
+              aria-label={favoriteState.isFavorite ? 'Quitar de Favoritos' : 'Agregar a Favoritos'}
+              onClick={handleToggleFavorite}
+              disabled={isFavoritePending}
+            >
+              <Image src="/assets/utils/heart/heart2x.png" alt="" width={20} height={20} />
+            </button>
+            <span className="artist-action-label">{favoriteState.isFavorite ? 'En Favoritos' : 'Agregar a Favoritos'}</span>
+          </div>
+          <div className="artist-action-control">
+            <button type="button" className="artist-action-btn" aria-label="Compartir">
+              <Image src="/assets/utils/iconshare-social/iconshare2x.png" alt="" width={20} height={20} />
+              
+            </button>
+            <span className="artist-action-label">Compartir</span>
+          </div>
           {/* <button type="button" className="artist-action-btn" aria-label="Enviar acordes">
             <Image src="/assets/utils/volumeup/volumeup2x.png" alt="" width={20} height={20} />
             <span>Enviar acordes</span>
           </button> */}
+          
         </div>
       </aside>
 
@@ -137,7 +272,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
       <section className="artist-main">
         <header className="artist-main-head">
           <h2>Canciones populares</h2>
-          <Link href={`/search?artist=${encodeURIComponent(artist.name)}`} className="artist-see-more more-pill-link">
+          <Link href={`/search?artist=${encodeURIComponent(displayArtistName)}`} className="artist-see-more more-pill-link">
             Ver más &rsaquo;
           </Link>
         </header>
@@ -156,54 +291,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
           ))}
         </nav>
 
-        {/* ── Songs table (Letra / Partituras) ── */}
-        {activeFilter !== 'Repertorios' ? (
-          <>
-            <div className="artist-table-head">
-              <span className="artist-col-num" />
-              <span className="artist-col-thumb" />
-              <span className="artist-col-song">Canción</span>
-              <span className="artist-col-status">Estado</span>
-              <span className="artist-col-views">Visualizaciones</span>
-              <span className="artist-col-tone">Tono</span>
-            </div>
-
-            <ul className="artist-song-list" role="list">
-              {filteredSongs.map((song, index) => (
-                <li key={song.id} className="artist-song-row">
-                  <span className="artist-col-num">{padNumber(index)}</span>
-
-                  <span className="artist-col-thumb">
-                    {song.thumbnailUrl ? (
-                      <Image src={song.thumbnailUrl} alt="" width={36} height={36} className="artist-song-thumb" />
-                    ) : (
-                      <span className="artist-song-thumb-placeholder" aria-hidden />
-                    )}
-                  </span>
-
-                  <Link href={`/songs/${song.id}`} className="artist-col-song">
-                    {song.title}
-                    {song.isVerified ? <span className="artist-verified-badge" title="Verificado">✔</span> : null}
-                  </Link>
-
-                  <span className={`artist-col-status artist-status-chip ${song.reviewStatus === 'reviewed' ? 'is-reviewed' : 'is-pending'}`}>
-                    {getModerationStateLabel(song.moderationState)} · {getReviewLabel(song.reviewStatus)}
-                  </span>
-                  <span className="artist-col-views">{song.views.toLocaleString()}</span>
-                  <span className="artist-col-tone">{song.tone}</span>
-                </li>
-              ))}
-
-              {filteredSongs.length === 0 ? (
-                <li className="artist-song-row artist-empty-row">
-                  <span>No hay canciones con {activeFilter.toLowerCase()} disponibles.</span>
-                </li>
-              ) : null}
-            </ul>
-          </>
-        ) : null}
-
-        {/* ── repertoires grid ── */}
+        {/* songs / repertoires */}
         {activeFilter === 'Repertorios' ? (
           <ul className="artist-repertoire-list" role="list">
             {relevantrepertoires.map((repertoire) => (
@@ -215,19 +303,51 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
                 </Link>
               </li>
             ))}
-
             {relevantrepertoires.length === 0 ? (
               <li className="artist-repertoire-card artist-empty-row">
                 <span>No hay repertorios públicos que contengan canciones de este artista.</span>
               </li>
             ) : null}
           </ul>
-        ) : null}
+        ) : songsToRender.length > 0 ? (
+          <ul className="artist-song-list" role="list">
+            {songsToRender.map((song, index) => (
+              <li key={song.id} className="artist-song-row">
+                <span className="artist-col-num">{padNumber(index)}</span>
+
+                <span className="artist-col-thumb">
+                  {song.thumbnailUrl ? (
+                    <Image src={song.thumbnailUrl} alt="" width={36} height={36} className="artist-song-thumb" />
+                  ) : (
+                    <span className="artist-song-thumb-placeholder" aria-hidden />
+                  )}
+                </span>
+
+                <Link href={`/songs/${song.id}`} className="artist-col-song">
+                  {song.title}
+                  {song.isVerified ? <span className="artist-verified-badge" title="Verificado">✔</span> : null}
+                </Link>
+
+                <span className={`artist-col-status artist-status-chip ${song.reviewStatus === 'reviewed' ? 'is-reviewed' : 'is-pending'}`}>
+                  {getModerationStateLabel(song.moderationState)} · {getReviewLabel(song.reviewStatus)}
+                </span>
+                <span className="artist-col-views">{song.views.toLocaleString()}</span>
+                <span className="artist-col-tone">{song.tone}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="artist-empty-state">
+            {activeFilter === 'Partituras'
+              ? 'No hay partituras disponibles para este artista.'
+              : 'No hay canciones con letra disponibles.'}
+          </p>
+        )}
 
         {/* bottom "Ver más" */}
-        {activeFilter !== 'Repertorios' && filteredSongs.length > 0 ? (
+        {activeFilter !== 'Repertorios' && songsToRender.length > 0 ? (
           <div className="artist-bottom-more">
-            <Link href={`/search?artist=${encodeURIComponent(artist.name)}`} className="artist-see-more more-pill-link">
+            <Link href={`/search?artist=${encodeURIComponent(artistData.name)}`} className="artist-see-more more-pill-link">
               Ver más &rsaquo;
             </Link>
           </div>
@@ -238,7 +358,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
             <section className="artist-extra-section" aria-label="discografía">
               <header className="artist-main-head artist-main-head--compact">
                 <h2>Discografía</h2>
-                <Link href={`/search?artist=${encodeURIComponent(artist.name)}`} className="artist-see-more more-pill-link">
+                <Link href={`/search?artist=${encodeURIComponent(artistData.name)}`} className="artist-see-more more-pill-link">
                   Ver más &rsaquo;
                 </Link>
               </header>
@@ -299,7 +419,7 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
                 <small>Visualizaciones</small>
               </article>
               <article className="artist-metric">
-                <strong>{artist.genres.slice(0, 2).join(' / ') || artist.ministryType || 'General'}</strong>
+                <strong>{metricGenreLabel}</strong>
                 <small>Género / estilo</small>
               </article>
             </section>

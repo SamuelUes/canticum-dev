@@ -1,4 +1,5 @@
 import { albumMockById, albumsByArtistMock } from './mockData';
+import { readClientCache, writeClientCache } from '../shared/clientCache';
 import type {
   AlbumCopyright,
   AlbumDetail,
@@ -11,6 +12,18 @@ import type {
 } from '../../types/album';
 
 const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+
+const ALBUM_DETAIL_CACHE_PREFIX = 'canticum:album:detail:v1:';
+const ALBUM_ARTIST_LIST_CACHE_PREFIX = 'canticum:album:artist-list:v1:';
+const ALBUM_CACHE_TTL_MS = 300_000;
+
+function getAlbumDetailCacheKey(albumId: string): string {
+  return `${ALBUM_DETAIL_CACHE_PREFIX}${albumId}`;
+}
+
+function getAlbumsByArtistCacheKey(artistId: string): string {
+  return `${ALBUM_ARTIST_LIST_CACHE_PREFIX}${artistId}`;
+}
 
 function normalizeAlbumType(raw: unknown): AlbumType {
   const valid: AlbumType[] = ['album', 'single', 'ep', 'compilation', 'live'];
@@ -212,6 +225,12 @@ function extractAlbumPayload(payload: unknown): Record<string, unknown> | null {
 async function getAlbumDetailFromFunctions(albumId: string): Promise<AlbumDetail | null> {
   if (!functionsBaseUrl) return null;
 
+  const cacheKey = getAlbumDetailCacheKey(albumId);
+  const cached = readClientCache<AlbumDetail>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const response = await fetch(`${functionsBaseUrl}/albums/${albumId}`, {
       method: 'GET',
@@ -222,7 +241,13 @@ async function getAlbumDetailFromFunctions(albumId: string): Promise<AlbumDetail
 
     const payload = (await response.json()) as unknown;
     const raw = extractAlbumPayload(payload);
-    return raw ? normalizeAlbumDetail(raw) : null;
+    if (!raw) {
+      return null;
+    }
+
+    const normalized = normalizeAlbumDetail(raw);
+    writeClientCache(cacheKey, normalized, ALBUM_CACHE_TTL_MS);
+    return normalized;
   } catch {
     return null;
   }
@@ -237,6 +262,12 @@ export async function getAlbumDetailById(albumId: string): Promise<AlbumDetail |
 
 async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRef[] | null> {
   if (!functionsBaseUrl) return null;
+
+  const cacheKey = getAlbumsByArtistCacheKey(artistId);
+  const cached = readClientCache<AlbumRef[]>(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
   try {
     const response = await fetch(`${functionsBaseUrl}/albums?artistId=${encodeURIComponent(artistId)}`, {
@@ -257,7 +288,7 @@ async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRe
 
     if (!list) return null;
 
-    return list
+    const normalized = list
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
       .map((item) => {
         const id = String(item.id ?? '');
@@ -281,6 +312,9 @@ async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRe
         };
       })
       .filter((a) => a.id.length > 0);
+
+    writeClientCache(cacheKey, normalized, ALBUM_CACHE_TTL_MS);
+    return normalized;
   } catch {
     return null;
   }

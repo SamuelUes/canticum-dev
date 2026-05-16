@@ -5,6 +5,7 @@ import {
   onIdTokenChanged,
   type User
 } from 'firebase/auth';
+import { removeClientCacheByPrefix, removeSessionCacheByPrefix } from '../shared/clientCache';
 
 const functionsBaseUrl = (process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
 
@@ -323,12 +324,20 @@ export async function signOut(): Promise<void> {
     writeDevSession(null);
     setExplicitSignOut(true);
     clearSessionCookie();
+    removeClientCacheByPrefix('canticum:');
+    removeClientCacheByPrefix('song-preferences:');
+    removeClientCacheByPrefix('song-favorite:');
+    removeSessionCacheByPrefix('__canticum_');
     return;
   }
 
   const { auth } = await import('../../services/firebase');
   await firebaseSignOut(auth);
   clearSessionCookie();
+  removeClientCacheByPrefix('canticum:');
+  removeClientCacheByPrefix('song-preferences:');
+  removeClientCacheByPrefix('song-favorite:');
+  removeSessionCacheByPrefix('__canticum_');
 }
 
 function writeSessionCookie(token: string): void {
