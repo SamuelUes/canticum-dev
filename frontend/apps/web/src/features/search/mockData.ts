@@ -21,6 +21,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Himno',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Coro Emanuel',
+    categories: ['musica-religiosa', 'alabanza-adoracion', 'entrada'],
     searchableText: 'alabare tu nombre cancion juan perez coro emmanuel himno ordinario',
     isPremium: false
   },
@@ -34,6 +35,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Litúrgico',
     liturgicalTime: 'Pascua',
     authorOrChoir: 'Coro Emanuel',
+    categories: ['musica-religiosa', 'pascua', 'comunion'],
     searchableText: 'santo eres tu cancion coro emmanuel liturgico pascua',
     isPremium: true
   },
@@ -48,6 +50,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Litúrgico',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Coro Emanuel',
+    categories: ['musica-religiosa', 'album', 'coro'],
     searchableText: 'album sendas eternas coro emmanuel liturgico',
     albumType: 'album',
     releaseYear: 2023,
@@ -65,6 +68,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Evento',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Grupo Fiat',
+    categories: ['pop', 'ep', 'juvenil'],
     searchableText: 'album en tu presencia grupo fiat ep evento',
     albumType: 'ep',
     releaseYear: 2020,
@@ -81,6 +85,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Litúrgico',
     liturgicalTime: 'Pentecostés',
     authorOrChoir: 'Coro Emanuel',
+    categories: ['musica-religiosa', 'pentecostes', 'misa-dominical'],
     searchableText: 'misa pentecostes repertorio estructura coro emmanuel liturgico',
     dateLabel: '12/Mayo/2026',
     songsCount: 8,
@@ -99,6 +104,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Evento',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Grupo Fiat',
+    categories: ['juvenil', 'evento', 'orquesta'],
     searchableText: 'concierto juvenil repertorio setlist actividad grupo fiat evento ordinario',
     dateLabel: '08/Mayo/2026',
     songsCount: 10,
@@ -117,6 +123,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Litúrgico',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'María Luz',
+    categories: ['musica-religiosa', 'boda', 'misa'],
     searchableText: 'boda repertorio misa solemne maria luz liturgico ordinario',
     dateLabel: '28/Abr/2026',
     songsCount: 8,
@@ -134,6 +141,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Evento',
     liturgicalTime: 'Adviento',
     authorOrChoir: 'Grupo Fiat',
+    categories: ['adviento', 'orquesta', 'ensayo'],
     searchableText: 'orquesta repertorio ensayo vigilia grupo fiat evento adviento',
     dateLabel: '20/Abr/2026',
     songsCount: 7,
@@ -151,6 +159,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Litúrgico',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Coro Emanuel',
+    categories: ['musica-religiosa', 'ministerio', 'coro'],
     searchableText: 'artista coro emmanuel ministerio coral liturgico',
     songsCount: 34
   },
@@ -164,6 +173,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Evento',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Grupo Fiat',
+    categories: ['juvenil', 'ensamble', 'ministerio'],
     searchableText: 'artista grupo fiat ensamble parroquial evento',
     songsCount: 27
   },
@@ -177,6 +187,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Himno',
     liturgicalTime: 'Ordinario',
     authorOrChoir: 'Ana Sofía',
+    categories: ['musica-religiosa', 'piano', 'version'],
     searchableText: 'version alabare piano ana sofia himno ordinario cifrado',
     instrument: 'Piano',
     notationType: 'Cifrado',
@@ -192,6 +203,7 @@ const items: SearchEntityItem[] = [
     liturgicalType: 'Litúrgico',
     liturgicalTime: 'Pascua',
     authorOrChoir: 'Grupo Fiat',
+    categories: ['musica-religiosa', 'orquesta', 'version'],
     searchableText: 'version santo orquesta grupo fiat liturgico pascua pentagrama',
     instrument: 'Orquesta',
     notationType: 'Pentagrama',
@@ -223,7 +235,8 @@ export const searchMockData: SearchDataset = {
   filters: {
     liturgicalTypes: ['Himno', 'Litúrgico', 'Evento'],
     liturgicalTimes: ['Ordinario', 'Adviento', 'Pascua', 'Pentecostés'],
-    authorOrChoirs: ['Coro Emanuel', 'Grupo Fiat', 'María Luz', 'Ana Sofía']
+    authorOrChoirs: ['Coro Emanuel', 'Grupo Fiat', 'María Luz', 'Ana Sofía'],
+    categories: ['todos', 'rock', 'pop', 'musica-religiosa', 'reggaeton', 'adviento', 'pascua', 'entrada', 'comunion']
   },
   items,
   buckets

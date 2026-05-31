@@ -1,4 +1,5 @@
-import { Pool, type PoolConfig } from 'pg';
+import { type Pool } from 'pg';
+import { getSharedPool } from './pool';
 
 export interface CloudSqlArtistRow {
   id: number;
@@ -140,8 +141,6 @@ export interface CloudSqlArtistLikeState {
   likeCount: number;
 }
 
-let pool: Pool | null = null;
-
 const SQL_TRANSLATE_FROM = 'ÁÀÂÄÃáàâäãÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÖÕóòôöõÚÙÛÜúùûüÑñÇç';
 const SQL_TRANSLATE_TO = 'AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuNnCc';
 const SQL_NAME_SLUG = `regexp_replace(lower(translate(trim(coalesce(name, '')), '${SQL_TRANSLATE_FROM}', '${SQL_TRANSLATE_TO}')), '[^a-z0-9]+', '-', 'g')`;
@@ -192,70 +191,8 @@ function normalizeGenres(raw: unknown): string[] {
     .filter((value) => value.length > 0);
 }
 
-function getRequiredEnv(key: string, fallbackKey?: string): string {
-  const value = process.env[key] ?? (fallbackKey ? process.env[fallbackKey] : undefined);
-  const normalized = typeof value === 'string' ? value.trim() : '';
-
-  if (!normalized) {
-    throw new Error(`Missing required Cloud SQL env var: ${key}${fallbackKey ? ` (or ${fallbackKey})` : ''}`);
-  }
-
-  return normalized;
-}
-
-function getOptionalEnv(key: string, fallbackKey?: string): string | undefined {
-  const value = process.env[key] ?? (fallbackKey ? process.env[fallbackKey] : undefined);
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  return normalized || undefined;
-}
-
-function getPoolConfig(): PoolConfig {
-  const database = getRequiredEnv('CLOUD_SQL_DATABASE', 'DB_NAME');
-  const user = getRequiredEnv('CLOUD_SQL_USER', 'DB_USER');
-  const password = getRequiredEnv('CLOUD_SQL_PASSWORD', 'DB_PASSWORD');
-
-  const host = getOptionalEnv('DB_HOST');
-  const portValue = getOptionalEnv('CLOUD_SQL_PORT', 'DB_PORT');
-  const port = portValue ? Number(portValue) : 5432;
-
-  if (!Number.isFinite(port) || port <= 0) {
-    throw new Error('Invalid Cloud SQL port.');
-  }
-
-  if (host) {
-    return {
-      host,
-      port,
-      database,
-      user,
-      password,
-      ssl: getOptionalEnv('CLOUD_SQL_SSL', 'DB_SSL') === 'true' ? { rejectUnauthorized: false } : false,
-      max: 5
-    };
-  }
-
-  const connectionName = getOptionalEnv('CLOUD_SQL_CONNECTION_STRING', 'CLOUD_SQL_CONNECTION_NAME');
-  if (!connectionName) {
-    throw new Error('Missing Cloud SQL host. Set DB_HOST or CLOUD_SQL_CONNECTION_STRING/CLOUD_SQL_CONNECTION_NAME.');
-  }
-
-  return {
-    host: `/cloudsql/${connectionName}`,
-    port,
-    database,
-    user,
-    password,
-    ssl: false,
-    max: 5
-  };
-}
-
 function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool(getPoolConfig());
-  }
-
-  return pool;
+  return getSharedPool();
 }
 
 async function resolveCloudSqlUserIdByFirebaseUid(firebaseUid: string): Promise<number | null> {
@@ -330,6 +267,27 @@ export async function listTopArtists(limit: number = 30): Promise<CloudSqlArtist
   );
 
   return result.rows;
+}
+
+export async function listActiveCategorySlugs(limit: number = 200): Promise<string[]> {
+  const normalizedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 200;
+
+  const activeResult = await getPool().query<{ slug: string }>(
+    `
+      SELECT slug
+      FROM categories
+      WHERE is_active = TRUE
+        AND slug IS NOT NULL
+        AND btrim(slug) <> ''
+      ORDER BY slug ASC
+      LIMIT $1;
+    `,
+    [normalizedLimit]
+  );
+
+  return activeResult.rows
+    .map((row) => (typeof row.slug === 'string' ? row.slug.trim().toLowerCase() : ''))
+    .filter((slug) => slug.length > 0);
 }
 
 export async function findArtistByNameSlug(slug: string): Promise<CloudSqlArtistRow | null> {

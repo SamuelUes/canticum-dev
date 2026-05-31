@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
-import { AuthProvider } from '../src/context/AuthContext';
-import { RuntimeStabilityGuard } from '../src/components/app/RuntimeStabilityGuard';
+import { Providers } from '../src/context/Providers';
+import 'react-loading-skeleton/dist/skeleton.css';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -12,10 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es" suppressHydrationWarning>
       <body suppressHydrationWarning>
-        <AuthProvider>
-          <RuntimeStabilityGuard />
-          {children}
-        </AuthProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

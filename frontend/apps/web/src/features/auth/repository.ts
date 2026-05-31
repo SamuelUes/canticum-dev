@@ -6,6 +6,7 @@ import {
   type User
 } from 'firebase/auth';
 import { removeClientCacheByPrefix, removeSessionCacheByPrefix } from '../shared/clientCache';
+import { clearAllPendingClientSyncs } from '../song/clientPersistence';
 
 const functionsBaseUrl = (process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
 
@@ -319,6 +320,8 @@ export async function signIn(email: string, password: string): Promise<AuthResul
 }
 
 export async function signOut(): Promise<void> {
+  clearAllPendingClientSyncs();
+
   if (!hasFirebaseConfig) {
     devMockSession = null;
     writeDevSession(null);

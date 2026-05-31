@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { useBlobUrl } from '../../hooks/useBlobUrl';
 import {
   requestCreaterepertoire,
   requestSearchRepertoireSongs,
@@ -55,7 +56,11 @@ export function CreaterepertoireWorkspace() {
   const [addedSongs, setAddedSongs] = useState<SongRef[]>([]);
 
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
+  const {
+    blobUrl: coverPreviewUrl,
+    setBlobFromFile: setCoverPreviewFromFile,
+    clearBlobUrl: clearCoverPreviewUrl
+  } = useBlobUrl();
   const [coverError, setCoverError] = useState('');
   const [coverPreparing, setCoverPreparing] = useState(false);
 
@@ -142,22 +147,12 @@ export function CreaterepertoireWorkspace() {
     };
   }, []);
 
-  useEffect(() => () => {
-    if (coverPreviewUrl) {
-      URL.revokeObjectURL(coverPreviewUrl);
-    }
-  }, [coverPreviewUrl]);
-
   const handleCoverSelection = async (file: File | null) => {
     setCoverError('');
 
-    if (coverPreviewUrl) {
-      URL.revokeObjectURL(coverPreviewUrl);
-    }
-
     if (!file) {
       setCoverFile(null);
-      setCoverPreviewUrl('');
+      clearCoverPreviewUrl();
       setCoverPreparing(false);
       return;
     }
@@ -167,14 +162,14 @@ export function CreaterepertoireWorkspace() {
     const prepared = await prepareCoverImageFile(file);
     if (!prepared.ok) {
       setCoverFile(null);
-      setCoverPreviewUrl('');
+      clearCoverPreviewUrl();
       setCoverError(prepared.error);
       setCoverPreparing(false);
       return;
     }
 
     setCoverFile(prepared.file);
-    setCoverPreviewUrl(URL.createObjectURL(prepared.file));
+    setCoverPreviewFromFile(prepared.file);
     setCoverPreparing(false);
   };
 
@@ -242,7 +237,7 @@ export function CreaterepertoireWorkspace() {
         setTimeout(() => router.push(`/repertoires/${result.repertoireId}`), 1200);
       }
       setCoverFile(null);
-      setCoverPreviewUrl('');
+      clearCoverPreviewUrl();
       setCoverError('');
       setCoverPreparing(false);
       setRepertoireDocId(generateFirestoreDocId('repertoires'));

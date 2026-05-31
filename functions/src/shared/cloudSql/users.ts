@@ -1,6 +1,7 @@
 import type { UserRecord } from 'firebase-admin/auth';
 import { randomBytes, scryptSync } from 'node:crypto';
-import { Pool, type PoolConfig } from 'pg';
+import { type Pool } from 'pg';
+import { getSharedPool } from './pool';
 
 interface CloudSqlUserRow {
   id: number;
@@ -10,72 +11,8 @@ interface CloudSqlUserRow {
   createdAt: Date;
 }
 
-let pool: Pool | null = null;
-
-function getRequiredEnv(key: string, fallbackKey?: string): string {
-  const value = process.env[key] ?? (fallbackKey ? process.env[fallbackKey] : undefined);
-  const normalized = typeof value === 'string' ? value.trim() : '';
-
-  if (!normalized) {
-    throw new Error(`Missing required Cloud SQL env var: ${key}${fallbackKey ? ` (or ${fallbackKey})` : ''}`);
-  }
-
-  return normalized;
-}
-
-function getOptionalEnv(key: string, fallbackKey?: string): string | undefined {
-  const value = process.env[key] ?? (fallbackKey ? process.env[fallbackKey] : undefined);
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  return normalized || undefined;
-}
-
-function getPoolConfig(): PoolConfig {
-  const database = getRequiredEnv('CLOUD_SQL_DATABASE', 'DB_NAME');
-  const user = getRequiredEnv('CLOUD_SQL_USER', 'DB_USER');
-  const password = getRequiredEnv('CLOUD_SQL_PASSWORD', 'DB_PASSWORD');
-
-  const host = getOptionalEnv('DB_HOST');
-  const portValue = getOptionalEnv('CLOUD_SQL_PORT', 'DB_PORT');
-  const port = portValue ? Number(portValue) : 5432;
-
-  if (!Number.isFinite(port) || port <= 0) {
-    throw new Error('Invalid Cloud SQL port. Set CLOUD_SQL_PORT or DB_PORT with a positive number.');
-  }
-
-  if (host) {
-    return {
-      host,
-      port,
-      database,
-      user,
-      password,
-      ssl: getOptionalEnv('CLOUD_SQL_SSL', 'DB_SSL') === 'true' ? { rejectUnauthorized: false } : false,
-      max: 5
-    };
-  }
-
-  const connectionName = getOptionalEnv('CLOUD_SQL_CONNECTION_STRING', 'CLOUD_SQL_CONNECTION_NAME');
-  if (!connectionName) {
-    throw new Error('Missing Cloud SQL host. Set DB_HOST or CLOUD_SQL_CONNECTION_STRING/CLOUD_SQL_CONNECTION_NAME.');
-  }
-
-  return {
-    host: `/cloudsql/${connectionName}`,
-    port,
-    database,
-    user,
-    password,
-    ssl: false,
-    max: 5
-  };
-}
-
 function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool(getPoolConfig());
-  }
-
-  return pool;
+  return getSharedPool();
 }
 
 function hashPassword(plaintext: string): string {

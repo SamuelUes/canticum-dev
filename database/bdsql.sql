@@ -71,6 +71,26 @@ CREATE TABLE song_states (
 );
 
 -- ================================
+-- CATEGORIES
+-- Catálogo jerárquico para género musical, tiempo eclesiástico,
+-- uso litúrgico, ocasión pastoral y otras clasificaciones.
+-- ================================
+CREATE TABLE categories (
+  id SERIAL PRIMARY KEY,
+  category_type VARCHAR(50) NOT NULL,
+  slug VARCHAR(120) UNIQUE NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  description TEXT,
+  parent_id INT,
+  sort_order INT DEFAULT 0,
+  is_active BOOLEAN DEFAULT TRUE,
+  metadata_json JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE SET NULL,
+  UNIQUE (category_type, name)
+);
+
+-- ================================
 -- SONGS
 -- ================================
 CREATE TABLE songs (
@@ -100,6 +120,9 @@ CREATE TABLE songs (
   album_id INT,
   -- external_urls_json: per-provider URLs, e.g. `{ "canticum": "...", "spotify": "..." }`.
   external_urls_json JSONB DEFAULT '{}'::jsonb,
+  -- categories_json: list of category tags used by UI filtering.
+  -- Example: ["rock", "musica religiosa", "adviento", "entrada"]
+  categories_json JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
   FOREIGN KEY (user_id) REFERENCES users(id),
@@ -139,6 +162,7 @@ CREATE TABLE artists (
   -- Can be overridden manually; otherwise the backend derives it from total_views.
   popularity SMALLINT DEFAULT 0,
   genres_json JSONB DEFAULT '[]'::jsonb,
+  categories_json JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -211,6 +235,8 @@ CREATE TABLE albums (
   upc VARCHAR(20),
   label VARCHAR(200),
   genres_json JSONB DEFAULT '[]'::jsonb,
+  -- categories_json: list of category tags used by UI filtering.
+  categories_json JSONB DEFAULT '[]'::jsonb,
   -- copyrights_json: list of `{ text, type: 'C' | 'P' }`.
   copyrights_json JSONB DEFAULT '[]'::jsonb,
   -- external_urls_json: per-provider URLs, e.g. `{ "canticum": "...", "spotify": "..." }`.
@@ -334,6 +360,8 @@ CREATE TABLE repertoires (
   user_id INT NOT NULL,
   title VARCHAR(200) NOT NULL,
   type VARCHAR(80),
+  -- categories_json: list of category tags used by UI filtering.
+  categories_json JSONB DEFAULT '[]'::jsonb,
   cover_url TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -693,6 +721,12 @@ CREATE UNIQUE INDEX idx_albums_upc ON albums(upc) WHERE upc IS NOT NULL;
 CREATE INDEX idx_album_songs_album ON album_songs(album_id);
 CREATE INDEX idx_album_songs_song ON album_songs(song_id);
 CREATE INDEX idx_album_songs_primary ON album_songs(is_primary_release);
+CREATE INDEX idx_categories_type ON categories(category_type);
+CREATE INDEX idx_categories_parent ON categories(parent_id);
+CREATE INDEX idx_songs_categories_json ON songs USING GIN (categories_json);
+CREATE INDEX idx_albums_categories_json ON albums USING GIN (categories_json);
+CREATE INDEX idx_repertoires_categories_json ON repertoires USING GIN (categories_json);
+CREATE INDEX idx_artists_categories_json ON artists USING GIN (categories_json);
 
 -- ================================
 -- BASE DATA (Opcional pero recomendado)
@@ -726,4 +760,26 @@ INSERT INTO song_states (code, description) VALUES
 ('PUBLISHED', 'Publicada'),
 ('ARCHIVED', 'Archivada');
 
-COMMIT;
+-- Categorías base (expandibles por panel admin o migraciones futuras)
+INSERT INTO categories (category_type, slug, name, description, sort_order) VALUES
+('GENRE', 'rock', 'Rock', 'Género musical rock.', 10),
+('GENRE', 'pop', 'Pop', 'Género musical pop.', 20),
+('GENRE', 'musica-religiosa', 'Música Religiosa', 'Canciones de enfoque cristiano y litúrgico.', 30),
+('GENRE', 'reggaeton', 'Reggaeton', 'Género urbano reggaeton.', 40),
+('GENRE', 'alabanza-adoracion', 'Alabanza y Adoración', 'Subgénero de música congregacional.', 50),
+('GENRE', 'gospel', 'Gospel', 'Música góspel.', 60),
+('LITURGICAL_TIME', 'adviento', 'Adviento', 'Tiempo litúrgico de preparación a la Navidad.', 10),
+('LITURGICAL_TIME', 'navidad', 'Navidad', 'Tiempo litúrgico de la Natividad.', 20),
+('LITURGICAL_TIME', 'cuaresma', 'Cuaresma', 'Tiempo litúrgico de preparación a Pascua.', 30),
+('LITURGICAL_TIME', 'pascua', 'Pascua', 'Tiempo litúrgico pascual.', 40),
+('LITURGICAL_TIME', 'tiempo-ordinario', 'Tiempo Ordinario', 'Tiempo litúrgico ordinario.', 50),
+('LITURGICAL_USE', 'entrada', 'Entrada', 'Canto de entrada.', 10),
+('LITURGICAL_USE', 'ofertorio', 'Ofertorio', 'Canto de ofertorio.', 20),
+('LITURGICAL_USE', 'comunion', 'Comunión', 'Canto de comunión.', 30),
+('LITURGICAL_USE', 'salida', 'Salida', 'Canto de salida.', 40),
+('MINISTRY', 'juvenil', 'Juvenil', 'Categoría ministerial juvenil.', 10),
+('MINISTRY', 'infantil', 'Infantil', 'Categoría ministerial infantil.', 20),
+('OCCASION', 'misa-dominical', 'Misa Dominical', 'Celebración ordinaria dominical.', 10),
+('OCCASION', 'adoracion-eucaristica', 'Adoración Eucarística', 'Espacios de adoración.', 20),
+('OCCASION', 'retiro', 'Retiro', 'Encuentros de retiro espiritual.', 30);
+

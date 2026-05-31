@@ -6,6 +6,7 @@ import { hasCloudSqlUser, upsertUserInCloudSql } from '../../shared/cloudSql/use
 import { runStartupDiagnostics } from '../../shared/diagnostics';
 import { getAppFirestore } from '../../shared/firestore';
 import {
+  getClientIp,
   getBodyRecord,
   getBodyString,
   getOptionalAuthContext,
@@ -14,6 +15,7 @@ import {
   sendError,
   sendJson
 } from '../../shared/http/http';
+import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
 
 interface UserProfileWrite {
   role: string;
@@ -161,6 +163,15 @@ export const auth = functions.https.onRequest(async (req, res) => {
       return;
     }
 
+    const registerLimiterIdentifier = requestUid ?? getClientIp(req) ?? 'anonymous';
+    const registerLimiter = await checkRateLimit(registerLimiterIdentifier, 'auth_register', 3, 3600);
+    applyRateLimitHeaders(res, 3, registerLimiter);
+    if (!registerLimiter.allowed) {
+      res.set('Retry-After', String(registerLimiter.retryAfterSeconds));
+      sendError(res, 429, 'too_many_requests', `Too many register attempts. Retry in ${registerLimiter.retryAfterSeconds}s.`);
+      return;
+    }
+
     const profile = buildProfileFromRequest(req);
 
     try {
@@ -203,6 +214,15 @@ export const auth = functions.https.onRequest(async (req, res) => {
   if (action === 'login') {
     if (!authContext?.uid) {
       sendError(res, 401, 'unauthorized', 'Valid ID token required.');
+      return;
+    }
+
+    const loginLimiterIdentifier = authContext.uid || getClientIp(req) || 'anonymous';
+    const loginLimiter = await checkRateLimit(loginLimiterIdentifier, 'auth_login', 20, 600);
+    applyRateLimitHeaders(res, 20, loginLimiter);
+    if (!loginLimiter.allowed) {
+      res.set('Retry-After', String(loginLimiter.retryAfterSeconds));
+      sendError(res, 429, 'too_many_requests', `Too many login attempts. Retry in ${loginLimiter.retryAfterSeconds}s.`);
       return;
     }
 

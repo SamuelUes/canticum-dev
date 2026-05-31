@@ -1,5 +1,6 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import Skeleton from 'react-loading-skeleton';
 import type { FeaturedSongCardData, HomeText } from '../../types/home';
 
 interface FeaturedSectionProps {
@@ -12,10 +13,10 @@ export function FeaturedSection({ title, songs, loading = false }: FeaturedSecti
   if (loading) {
     return (
       <section className="home-section layout-h-margin" aria-busy>
-        <div className="skeleton-pulse home-skeleton-title" />
+        <Skeleton className="home-skeleton-title" />
         <div className="home-skeleton-grid">
           {Array.from({ length: 4 }).map((_, idx) => (
-            <div key={idx} className="skeleton-pulse home-skeleton-card" />
+            <Skeleton key={idx} className="home-skeleton-card" />
           ))}
         </div>
       </section>

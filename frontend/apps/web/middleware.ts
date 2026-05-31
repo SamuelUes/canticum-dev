@@ -2,15 +2,49 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 const PROTECTED_ROUTES: Array<{ prefix: string; reason: 'auth' | 'auth-to-buy' }> = [
-  { prefix: '/repertoires', reason: 'auth' },
   { prefix: '/create/repertoires', reason: 'auth' },
   { prefix: '/create/song', reason: 'auth' },
-  { prefix: '/artistas', reason: 'auth' },
+  { prefix: '/account', reason: 'auth' },
   { prefix: '/checkout', reason: 'auth-to-buy' },
-  { prefix: '/premium', reason: 'auth-to-buy' }
+  { prefix: '/premium', reason: 'auth-to-buy' },
+  { prefix: '/payment', reason: 'auth-to-buy' }
 ];
 
 const AUTH_ROUTE = '/auth';
+
+function decodeBase64Url(value: string): string {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  return atob(padded);
+}
+
+function hasValidSessionStructure(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 3) {
+    return false;
+  }
+
+  try {
+    const payload = JSON.parse(decodeBase64Url(parts[1])) as { exp?: number; sub?: string; user_id?: string };
+    const subject = typeof payload.sub === 'string' && payload.sub.trim().length > 0
+      ? payload.sub.trim()
+      : typeof payload.user_id === 'string' && payload.user_id.trim().length > 0
+        ? payload.user_id.trim()
+        : '';
+
+    if (!subject) {
+      return false;
+    }
+
+    if (typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000)) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function buildRedirect(request: NextRequest, reason: 'auth' | 'auth-to-buy'): NextResponse {
   const loginUrl = new URL(AUTH_ROUTE, request.url);
@@ -36,7 +70,8 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const hasSession = request.cookies.has('__session');
+  const sessionCookie = request.cookies.get('__session')?.value;
+  const hasSession = Boolean(sessionCookie && hasValidSessionStructure(sessionCookie));
 
   if (!hasSession) {
     return buildRedirect(request, matched.reason);
@@ -47,11 +82,11 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/repertoires/:path*',
     '/create/repertoires/:path*',
     '/create/song/:path*',
-    '/artistas/:path*',
+    '/account/:path*',
     '/checkout/:path*',
-    '/premium/:path*'
+    '/premium/:path*',
+    '/payment/:path*'
   ]
 };

@@ -69,12 +69,15 @@ export function AudioPlayer({ src, title, autoPlay = false, showMainButton = tru
   const handleTogglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (audio.paused) {
-      void audio.play();
-    } else {
+    if (isPlaying) {
       audio.pause();
+    } else {
+      void audio.play().catch(() => {
+        setIsPlaying(false);
+        onPlayingChange?.(false);
+      });
     }
-  }, []);
+  }, [isPlaying, onPlayingChange]);
 
   const handleToggleMute = useCallback(() => {
     setMuted((prev) => {

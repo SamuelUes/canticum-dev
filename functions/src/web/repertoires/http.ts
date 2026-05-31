@@ -3,6 +3,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import {
+  getClientIp,
   getBodyRecord,
   getOptionalAuthContext,
   getPathSegments,
@@ -18,6 +19,7 @@ import {
   resolveIsPremium
 } from '../../shared/plan/planLimits';
 import { createRepertoireInCloudSql, searchSongsForRepertoire } from '../../shared/cloudSql/songs';
+import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
 
 function isMissingIndexError(error: unknown): boolean {
   const errorWithCode = error as { code?: unknown; message?: unknown };
@@ -198,6 +200,15 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
   if (segments.length === 0 && req.method === 'POST') {
     if (!requestUserId) {
       sendError(res, 401, 'unauthorized', 'Authenticated user required to create a repertoire.');
+      return;
+    }
+
+    const createLimiterIdentifier = requestUserId || getClientIp(req) || 'anonymous';
+    const createLimiter = await checkRateLimit(createLimiterIdentifier, 'repertoires_create', 20, 3600);
+    applyRateLimitHeaders(res, 20, createLimiter);
+    if (!createLimiter.allowed) {
+      res.set('Retry-After', String(createLimiter.retryAfterSeconds));
+      sendError(res, 429, 'too_many_requests', `Too many repertoire creation attempts. Retry in ${createLimiter.retryAfterSeconds}s.`);
       return;
     }
 

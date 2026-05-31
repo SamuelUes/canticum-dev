@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Skeleton from 'react-loading-skeleton';
 
 export interface ArtistOption {
   id: number;
@@ -111,7 +112,11 @@ export function ArtistAutocomplete({
         disabled={disabled}
         autoComplete="off"
       />
-      {loading && <span className="artist-autocomplete-loading">Buscando...</span>}
+      {loading && (
+        <span className="artist-autocomplete-loading" aria-label="Buscando artistas" aria-busy>
+          <Skeleton width={140} height={14} />
+        </span>
+      )}
       {showDropdown && suggestions.length > 0 && (
         <ul className="artist-autocomplete-dropdown">
           {suggestions.map((artist) => (

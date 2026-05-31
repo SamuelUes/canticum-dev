@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import Skeleton from 'react-loading-skeleton';
 import { useState } from 'react';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { HorizontalConveyor } from '../ui/HorizontalConveyor';
@@ -19,10 +20,10 @@ export function ArtistsSection({ title, artists, loading = false }: ArtistsSecti
   if (loading) {
     return (
       <section className="home-section layout-h-margin" aria-busy>
-        <div className="skeleton-pulse home-skeleton-title" />
+        <Skeleton className="home-skeleton-title" />
         <div className="home-skeleton-row">
           {Array.from({ length: 6 }).map((_, idx) => (
-            <div key={idx} className="skeleton-pulse home-skeleton-pill" />
+            <Skeleton key={idx} className="home-skeleton-pill" />
           ))}
         </div>
       </section>

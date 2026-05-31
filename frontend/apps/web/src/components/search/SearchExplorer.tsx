@@ -1,8 +1,9 @@
 'use client';
 
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import Skeleton from 'react-loading-skeleton';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { getCachedSearchDatasetClient, getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
 import { requestDeleterepertoire } from '../../features/repertoire/clientPersistence';
@@ -20,17 +21,43 @@ const KIND_ORDER: SearchEntityKind[] = ['song', 'album', 'repertoire', 'artist',
 
 interface SearchExplorerProps {
   initialQuery?: string;
+  initialCategory?: string;
   /** Optional initial dataset (e.g. SSR). When omitted, the explorer renders a skeleton until the client fetch resolves. */
   dataset?: SearchDataset;
 }
 
 const EMPTY_DATASET: SearchDataset = {
-  filters: { liturgicalTypes: [], liturgicalTimes: [], authorOrChoirs: [] },
+  filters: { liturgicalTypes: [], liturgicalTimes: [], authorOrChoirs: [], categories: [] },
   items: []
 };
 
 function normalize(value: string) {
   return value.trim().toLowerCase();
+}
+
+function parseKindsFromQuery(rawKinds: string | null): SearchEntityKind[] {
+  if (!rawKinds) {
+    return [...KIND_ORDER];
+  }
+
+  const parsedKinds = rawKinds
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item): item is SearchEntityKind => KIND_ORDER.includes(item as SearchEntityKind));
+
+  if (parsedKinds.length === 0) {
+    return [...KIND_ORDER];
+  }
+
+  return Array.from(new Set(parsedKinds));
+}
+
+function areKindsEqual(left: SearchEntityKind[], right: SearchEntityKind[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((kind) => right.includes(kind));
 }
 
 function includesQuery(item: SearchEntityItem, query: string) {
@@ -65,27 +92,52 @@ function resolveArtistSubtitle(item: SearchEntityItem): string {
   return subtitle;
 }
 
-export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerProps) {
+export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', dataset }: SearchExplorerProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const cachedDataset = useMemo(() => dataset ?? getCachedSearchDatasetClient('catalog') ?? EMPTY_DATASET, [dataset]);
+  const selectedKindsFromQuery = useMemo(() => parseKindsFromQuery(searchParams.get('kinds')), [searchParams]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [activeDataset, setActiveDataset] = useState<SearchDataset>(cachedDataset);
   const [isLoading, setIsLoading] = useState<boolean>(cachedDataset === EMPTY_DATASET);
-  const [removedrepertoireIds, setRemovedrepertoireIds] = useState<string[]>([]);
+  const [removedRepertoireIds, setRemovedRepertoireIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState(initialQuery);
-  const [selectedKinds, setSelectedKinds] = useState<SearchEntityKind[]>([...KIND_ORDER]);
+  const [selectedKinds, setSelectedKinds] = useState<SearchEntityKind[]>(selectedKindsFromQuery);
   const [selectedLiturgicalTypes, setSelectedLiturgicalTypes] = useState<string[]>([]);
   const [selectedLiturgicalTimes, setSelectedLiturgicalTimes] = useState<string[]>([]);
   const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
 
   useEffect(() => {
+    setSelectedKinds(selectedKindsFromQuery);
+  }, [selectedKindsFromQuery]);
+
+  useEffect(() => {
+    const currentKinds = parseKindsFromQuery(searchParams.get('kinds'));
+    if (areKindsEqual(currentKinds, selectedKinds)) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (selectedKinds.length === KIND_ORDER.length) {
+      nextParams.delete('kinds');
+    } else {
+      nextParams.set('kinds', selectedKinds.join(','));
+    }
+
+    const queryString = nextParams.toString();
+    router.replace(queryString ? `/search?${queryString}` : '/search', { scroll: false });
+  }, [router, searchParams, selectedKinds]);
+
+  useEffect(() => {
     let disposed = false;
+    const normalizedCategory = initialCategory.trim().toLowerCase();
+    const categoryParam = !normalizedCategory || normalizedCategory === 'todos' ? '' : normalizedCategory;
 
     const hydrate = async () => {
       try {
         const [resolvedUserId, resolvedDataset] = await Promise.all([
           getClientCurrentUserId(),
-          getSearchDatasetClient({ scope: 'catalog' })
+          getSearchDatasetClient({ scope: 'catalog', category: categoryParam })
         ]);
 
         if (disposed) {
@@ -106,11 +158,11 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [initialCategory]);
 
   const visibleItems = useMemo(() => {
     return activeDataset.items.filter((item) => {
-      if (item.kind === 'repertoire' && removedrepertoireIds.includes(item.id)) {
+      if (item.kind === 'repertoire' && removedRepertoireIds.has(item.id)) {
         return false;
       }
 
@@ -120,7 +172,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
 
       return item.ownerUserId === currentUserId || item.isPublic;
     });
-  }, [activeDataset.items, currentUserId, removedrepertoireIds]);
+  }, [activeDataset.items, currentUserId, removedRepertoireIds]);
 
   const filteredItems = useMemo(() => {
     return visibleItems.filter((item) => {
@@ -200,7 +252,11 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
       return;
     }
 
-    setRemovedrepertoireIds((prev) => [...prev, repertoire.id]);
+    setRemovedRepertoireIds((prev) => {
+      const next = new Set(prev);
+      next.add(repertoire.id);
+      return next;
+    });
   };
 
   return (
@@ -281,14 +337,14 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           <div aria-busy aria-label="Cargando resultados">
             {Array.from({ length: 4 }).map((_, idx) => (
               <div key={idx} className="search-results-section">
-                <div className="skeleton-pulse home-skeleton-title" />
-                <div className="skeleton-pulse search-skeleton-block" />
+                <Skeleton height={26} width={180} />
+                <Skeleton height={120} />
               </div>
             ))}
           </div>
         ) : null}
 
-        <section className="search-results-section" hidden={isLoading}>
+        <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('song')}>
           <h2>Canciones</h2>
           <div className="search-generic-grid">
             {grouped.songs.map((item) => (
@@ -300,7 +356,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           </div>
         </section>
 
-        <section className="search-results-section" hidden={isLoading}>
+        <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('album')}>
           <h2>Álbumes</h2>
           <div className="search-generic-grid">
             {grouped.albums.map((album) => (
@@ -313,7 +369,7 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           </div>
         </section>
 
-        <section className="search-results-section" hidden={isLoading}>
+        <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('repertoire')}>
           <h2>Repertorios</h2>
           <div className="search-repertoire-grid">
             {grouped.repertoires.map((repertoire) => (
@@ -364,22 +420,31 @@ export function SearchExplorer({ initialQuery = '', dataset }: SearchExplorerPro
           </div>
         </section>
 
-        <section className="search-results-section" hidden={isLoading}>
+        <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('artist')}>
           <h2>Artistas</h2>
           <div className="search-generic-grid">
-            {grouped.artists.map((item) => (
-              <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
-                <strong>{resolveArtistName(item)}</strong>
-                <small>{resolveArtistSubtitle(item)}</small>
-              </button>
-            ))}
+            {grouped.artists.length > 0
+              ? grouped.artists.map((item) => (
+                  <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
+                    <strong>{resolveArtistName(item)}</strong>
+                    <small>{resolveArtistSubtitle(item)}</small>
+                  </button>
+                ))
+              : <p className="search-empty-state">Sin artistas</p>}
+          </div>
+        </section>
 
-            {grouped.versions.map((item) => (
-              <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
-                <strong>{item.title}</strong>
-                <small>{item.subtitle}</small>
-              </button>
-            ))}
+        <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('version')}>
+          <h2>Versiones</h2>
+          <div className="search-generic-grid">
+            {grouped.versions.length > 0
+              ? grouped.versions.map((item) => (
+                  <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
+                    <strong>{item.title}</strong>
+                    <small>{item.subtitle}</small>
+                  </button>
+                ))
+              : <p className="search-empty-state">Sin versiones</p>}
           </div>
         </section>
       </article>

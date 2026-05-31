@@ -1,5 +1,6 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import Skeleton from 'react-loading-skeleton';
 import { CollapsiblePanel } from '../ui/CollapsiblePanel';
 import type { HomeText, ListItemData } from '../../types/home';
 
@@ -108,9 +109,9 @@ export function DualListSection({ left, right, loading = false }: DualListSectio
       <section className="home-section double-list-section layout-h-margin" aria-busy>
         {[0, 1].map((column) => (
           <div key={column} className="list-column">
-            <div className="skeleton-pulse home-skeleton-title" />
+            <Skeleton className="home-skeleton-title" />
             {Array.from({ length: 5 }).map((_, idx) => (
-              <div key={idx} className="skeleton-pulse home-skeleton-line" />
+              <Skeleton key={idx} className="home-skeleton-line" />
             ))}
           </div>
         ))}

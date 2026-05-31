@@ -63,7 +63,7 @@ export function SubscriptionPlans({ plans, onPlanSelect, currentPlan, processing
               onMouseEnter={() => setHoveredPlan(plan.id)}
               onMouseLeave={() => setHoveredPlan(null)}
             >
-              <h3 className="sp-plan-name">{isPremium ? 'PREMIUN' : 'FREE'}</h3>
+              <h3 className="sp-plan-name">{plan.name.toUpperCase()}</h3>
               <p className="sp-plan-desc">{plan.description}</p>
 
               <div className="sp-price-row">

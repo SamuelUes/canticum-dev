@@ -92,7 +92,22 @@
         { "fieldPath": "userId", "order": "ASCENDING" },
         { "fieldPath": "songId", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "_rate_limits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "_rate_limits",
+      "fieldPath": "expiresAt",
+      "ttl": {
+        "state": "ENABLED"
+      }
+    }
+  ]
 }

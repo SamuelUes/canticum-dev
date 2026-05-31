@@ -22,6 +22,25 @@ import type { SongDetail } from '../../types/song';
 type SidePanelMode = 'versions' | 'instruments' | null;
 type ScrollSpeed = 1 | 1.5 | 2;
 
+function getSheetFileExtension(url: string): string {
+  if (!url) {
+    return '';
+  }
+
+  const cleaned = url.split('?')[0]?.split('#')[0] ?? '';
+  const dot = cleaned.lastIndexOf('.');
+  if (dot < 0) {
+    return '';
+  }
+
+  return cleaned.slice(dot + 1).toLowerCase();
+}
+
+function isMusicXmlSheet(url: string): boolean {
+  const extension = getSheetFileExtension(url);
+  return extension === 'xml' || extension === 'musicxml' || extension === 'mxl';
+}
+
 interface SongWorkspaceProps {
   song: SongDetail;
   initialVersionId?: string;
@@ -64,8 +83,11 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const [scrollSpeed, setScrollSpeed] = useState<ScrollSpeed>(1);
   const [isProcessingPurchase, setIsProcessingPurchase] = useState(false);
   const [songAccessMessage, setSongAccessMessage] = useState('');
+  const [isRenderingSheet, setIsRenderingSheet] = useState(false);
+  const [sheetRenderError, setSheetRenderError] = useState('');
 
   const lyricsRef = useRef<HTMLDivElement>(null);
+  const sheetContainerRef = useRef<HTMLDivElement>(null);
   const audioTriggerTimeoutRef = useRef<number | null>(null);
   const hasTrackedEntryRef = useRef(false);
 
@@ -97,6 +119,25 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const selectedInstrument = useMemo(() => {
     return song.instruments.find((instrument) => instrument.id === selectedInstrumentId) ?? song.instruments[0];
   }, [selectedInstrumentId, song.instruments]);
+
+  const activeLyrics = useMemo(() => {
+    if (typeof selectedVersion?.lyrics === 'string' && selectedVersion.lyrics.trim().length > 0) {
+      return selectedVersion.lyrics;
+    }
+    return song.lyrics;
+  }, [selectedVersion?.lyrics, song.lyrics]);
+
+  const activeSheetUrl = useMemo(() => {
+    const fromVersion = typeof selectedVersion?.sheetFileUrl === 'string' ? selectedVersion.sheetFileUrl.trim() : '';
+    if (fromVersion.length > 0) {
+      return fromVersion;
+    }
+
+    const legacySongSheet = typeof song.sheet === 'string' ? song.sheet.trim() : '';
+    return legacySongSheet;
+  }, [selectedVersion?.sheetFileUrl, song.sheet]);
+
+  const shouldRenderMusicXmlSheet = useMemo(() => isMusicXmlSheet(activeSheetUrl), [activeSheetUrl]);
 
   const resolveCoverUrl = (value?: string | null) => (typeof value === 'string' && value.trim().length > 0 ? value.trim() : '');
   const coverImageUrl =
@@ -203,6 +244,76 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     window.addEventListener('canticum:plan_limit', handler);
     return () => window.removeEventListener('canticum:plan_limit', handler);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!shouldRenderMusicXmlSheet || !activeSheetUrl) {
+      setIsRenderingSheet(false);
+      setSheetRenderError('');
+      if (sheetContainerRef.current) {
+        sheetContainerRef.current.innerHTML = '';
+      }
+      return;
+    }
+
+    const container = sheetContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    setIsRenderingSheet(true);
+    setSheetRenderError('');
+    container.innerHTML = '';
+
+    void (async () => {
+      try {
+        const response = await fetch(activeSheetUrl, { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error('No se pudo cargar la partitura.');
+        }
+
+        const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+        const extension = getSheetFileExtension(activeSheetUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const isMxl = extension === 'mxl'
+          || contentType.includes('zip')
+          || contentType.includes('compressed');
+        const source: string | Uint8Array = isMxl
+          ? new Uint8Array(arrayBuffer)
+          : new TextDecoder().decode(arrayBuffer);
+
+        const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay');
+        const osmd = new OpenSheetMusicDisplay(container, {
+          autoResize: true,
+          drawTitle: false,
+          drawingParameters: 'compact'
+        });
+
+        await osmd.load(source);
+        osmd.render();
+
+        if (cancelled) {
+          return;
+        }
+      } catch {
+        if (!cancelled) {
+          setSheetRenderError('No se pudo renderizar la partitura automáticamente.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsRenderingSheet(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (container) {
+        container.innerHTML = '';
+      }
+    };
+  }, [activeSheetUrl, shouldRenderMusicXmlSheet]);
 
   const triggerAudioFeedback = () => {
     if (audioTriggerTimeoutRef.current !== null) {
@@ -534,9 +645,21 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
         </div>
 
         <div className="song-lyrics-scroll" ref={lyricsRef}>
-          <pre className="song-lyrics">{song.lyrics}</pre>
+          {shouldRenderMusicXmlSheet ? (
+            <div className="song-sheet-renderer" aria-live="polite">
+              {isRenderingSheet ? <p className="song-sheet-status">Cargando partitura…</p> : null}
+              <div className="song-sheet-canvas" ref={sheetContainerRef} aria-label="Partitura renderizada" />
+              {sheetRenderError ? <p className="song-sheet-error">{sheetRenderError}</p> : null}
+            </div>
+          ) : (
+            <pre className="song-lyrics">{activeLyrics}</pre>
+          )}
 
-          {song.sheet ? <p className="song-sheet-hint">{song.sheet}</p> : null}
+          {activeSheetUrl ? (
+            <p className="song-sheet-hint">
+              <a href={activeSheetUrl} target="_blank" rel="noreferrer">Abrir archivo de partitura</a>
+            </p>
+          ) : null}
         </div>
       </article>
     </section>

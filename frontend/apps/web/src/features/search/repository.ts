@@ -17,6 +17,7 @@ interface SearchDatasetClientOptions {
   forceRefresh?: boolean;
   timeoutMs?: number;
   scope?: 'home' | 'catalog';
+  category?: string;
 }
 
 interface SearchDatasetCacheEntry {
@@ -31,6 +32,16 @@ const MAX_NORMALIZED_ITEMS = 1_500;
 
 const inMemorySearchDatasetCacheByScope = new Map<'home' | 'catalog', SearchDatasetCacheEntry>();
 const inFlightSearchDatasetRequestByScope = new Map<'home' | 'catalog', Promise<SearchDataset>>();
+
+function normalizeCategorySlug(value: unknown): string {
+  const raw = typeof value === 'string' ? value : String(value ?? '');
+  return raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
 
 function normalizeImages(raw: unknown): SearchImage[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -77,14 +88,16 @@ function resolveArtistSubtitle(raw: Record<string, unknown>): string {
 }
 
 export async function getSearchDatasetClient(options: SearchDatasetClientOptions = {}): Promise<SearchDataset> {
-  const { forceRefresh = false, timeoutMs = SEARCH_DATASET_FETCH_TIMEOUT_MS, scope = 'catalog' } = options;
+  const { forceRefresh = false, timeoutMs = SEARCH_DATASET_FETCH_TIMEOUT_MS, scope = 'catalog', category } = options;
+  const normalizedCategory = normalizeCategorySlug(category);
+  const shouldUseScopeCache = normalizedCategory.length === 0;
   const cached = getCachedSearchDatasetClient(scope);
 
-  if (!forceRefresh && cached) {
+  if (shouldUseScopeCache && !forceRefresh && cached) {
     return cached;
   }
 
-  if (!forceRefresh) {
+  if (shouldUseScopeCache && !forceRefresh) {
     const inFlightRequest = inFlightSearchDatasetRequestByScope.get(scope);
     if (inFlightRequest) {
       return inFlightRequest;
@@ -116,6 +129,9 @@ export async function getSearchDatasetClient(options: SearchDatasetClientOptions
         if (scope === 'home') {
           endpoint.searchParams.set('scope', 'home');
         }
+        if (normalizedCategory) {
+          endpoint.searchParams.set('category', normalizedCategory);
+        }
 
         const response = await fetch(endpoint.toString(), {
           method: 'GET',
@@ -130,19 +146,25 @@ export async function getSearchDatasetClient(options: SearchDatasetClientOptions
 
         const payload = (await response.json()) as unknown;
         const normalized = normalizeDataset(payload) ?? searchMockData;
-        writeSearchDatasetCache(normalized, scope);
+        if (shouldUseScopeCache) {
+          writeSearchDatasetCache(normalized, scope);
+        }
         return normalized;
       } finally {
         clearTimeout(timeoutHandle);
       }
     } catch {
-      return cached ?? searchMockData;
+      return (shouldUseScopeCache ? cached : null) ?? searchMockData;
     } finally {
-      inFlightSearchDatasetRequestByScope.delete(scope);
+      if (shouldUseScopeCache) {
+        inFlightSearchDatasetRequestByScope.delete(scope);
+      }
     }
   })();
 
-  inFlightSearchDatasetRequestByScope.set(scope, requestPromise);
+  if (shouldUseScopeCache) {
+    inFlightSearchDatasetRequestByScope.set(scope, requestPromise);
+  }
   return requestPromise;
 }
 
@@ -321,6 +343,11 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     liturgicalType: String(rawItem.liturgicalType ?? 'General'),
     liturgicalTime: String(rawItem.liturgicalTime ?? 'Ordinario'),
     authorOrChoir: String(rawItem.authorOrChoir ?? 'General'),
+    categories: Array.isArray(rawItem.categories)
+      ? rawItem.categories
+        .map((value) => normalizeCategorySlug(value))
+        .filter((value) => value.length > 0)
+      : [],
     searchableText: String(rawItem.searchableText ?? `${rawItem.title ?? ''} ${rawItem.subtitle ?? ''}`)
   };
 
@@ -506,6 +533,12 @@ function normalizeDataset(rawData: unknown): SearchDataset | null {
       authorOrChoirs: Array.isArray(rawFilters.authorOrChoirs)
         ? rawFilters.authorOrChoirs.map((value) => String(value))
         : searchMockData.filters.authorOrChoirs
+      ,
+      categories: Array.isArray(rawFilters.categories)
+        ? rawFilters.categories
+          .map((value) => normalizeCategorySlug(value))
+          .filter((value) => value.length > 0)
+        : searchMockData.filters.categories
     },
     items,
     buckets

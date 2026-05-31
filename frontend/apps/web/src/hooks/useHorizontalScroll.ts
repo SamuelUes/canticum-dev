@@ -54,12 +54,26 @@ export function useHorizontalScroll(step = 320): UseHorizontalScrollResult {
 
     updateScrollState();
 
-    track.addEventListener('scroll', updateScrollState);
-    window.addEventListener('resize', updateScrollState);
+    track.addEventListener('scroll', updateScrollState, { passive: true });
+    window.addEventListener('resize', updateScrollState, { passive: true });
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateScrollState();
+    });
+    resizeObserver.observe(track);
+    Array.from(track.children).forEach((child) => resizeObserver.observe(child));
+
+    const mutationObserver = new MutationObserver(() => {
+      updateScrollState();
+      Array.from(track.children).forEach((child) => resizeObserver.observe(child));
+    });
+    mutationObserver.observe(track, { childList: true });
 
     return () => {
       track.removeEventListener('scroll', updateScrollState);
       window.removeEventListener('resize', updateScrollState);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
     };
   }, [updateScrollState]);
 

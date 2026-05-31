@@ -29,8 +29,16 @@ const ALLOWED_SHEET_TYPES = new Set([
   'application/pdf',
   'image/png',
   'image/jpeg',
-  'image/jpg'
+  'image/jpg',
+  'application/xml',
+  'text/xml',
+  'application/vnd.recordare.musicxml',
+  'application/vnd.recordare.musicxml+xml',
+  'application/zip',
+  'application/x-zip-compressed'
 ]);
+
+const ALLOWED_SHEET_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'xml', 'musicxml', 'mxl']);
 
 export type VersionAssetKind = 'audio' | 'lyrics' | 'sheet';
 
@@ -77,8 +85,13 @@ export function validateLyricsFile(file: File): string | null {
 }
 
 export function validateSheetFile(file: File): string | null {
-  if (!ALLOWED_SHEET_TYPES.has(file.type)) {
-    return 'Formato inválido. Solo se permiten PDF, PNG o JPG.';
+  const mimeType = file.type.trim().toLowerCase();
+  const fileExt = inferExt(file, '').trim().toLowerCase();
+  const hasAllowedMime = mimeType.length > 0 && ALLOWED_SHEET_TYPES.has(mimeType);
+  const hasAllowedExt = fileExt.length > 0 && ALLOWED_SHEET_EXTENSIONS.has(fileExt);
+
+  if (!hasAllowedMime && !hasAllowedExt) {
+    return 'Formato inválido. Solo se permiten PDF, PNG, JPG, XML o MXL.';
   }
   if (file.size > MAX_SHEET_SIZE_BYTES) {
     return `El archivo de partitura supera ${MAX_SHEET_SIZE_MB}MB.`;
@@ -106,6 +119,14 @@ function defaultExtFor(kind: VersionAssetKind, file: File): string {
   // sheet
   if (file.type === 'application/pdf') return 'pdf';
   if (file.type === 'image/png') return 'png';
+  if (file.type === 'application/xml' || file.type === 'text/xml' || file.type === 'application/vnd.recordare.musicxml+xml') {
+    return 'xml';
+  }
+  if (file.type === 'application/vnd.recordare.musicxml' || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
+    return 'mxl';
+  }
+  if (file.name.toLowerCase().endsWith('.mxl')) return 'mxl';
+  if (file.name.toLowerCase().endsWith('.musicxml') || file.name.toLowerCase().endsWith('.xml')) return 'xml';
   return 'jpg';
 }
 

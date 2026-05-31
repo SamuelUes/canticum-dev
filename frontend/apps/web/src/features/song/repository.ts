@@ -290,6 +290,20 @@ export async function getSongTitleById(songId: string, versionId?: string): Prom
     return cached;
   }
 
+  const detailCacheKey = getSongDetailCacheKey(songId, versionId);
+  const cachedDetail = readClientCache<SongDetail>(detailCacheKey);
+  if (cachedDetail) {
+    const fromDetail: SongRef = {
+      id: cachedDetail.id,
+      title: cachedDetail.title,
+      artistName: cachedDetail.artistName,
+      audioUrl: cachedDetail.audioUrl,
+      ...(versionId ? { versionId } : {})
+    };
+    writeClientCache(cacheKey, fromDetail, SONG_DETAIL_CACHE_TTL_MS);
+    return fromDetail;
+  }
+
   if (functionsBaseUrl) {
     try {
       const headers = await buildSongHeaders({ Accept: 'application/json' });

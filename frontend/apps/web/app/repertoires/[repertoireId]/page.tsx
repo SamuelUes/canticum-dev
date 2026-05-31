@@ -1,13 +1,14 @@
-import Image from 'next/image';
 import Link from 'next/link';
 import { HomeFooter } from '../../../src/components/home/Footer';
 import { Header } from '../../../src/components/home/Header';
+import { RepertoireOwnerActions } from '../../../src/components/repertoire/RepertoireOwnerActions';
 import { RepertoireDetailClientFallback } from '../../../src/components/repertoire/RepertoireDetailClientFallback';
 import { homeMockData } from '../../../src/features/home/mockData';
 import { getrepertoireDetailById } from '../../../src/features/repertoire/repository';
 import { getHomeText } from '../../../src/i18n/home';
 import type { Locale } from '../../../src/types/home';
 import type { SongRef } from '../../../src/types/repertoire';
+
 
 interface repertoirePageProps {
   params: {
@@ -19,8 +20,6 @@ export default async function repertoirePage({ params }: repertoirePageProps) {
   const locale: Locale = 'es';
   const text = getHomeText(locale);
   const repertoire = await getrepertoireDetailById(params.repertoireId);
-  const currentUserId = 'user-1';
-  const isOwner = repertoire?.ownerUserId === currentUserId;
 
   if (!repertoire) {
     return (
@@ -69,19 +68,7 @@ export default async function repertoirePage({ params }: repertoirePageProps) {
           </header>
 
           <article className="search-generic-card repertoire-detail-card repertoire-detail-meta-card">
-            {isOwner ? (
-              <div className="repertoire-detail-meta-actions">
-                <Link href={`/repertoires/${repertoire.id}/edit`} className="repertoire-detail-edit-link" aria-label="Editar repertorio">
-                  <Image
-                    src="/assets/utils/iconly_light-outline_edit/iconlylightoutlineedit2x.png"
-                    alt="Editar"
-                    width={18}
-                    height={18}
-                  />
-                  <span>Editar</span>
-                </Link>
-              </div>
-            ) : null}
+            <RepertoireOwnerActions repertoireId={repertoire.id} ownerUserId={repertoire.ownerUserId} />
 
             <div className="repertoire-detail-meta-row">
               <span className="repertoire-detail-meta-label">Tipo</span>
@@ -142,16 +129,6 @@ export default async function repertoirePage({ params }: repertoirePageProps) {
             </div>
           </section>
 
-          {isOwner ? (
-            <div className="repertoire-edit-actions">
-              <Link href={`/repertoires/${repertoire.id}/edit`} className="song-premium-badge">
-                Editar repertorio
-              </Link>
-              <Link href={`/repertoires/${repertoire.id}/edit`} className="song-premium-badge is-buy">
-                Eliminar repertorio
-              </Link>
-            </div>
-          ) : null}
         </section>
 
         <HomeFooter

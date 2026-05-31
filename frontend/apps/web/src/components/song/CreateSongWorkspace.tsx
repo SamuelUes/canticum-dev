@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { fetchSongsByArtist, type ArtistSongLookup } from '../../features/artist/repository';
+import { useBlobUrl } from '../../hooks/useBlobUrl';
 import {
   requestCreateSong,
   type CreateSongPayload,
@@ -102,7 +103,11 @@ export function CreateSongWorkspace() {
   const [liturgicalUse, setLiturgicalUse] = useState('');
 
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
+  const {
+    blobUrl: coverPreviewUrl,
+    setBlobFromFile: setCoverPreviewFromFile,
+    clearBlobUrl: clearCoverPreviewUrl
+  } = useBlobUrl();
   const [coverError, setCoverError] = useState('');
   const [coverPreparing, setCoverPreparing] = useState(false);
 
@@ -165,12 +170,12 @@ export function CreateSongWorkspace() {
         versionName: v.versionName || `Versión ${i + 1}`
       })));
       setCoverFile(null);
-      setCoverPreviewUrl('');
+      clearCoverPreviewUrl();
       setCoverError('');
       setCoverPreparing(false);
     }
     // For addVersion, songDocId follows selectedExistingSongId (see below).
-  }, [mode]);
+  }, [clearCoverPreviewUrl, mode]);
 
   // In addVersion mode, the songDocId equals the selected existing song.
   useEffect(() => {
@@ -182,12 +187,6 @@ export function CreateSongWorkspace() {
       docId: generateFirestoreDocId(`songs/${selectedExistingSongId}/versions`)
     })));
   }, [mode, selectedExistingSongId]);
-
-  useEffect(() => () => {
-    if (coverPreviewUrl) {
-      URL.revokeObjectURL(coverPreviewUrl);
-    }
-  }, [coverPreviewUrl]);
 
   // ── Validation ──
 
@@ -219,13 +218,10 @@ export function CreateSongWorkspace() {
 
   const handleCoverSelection = async (file: File | null) => {
     setCoverError('');
-    if (coverPreviewUrl) {
-      URL.revokeObjectURL(coverPreviewUrl);
-    }
 
     if (!file) {
       setCoverFile(null);
-      setCoverPreviewUrl('');
+      clearCoverPreviewUrl();
       return;
     }
 
@@ -234,14 +230,14 @@ export function CreateSongWorkspace() {
     const prepared = await prepareCoverImageFile(file);
     if (!prepared.ok) {
       setCoverFile(null);
-      setCoverPreviewUrl('');
+      clearCoverPreviewUrl();
       setCoverError(prepared.error);
       setCoverPreparing(false);
       return;
     }
 
     setCoverFile(prepared.file);
-    setCoverPreviewUrl(URL.createObjectURL(prepared.file));
+    setCoverPreviewFromFile(prepared.file);
     setCoverPreparing(false);
   };
 
@@ -413,7 +409,7 @@ export function CreateSongWorkspace() {
       setSuccessMessage(mode === 'new' ? '¡Canción creada exitosamente!' : '¡Versión agregada exitosamente!');
       if (mode === 'new') {
         setCoverFile(null);
-        setCoverPreviewUrl('');
+        clearCoverPreviewUrl();
         setCoverError('');
         setCoverPreparing(false);
       }
@@ -753,7 +749,7 @@ export function CreateSongWorkspace() {
                   <span>Partitura (archivo opcional)</span>
                   <input
                     type="file"
-                    accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                    accept=".pdf,.png,.jpg,.jpeg,.xml,.musicxml,.mxl,application/pdf,image/png,image/jpeg,application/xml,text/xml,application/vnd.recordare.musicxml,application/vnd.recordare.musicxml+xml,application/zip,application/x-zip-compressed"
                     onChange={(e) => {
                       const file = e.target.files?.[0] ?? null;
                       updateVersion(version.localId, { sheetFile: file });

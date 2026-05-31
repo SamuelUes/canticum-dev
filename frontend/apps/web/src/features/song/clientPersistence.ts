@@ -117,6 +117,29 @@ const pendingFavoriteLoads = new Map<string, Promise<boolean | null>>();
 const pendingFavoriteSyncTimeout = new Map<string, number>();
 const lastSyncedFavoriteBySong = new Map<string, boolean>();
 
+export function clearAllPendingClientSyncs(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  pendingSyncTimeout.forEach((timeoutId) => {
+    window.clearTimeout(timeoutId);
+  });
+  pendingSyncTimeout.clear();
+
+  pendingFavoriteSyncTimeout.forEach((timeoutId) => {
+    window.clearTimeout(timeoutId);
+  });
+  pendingFavoriteSyncTimeout.clear();
+
+  pendingLoads.clear();
+  pendingFavoriteLoads.clear();
+  preferencesCache.clear();
+  favoriteCache.clear();
+  lastSyncedPayloadBySong.clear();
+  lastSyncedFavoriteBySong.clear();
+}
+
 function getPreferencesStorageKey(songId: string): string {
   return `song-preferences:${songId}`;
 }

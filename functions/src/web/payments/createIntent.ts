@@ -3,6 +3,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { handlePreflight, sendJson, sendError, getOptionalAuthContext, getBodyRecord } from '../../shared/http/http';
+import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
 
 interface CreatePaymentIntentPayload {
   planId: string;
@@ -21,6 +22,14 @@ export const createIntent = functions.https.onRequest(async (req, res) => {
   const authContext = await getOptionalAuthContext(req);
   if (!authContext) {
     sendError(res, 401, 'unauthenticated', 'Authentication required');
+    return;
+  }
+
+  const createIntentLimiter = await checkRateLimit(authContext.uid, 'payments_create_intent', 10, 3600);
+  applyRateLimitHeaders(res, 10, createIntentLimiter);
+  if (!createIntentLimiter.allowed) {
+    res.set('Retry-After', String(createIntentLimiter.retryAfterSeconds));
+    sendError(res, 429, 'too_many_requests', `Too many payment intent attempts. Retry in ${createIntentLimiter.retryAfterSeconds}s.`);
     return;
   }
 

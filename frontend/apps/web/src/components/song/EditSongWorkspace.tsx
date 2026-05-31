@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import Skeleton from 'react-loading-skeleton';
 import { useAuth } from '../../context/AuthContext';
 import { getSongDetailById, requestDeleteSong, requestUpdateSong } from '../../features/song/repository';
 import { uploadVersionAsset } from '../../features/song/versionAssetUpload';
@@ -206,7 +207,39 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
   };
 
   if (loading) {
-    return <section className="account-page-layout layout-h-margin"><p>Cargando canción...</p></section>;
+    return (
+      <section className="account-page-layout layout-h-margin" aria-busy aria-label="Cargando canción">
+        <header className="account-page-head">
+          <Skeleton width={220} height={34} />
+          <Skeleton width="70%" height={16} />
+        </header>
+        <article className="account-card">
+          <div className="account-basic-grid">
+            <Skeleton height={44} />
+            <Skeleton height={44} />
+          </div>
+          <Skeleton width={180} height={180} />
+          <Skeleton height={42} width={220} />
+        </article>
+        <article className="account-card song-edit-versions-card">
+          <div className="create-versions-header song-edit-versions-head">
+            <Skeleton width={150} height={30} />
+            <Skeleton width={140} height={36} />
+          </div>
+          <div className="account-items-grid song-edit-versions-grid">
+            {Array.from({ length: 2 }).map((_, idx) => (
+              <div className="account-item-card song-edit-version-card" key={idx}>
+                <Skeleton height={40} />
+                <Skeleton height={40} />
+                <Skeleton height={110} />
+                <Skeleton height={40} />
+                <Skeleton height={36} width={160} />
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+    );
   }
 
   return (

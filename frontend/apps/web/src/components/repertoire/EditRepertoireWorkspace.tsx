@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useBlobUrl } from '../../hooks/useBlobUrl';
 import {
   fetchRepertoireDetailClient,
   requestDeleterepertoire,
@@ -41,7 +42,12 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
   const [error, setError] = useState('');
 
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverPreviewUrl, setCoverPreviewUrl] = useState('');
+  const {
+    blobUrl: coverPreviewUrl,
+    setBlobFromFile: setCoverPreviewFromFile,
+    setBlobFromUrl: setCoverPreviewFromUrl,
+    clearBlobUrl: clearCoverPreviewUrl
+  } = useBlobUrl();
   const [coverImageUrl, setCoverImageUrl] = useState('');
 
   useEffect(() => {
@@ -106,7 +112,7 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
 
       const rawCover = typeof raw.coverImageUrl === 'string' ? raw.coverImageUrl : '';
       setCoverImageUrl(rawCover);
-      setCoverPreviewUrl(rawCover);
+      setCoverPreviewFromUrl(rawCover);
       setLoading(false);
     };
 
@@ -114,7 +120,7 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
     return () => {
       alive = false;
     };
-  }, [repertoireId]);
+  }, [repertoireId, setCoverPreviewFromUrl]);
 
   useEffect(() => {
     let alive = true;
@@ -136,6 +142,12 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
       alive = false;
     };
   }, [searchText]);
+
+  useEffect(() => {
+    return () => {
+      clearCoverPreviewUrl();
+    };
+  }, [clearCoverPreviewUrl]);
 
   const canSave = useMemo(() => title.trim().length > 0 && !saving && !loading, [loading, saving, title]);
 
@@ -179,6 +191,7 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
   const onCoverSelected = async (file: File | null) => {
     if (!file) {
       setCoverFile(null);
+      setCoverPreviewFromUrl(coverImageUrl);
       return;
     }
 
@@ -189,7 +202,7 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
     }
 
     setCoverFile(prepared.file);
-    setCoverPreviewUrl(URL.createObjectURL(prepared.file));
+    setCoverPreviewFromFile(prepared.file);
     setError('');
   };
 
@@ -216,6 +229,7 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
 
       nextCoverImageUrl = cover.url;
       setCoverImageUrl(cover.url);
+      setCoverPreviewFromUrl(cover.url);
       setCoverFile(null);
     }
 

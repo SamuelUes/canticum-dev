@@ -2,7 +2,11 @@ import * as functions from 'firebase-functions/v1';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
-import { listTopArtists as listTopArtistsInCloudSql, searchArtists as searchArtistsInCloudSql } from '../../shared/cloudSql/artists';
+import {
+  listActiveCategorySlugs as listActiveCategorySlugsInCloudSql,
+  listTopArtists as listTopArtistsInCloudSql,
+  searchArtists as searchArtistsInCloudSql
+} from '../../shared/cloudSql/artists';
 import { getSongMetricsBySqlIds, listTopSongs as listTopSongsInCloudSql } from '../../shared/cloudSql/songs';
 
 type SearchKind = 'song' | 'album' | 'repertoire' | 'artist' | 'version';
@@ -11,6 +15,74 @@ interface SearchImage {
   url: string;
   width?: number;
   height?: number;
+}
+
+function normalizeCategoryValue(value: unknown): string {
+  const raw = typeof value === 'string' ? value : String(value ?? '');
+  return raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+function normalizeCategoryList(raw: unknown): string[] {
+  let values: unknown[] = [];
+
+  if (Array.isArray(raw)) {
+    values = raw;
+  } else if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (Array.isArray(parsed)) {
+          values = parsed;
+        }
+      } catch {
+      }
+    }
+
+    if (values.length === 0) {
+      values = trimmed.split(',');
+    }
+  }
+
+  const normalized = values
+    .map((value) => normalizeCategoryValue(value))
+    .filter((value) => value.length > 0);
+
+  return Array.from(new Set(normalized));
+}
+
+function collectCategoriesFromRaw(raw: Record<string, unknown>, fallbacks: unknown[] = []): string[] {
+  const collected = new Set<string>();
+
+  const candidates = [
+    raw.categories,
+    raw.categoriesJson,
+    raw.categories_json,
+    raw.genres,
+    raw.genres_json,
+    raw.genre,
+    ...fallbacks
+  ];
+
+  candidates.forEach((candidate) => {
+    const values = normalizeCategoryList(candidate);
+    values.forEach((value) => collected.add(value));
+  });
+
+  return Array.from(collected);
+}
+
+function hasCategoryMatch(item: SearchItem, selectedCategory: string): boolean {
+  if (!selectedCategory || selectedCategory === 'todos') {
+    return true;
+  }
+
+  return item.categories.some((category) => normalizeCategoryValue(category) === selectedCategory);
 }
 
 interface SearchItem {
@@ -28,6 +100,7 @@ interface SearchItem {
   liturgicalType: string;
   liturgicalTime: string;
   authorOrChoir: string;
+  categories: string[];
   searchableText: string;
   isPremium?: boolean;
   popularity?: number;
@@ -149,6 +222,7 @@ function pushSongItemIfMatch(
     liturgicalType: String(data.liturgicalType ?? data.liturgical_use ?? 'General'),
     liturgicalTime: String(data.liturgicalTime ?? 'Ordinario'),
     authorOrChoir: String(data.author ?? data.artistName ?? 'General'),
+    categories: collectCategoriesFromRaw(data, [data.liturgicalType, data.liturgicalTime, data.liturgical_use]),
     searchableText: `${String(data.title ?? '')} ${String(data.author ?? data.artistName ?? '')}`.trim(),
     isPremium: Boolean(data.isPremium),
     popularity: popularityNum,
@@ -187,6 +261,7 @@ const HOME_SCOPE_FIRESTORE_SCAN_LIMIT = 80;
 const HOME_SCOPE_SQL_SONG_LIMIT = 60;
 const HOME_SCOPE_SQL_ARTIST_LIMIT = 40;
 
+
 interface SearchCatalogResponse {
   buckets: {
     songs: SearchBucket<SearchItem>;
@@ -200,6 +275,7 @@ interface SearchCatalogResponse {
     liturgicalTypes: string[];
     liturgicalTimes: string[];
     authorOrChoirs: string[];
+    categories: string[];
   };
 }
 
@@ -331,9 +407,11 @@ export const search = functions.https.onRequest(async (req, res) => {
   const limit = parsePositiveInt(req.query.limit, DEFAULT_LIMIT, MAX_LIMIT);
   const offset = parsePositiveInt(req.query.offset, 0);
   const scopeParam = typeof req.query.scope === 'string' ? req.query.scope.trim().toLowerCase() : '';
+  const selectedCategory = normalizeCategoryValue(typeof req.query.category === 'string' ? req.query.category : '');
+  const hasCategoryFilter = selectedCategory.length > 0 && selectedCategory !== 'todos';
   const isHomeScope = scopeParam === 'home';
   const firestoreScanLimit = isHomeScope ? HOME_SCOPE_FIRESTORE_SCAN_LIMIT : FIRESTORE_CATALOG_SCAN_LIMIT;
-  const canUseSharedHomeCache = isHomeScope && !currentUserId && !query && kindFilters.size === 0 && offset === 0 && limit === DEFAULT_LIMIT;
+  const canUseSharedHomeCache = isHomeScope && !currentUserId && !query && !hasCategoryFilter && kindFilters.size === 0 && offset === 0 && limit === DEFAULT_LIMIT;
 
   if (canUseSharedHomeCache && sharedHomeCatalogCache && sharedHomeCatalogCache.expiresAt > Date.now()) {
     sendJson(res, 200, sharedHomeCatalogCache.payload);
@@ -346,6 +424,11 @@ export const search = functions.https.onRequest(async (req, res) => {
       return null;
     })
     : Promise.resolve(null);
+
+  const sqlCategorySlugsPromise = listActiveCategorySlugsInCloudSql(300).catch((error) => {
+    console.error('Cloud SQL categories lookup failed in search/catalog:', error);
+    return null;
+  });
 
   const sqlArtistsPromise = wants('artist')
     ? (query
@@ -435,6 +518,7 @@ export const search = functions.https.onRequest(async (req, res) => {
         liturgicalType: 'General',
         liturgicalTime: 'Ordinario',
         authorOrChoir: String(row.artistName ?? 'General'),
+        categories: [],
         searchableText: `${row.title} ${String(row.artistName ?? '')}`.trim(),
         popularity: row.popularity,
         totalViews: row.totalViews,
@@ -465,6 +549,7 @@ export const search = functions.https.onRequest(async (req, res) => {
       liturgicalType: 'General',
       liturgicalTime: 'Ordinario',
       authorOrChoir: artistName || 'General',
+      categories: collectCategoriesFromRaw(data, [data.albumType]),
       searchableText: `${String(data.title ?? '')} ${artistName}`.trim()
     };
     if (matchesQuery(item, query)) albums.push(item);
@@ -499,6 +584,7 @@ export const search = functions.https.onRequest(async (req, res) => {
       liturgicalType: String(data.liturgicalType ?? data.type ?? 'General'),
       liturgicalTime: String(data.liturgicalTime ?? 'Ordinario'),
       authorOrChoir: 'repertoire',
+      categories: collectCategoriesFromRaw(data, [data.type, data.liturgicalType, data.liturgicalTime]),
       searchableText: `${String(data.title ?? '')} ${String(data.liturgicalType ?? data.type ?? '')}`.trim(),
       dateLabel: formatDateLabel(data.updatedAt ?? data.createdAt),
       songsCount: Number(data.songsCount ?? songIds.length),
@@ -529,6 +615,7 @@ export const search = functions.https.onRequest(async (req, res) => {
       liturgicalType: 'General',
       liturgicalTime: 'Ordinario',
       authorOrChoir: artistName,
+      categories: collectCategoriesFromRaw(data, [artistSubtitle, data.type, data.ministryType]),
       searchableText: `${artistName} ${artistSubtitle} ${String(data.bio ?? '')}`.trim(),
       songsCount: Number(data.songsCount ?? 0)
     };
@@ -560,6 +647,7 @@ export const search = functions.https.onRequest(async (req, res) => {
         liturgicalType: 'General',
         liturgicalTime: 'Ordinario',
         authorOrChoir: artistName,
+        categories: [],
         searchableText: `${artistName} ${String(artist.type ?? '')}`.trim(),
         songsCount: 0
       };
@@ -581,11 +669,38 @@ export const search = functions.https.onRequest(async (req, res) => {
     });
   }
 
-  const songsForResponse = isHomeScope ? songs.slice(0, 80) : songs;
-  const albumsForResponse = isHomeScope ? albums.slice(0, 30) : albums;
-  const repertoiresForResponse = isHomeScope ? repertoires.slice(0, 40) : repertoires;
-  const artistsForResponse = isHomeScope ? artists.slice(0, 50) : artists;
-  const versionsForResponse = isHomeScope ? versions.slice(0, 20) : versions;
+  const sqlCategorySlugs = await sqlCategorySlugsPromise;
+  const orderedCategories: string[] = [];
+  const seenOrderedCategories = new Set<string>();
+
+  (sqlCategorySlugs ?? []).forEach((slug) => {
+    const normalized = normalizeCategoryValue(slug);
+    if (!normalized || seenOrderedCategories.has(normalized)) {
+      return;
+    }
+
+    orderedCategories.push(normalized);
+    seenOrderedCategories.add(normalized);
+  });
+
+  if (orderedCategories.length === 0) {
+    console.warn('search/catalog resolved empty active categories from Cloud SQL.', {
+      scope: isHomeScope ? 'home' : 'catalog',
+      hasCategoryFilter
+    });
+  }
+
+  const songsFiltered = hasCategoryFilter ? songs.filter((item) => hasCategoryMatch(item, selectedCategory)) : songs;
+  const albumsFiltered = hasCategoryFilter ? albums.filter((item) => hasCategoryMatch(item, selectedCategory)) : albums;
+  const repertoiresFiltered = hasCategoryFilter ? repertoires.filter((item) => hasCategoryMatch(item, selectedCategory)) : repertoires;
+  const artistsFiltered = hasCategoryFilter ? artists.filter((item) => hasCategoryMatch(item, selectedCategory)) : artists;
+  const versionsFiltered = hasCategoryFilter ? versions.filter((item) => hasCategoryMatch(item, selectedCategory)) : versions;
+
+  const songsForResponse = isHomeScope ? songsFiltered.slice(0, 80) : songsFiltered;
+  const albumsForResponse = isHomeScope ? albumsFiltered.slice(0, 30) : albumsFiltered;
+  const repertoiresForResponse = isHomeScope ? repertoiresFiltered.slice(0, 40) : repertoiresFiltered;
+  const artistsForResponse = isHomeScope ? artistsFiltered.slice(0, 50) : artistsFiltered;
+  const versionsForResponse = isHomeScope ? versionsFiltered.slice(0, 20) : versionsFiltered;
 
   const items: SearchItem[] = [
     ...songsForResponse,
@@ -610,6 +725,7 @@ export const search = functions.https.onRequest(async (req, res) => {
   const qs = new URLSearchParams();
   if (query) qs.set('q', query);
   if (typeParam) qs.set('type', typeParam);
+  if (hasCategoryFilter) qs.set('category', selectedCategory);
   if (isHomeScope) qs.set('scope', 'home');
   const baseHref = `/search/catalog?${qs.toString()}`;
 
@@ -629,7 +745,8 @@ export const search = functions.https.onRequest(async (req, res) => {
     filters: {
       liturgicalTypes: Array.from(liturgicalTypes),
       liturgicalTimes: Array.from(liturgicalTimes),
-      authorOrChoirs: Array.from(authorOrChoirs)
+      authorOrChoirs: Array.from(authorOrChoirs),
+      categories: orderedCategories
     }
   };
 

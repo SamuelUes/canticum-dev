@@ -17,6 +17,7 @@ export interface SearchFilterOptions {
   liturgicalTypes: string[];
   liturgicalTimes: string[];
   authorOrChoirs: string[];
+  categories: string[];
 }
 
 export interface SearchEntityBase {
@@ -36,6 +37,7 @@ export interface SearchEntityBase {
   liturgicalType: string;
   liturgicalTime: string;
   authorOrChoir: string;
+  categories: string[];
   searchableText: string;
 }
 

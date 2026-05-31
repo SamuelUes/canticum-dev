@@ -85,6 +85,24 @@ export function getQueryString(req: functions.https.Request, key: string): strin
   return undefined;
 }
 
+export function getClientIp(req: functions.https.Request): string | null {
+  const forwardedFor = req.get('x-forwarded-for') ?? req.get('X-Forwarded-For');
+  if (forwardedFor) {
+    const first = forwardedFor.split(',')[0]?.trim();
+    if (first) {
+      return first;
+    }
+  }
+
+  const realIp = req.get('x-real-ip') ?? req.get('X-Real-IP');
+  if (realIp && realIp.trim()) {
+    return realIp.trim();
+  }
+
+  const reqIp = typeof req.ip === 'string' ? req.ip.trim() : '';
+  return reqIp || null;
+}
+
 export async function getOptionalAuthContext(req: functions.https.Request): Promise<RequestAuthContext | null> {
   const authorization = req.get('Authorization') ?? req.get('authorization');
 

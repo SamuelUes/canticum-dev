@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import Skeleton from 'react-loading-skeleton';
 import { requestDeleterepertoire, requestUserRepertoires } from '../../features/repertoire/clientPersistence';
 import type { repertoireListItem, repertoireStatus } from '../../types/repertoire';
 
@@ -176,7 +177,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
         {isLoading ? (
           <div className="repertoires-cards-grid" aria-busy aria-label="Cargando repertorios">
             {Array.from({ length: 6 }).map((_, idx) => (
-              <div key={idx} className="skeleton-pulse repertoires-skeleton-card" />
+              <Skeleton key={idx} className="repertoires-skeleton-card" />
             ))}
           </div>
         ) : null}

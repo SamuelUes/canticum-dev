@@ -16,6 +16,7 @@ import {
 } from '../../shared/cloudSql/songs';
 import { createArtist, getArtistById } from '../../shared/cloudSql/artists';
 import {
+  getClientIp,
   getBodyRecord,
   getOptionalAuthContext,
   getPathSegments,
@@ -24,6 +25,7 @@ import {
   sendError,
   sendJson
 } from '../../shared/http/http';
+import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
 import { resolveIsPremium } from '../../shared/plan/planLimits';
 
 interface SongPreferencePayload {
@@ -212,6 +214,14 @@ export const songs = functions.https.onRequest(async (req, res) => {
     const authContext = await getOptionalAuthContext(req);
     if (!authContext) {
       sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const createLimiter = await checkRateLimit(authContext.uid, 'songs_create_or_add_version', 30, 3600);
+    applyRateLimitHeaders(res, 30, createLimiter);
+    if (!createLimiter.allowed) {
+      res.set('Retry-After', String(createLimiter.retryAfterSeconds));
+      sendError(res, 429, 'too_many_requests', `Too many song write operations. Retry in ${createLimiter.retryAfterSeconds}s.`);
       return;
     }
 
@@ -611,14 +621,27 @@ export const songs = functions.https.onRequest(async (req, res) => {
     }
 
     const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+    const songStatus = normalizeSongState(songData.status);
+    const ownerUid = String(songData.ownerUserId ?? songData.createdBy ?? '');
+    const role = (authContext?.token.role as string | undefined) ?? '';
+    const isElevatedRole = role === 'admin' || role === 'editor';
+    const authenticatedUserId = authContext?.uid ?? null;
+    const isOwner = Boolean(authenticatedUserId && ownerUid && authenticatedUserId === ownerUid);
+    const isPublicByStatus = songStatus === 'APPROVED' || songStatus === 'PUBLISHED';
+
+    if (!isPublicByStatus && !isOwner && !isElevatedRole) {
+      sendError(res, 404, 'not_found', 'Song not found.');
+      return;
+    }
+
     const versionsSnap = await songSnap.ref.collection('versions').get();
 
-    const userDocSnap = requestUserId ? await db.collection('users').doc(requestUserId).get() : null;
+    const userDocSnap = authenticatedUserId ? await db.collection('users').doc(authenticatedUserId).get() : null;
     const userData = (userDocSnap?.data() ?? {}) as Record<string, unknown>;
     const isPremiumUser = Boolean(authContext?.token.premium ?? userData.premium ?? false);
 
-    const songUnlockSnap = requestUserId
-      ? await db.collection('users').doc(requestUserId).collection('songUnlocks').doc(songId).get()
+    const songUnlockSnap = authenticatedUserId
+      ? await db.collection('users').doc(authenticatedUserId).collection('songUnlocks').doc(songId).get()
       : null;
 
     const hasSongUnlock = Boolean(songUnlockSnap?.exists);
@@ -781,14 +804,16 @@ export const songs = functions.https.onRequest(async (req, res) => {
       // Canticum-specific fields
       author: typeof songData.author === 'string' ? songData.author : undefined,
       year: typeof songData.year === 'number' ? songData.year : undefined,
-      status: String(songData.status ?? 'draft').toLowerCase(),
+      status: songStatus.toLowerCase(),
       createdBy: String(songData.createdBy ?? ''),
       lyrics: activeLyrics,
       sheet: activeSheet,
       // Back-compat audio alias + Spotify-style `previewUrl`
       audioUrl,
       previewUrl: audioUrl ?? null,
-      sqlSongId: Number.isFinite(Number(songData.sqlSongId)) ? String(songData.sqlSongId) : undefined,
+      sqlSongId: isElevatedRole && Number.isFinite(Number(songData.sqlSongId))
+        ? String(songData.sqlSongId)
+        : undefined,
       activeVersionId: activeVersionId || undefined,
       currentVersionId,
       currentInstrumentId,
@@ -1138,6 +1163,15 @@ export const songs = functions.https.onRequest(async (req, res) => {
   /*------*/
 
   if (segments.length === 2 && segments[1] === 'listen' && req.method === 'POST') {
+    const listenLimiterIdentifier = authContext?.uid ?? getClientIp(req) ?? `song:${songId}`;
+    const listenLimiter = await checkRateLimit(`${listenLimiterIdentifier}:${songId}`, 'songs_listen', 1, 1800);
+    applyRateLimitHeaders(res, 1, listenLimiter);
+    if (!listenLimiter.allowed) {
+      res.set('Retry-After', String(listenLimiter.retryAfterSeconds));
+      sendError(res, 429, 'too_many_requests', `Listen limit reached. Retry in ${listenLimiter.retryAfterSeconds}s.`);
+      return;
+    }
+
     const songSnap = await resolveSongSnapshotByAnyId(db, songId);
 
     if (!songSnap || !songSnap.exists) {

@@ -18,6 +18,8 @@ import { getArtistProfileHref } from '../../features/artist/routing';
 
 interface HomeContentProps {
   text: HomeText;
+  selectedCategory?: string;
+  onAvailableCategoriesChange?: (categories: string[]) => void;
 }
 
 function pickImage(item: SearchEntityItem): string | undefined {
@@ -78,7 +80,11 @@ function songToListItem(song: SearchSongItem): ListItemData {
   };
 }
 
-export function HomeContent({ text }: HomeContentProps) {
+export function HomeContent({
+  text,
+  selectedCategory = 'todos',
+  onAvailableCategoriesChange
+}: HomeContentProps) {
   const { user, loading: authLoading } = useAuth();
   const [dataset, setDataset] = useState<SearchDataset | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,7 +107,11 @@ export function HomeContent({ text }: HomeContentProps) {
       }
 
       try {
-        const resolvedDataset = await getSearchDatasetClient({ forceRefresh: true, scope: 'home' });
+        const resolvedDataset = await getSearchDatasetClient({
+          forceRefresh: true,
+          scope: 'home',
+          category: selectedCategory === 'todos' ? '' : selectedCategory
+        });
         if (disposed) return;
         setDataset(resolvedDataset);
       } finally {
@@ -116,7 +126,24 @@ export function HomeContent({ text }: HomeContentProps) {
     return () => {
       disposed = true;
     };
-  }, [authLoading, currentUserId]);
+  }, [authLoading, currentUserId, selectedCategory]);
+
+  useEffect(() => {
+    if (!onAvailableCategoriesChange) {
+      return;
+    }
+
+    if (!dataset) {
+      onAvailableCategoriesChange([]);
+      return;
+    }
+
+    const categories = dataset.filters.categories
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => value.length > 0);
+
+    onAvailableCategoriesChange(Array.from(new Set(categories)));
+  }, [dataset, onAvailableCategoriesChange]);
 
   const songs = useMemo<SearchSongItem[]>(() => {
     if (!dataset) return [];

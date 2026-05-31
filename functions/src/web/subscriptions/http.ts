@@ -3,6 +3,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { handlePreflight, sendJson, sendError, getPathSegments, getOptionalAuthContext } from '../../shared/http/http';
+import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
 import { getPlans } from './getPlans';
 import { getUserSubscription } from './getUserSubscription';
 
@@ -29,6 +30,14 @@ export const subscriptions = functions.https.onRequest(async (req, res) => {
       const authContext = await getOptionalAuthContext(req);
       if (!authContext) {
         sendError(res, 401, 'unauthenticated', 'Authentication required.');
+        return;
+      }
+
+      const cancelLimiter = await checkRateLimit(authContext.uid, 'subscriptions_cancel', 10, 3600);
+      applyRateLimitHeaders(res, 10, cancelLimiter);
+      if (!cancelLimiter.allowed) {
+        res.set('Retry-After', String(cancelLimiter.retryAfterSeconds));
+        sendError(res, 429, 'too_many_requests', `Too many cancel attempts. Retry in ${cancelLimiter.retryAfterSeconds}s.`);
         return;
       }
 
