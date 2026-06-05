@@ -10,7 +10,7 @@ export const albumMockById: Record<string, AlbumDetail> = {
     albumType: 'album',
     artistId: 'artist-coro-emanuel',
     artistName: 'Coro Emanuel',
-    artistImageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    artistImageUrl: '/assets/utils/user/user2x.png',
     songsCount: 3,
     songs: [
       { id: 'song-santo-eres-tu', title: 'Santo Eres Tú', trackNumber: 1, tone: 'E', views: 573, hasLyrics: true, hasSheet: true, isPrimaryRelease: true, isVerified: true },
@@ -27,7 +27,7 @@ export const albumMockById: Record<string, AlbumDetail> = {
     albumType: 'album',
     artistId: 'artist-coro-emanuel',
     artistName: 'Coro Emanuel',
-    artistImageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    artistImageUrl: '/assets/utils/user/user2x.png',
     songsCount: 4,
     songs: [
       { id: 'recent-1', title: 'Canto de Entrada', trackNumber: 1, tone: 'G', views: 110, hasLyrics: true, hasSheet: true, isPrimaryRelease: true },
@@ -45,7 +45,7 @@ export const albumMockById: Record<string, AlbumDetail> = {
     albumType: 'ep',
     artistId: 'artist-coro-emanuel',
     artistName: 'Coro Emanuel',
-    artistImageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    artistImageUrl: '/assets/utils/user/user2x.png',
     songsCount: 2,
     songs: [
       { id: 'recent-5', title: 'Cordero de Dios', trackNumber: 1, tone: 'A#', views: 18, hasLyrics: true, hasSheet: true, isPrimaryRelease: true },
@@ -61,7 +61,7 @@ export const albumMockById: Record<string, AlbumDetail> = {
     albumType: 'album',
     artistId: 'artist-grupo-fiat',
     artistName: 'Grupo Fiat',
-    artistImageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    artistImageUrl: '/assets/utils/user/user2x.png',
     songsCount: 3,
     songs: [
       { id: 'song-aqui-estoy', title: 'Aquí Estoy', trackNumber: 1, tone: 'Ab', views: 381, hasLyrics: true, hasSheet: true, isPrimaryRelease: true, isVerified: true },
@@ -78,7 +78,7 @@ export const albumMockById: Record<string, AlbumDetail> = {
     albumType: 'album',
     artistId: 'artist-juan-perez',
     artistName: 'Juan Pérez',
-    artistImageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    artistImageUrl: '/assets/utils/user/user2x.png',
     songsCount: 2,
     songs: [
       { id: 'song-alabare', title: 'Alabaré Tu Nombre', trackNumber: 1, tone: 'F#m', views: 298, hasLyrics: true, hasSheet: true, isPrimaryRelease: true, isVerified: true },

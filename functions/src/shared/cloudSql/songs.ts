@@ -428,30 +428,50 @@ export async function refreshFeaturedSongsSnapshot(limit: number = 50, snapshotW
     ? snapshotWeek.trim()
     : null;
 
+  let query: string;
+  let params: (number | string | null)[];
+
+  if (normalizedWeek === null) {
+    // When no week specified, use default parameter in SQL function
+    query = `
+      SELECT
+        snapshot_week,
+        rank_position,
+        song_id,
+        score,
+        popularity,
+        total_views,
+        like_count
+      FROM refresh_featured_songs_snapshot($1);
+    `;
+    params = [safeLimit];
+  } else {
+    // When week specified, pass both parameters
+    query = `
+      SELECT
+        snapshot_week,
+        rank_position,
+        song_id,
+        score,
+        popularity,
+        total_views,
+        like_count
+      FROM refresh_featured_songs_snapshot($1, $2);
+    `;
+    params = [safeLimit, normalizedWeek];
+  }
+
   const refreshResult = await getPool().query<{
-    snapshotWeek: string;
-    rankPosition: number;
-    songId: number;
+    snapshot_week: Date;
+    rank_position: number;
+    song_id: number;
     score: string;
     popularity: number;
-    totalViews: number;
-    likeCount: number;
-  }>(
-    `
-      SELECT
-        "snapshotWeek",
-        "rankPosition",
-        "songId",
-        "score",
-        "popularity",
-        "totalViews",
-        "likeCount"
-      FROM refresh_featured_songs_snapshot($1, $2);
-    `,
-    [safeLimit, normalizedWeek]
-  );
+    total_views: number;
+    like_count: number;
+  }>(query, params);
 
-  const ids = Array.from(new Set(refreshResult.rows.map((row) => row.songId).filter((id) => Number.isFinite(id) && id > 0)));
+  const ids = Array.from(new Set(refreshResult.rows.map((row) => row.song_id).filter((id) => Number.isFinite(id) && id > 0)));
 
   if (ids.length === 0) {
     return [];
@@ -486,18 +506,18 @@ export async function refreshFeaturedSongsSnapshot(limit: number = 50, snapshotW
   });
 
   return refreshResult.rows.map((row) => {
-    const meta = metadataBySongId.get(row.songId);
+    const meta = metadataBySongId.get(row.song_id);
     return {
-      snapshotWeek: row.snapshotWeek,
-      rankPosition: row.rankPosition,
-      sqlSongId: row.songId,
-      title: meta?.title ?? `Song ${row.songId}`,
+      snapshotWeek: row.snapshot_week.toISOString().slice(0, 10),
+      rankPosition: row.rank_position,
+      sqlSongId: row.song_id,
+      title: meta?.title ?? `Song ${row.song_id}`,
       artistId: meta?.artistId ?? null,
       artistName: meta?.artistName ?? null,
       score: Number(row.score),
       popularity: row.popularity,
-      totalViews: row.totalViews,
-      likeCount: row.likeCount
+      totalViews: row.total_views,
+      likeCount: row.like_count
     };
   });
 }
@@ -1005,7 +1025,7 @@ export async function listTopSongs(limit: number = 50): Promise<TopSongRow[]> {
       FROM songs s
       LEFT JOIN artists a ON a.id = s.artist_id
       LEFT JOIN song_states ss ON ss.id = s.state_id
-      WHERE UPPER(COALESCE(ss.code, '')) = 'PUBLISHED'
+      WHERE UPPER(COALESCE(ss.code, '')) IN ('APPROVED', 'PUBLISHED')
       ORDER BY
         COALESCE(s.popularity, 0) DESC,
         COALESCE(s.like_count, 0) DESC,

@@ -1,5 +1,7 @@
 import type { repertoireListItem, RepertoireSongSearchOption } from '../../types/repertoire';
 import { invalidateAccountSummaryCache } from '../account/repository';
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
+import { formatDateForUi } from './repository';
 
 export interface repertoireUpdatePayload {
   title?: string;
@@ -21,7 +23,6 @@ export interface repertoireActionResult {
   message?: string;
 }
 
-const functionsBaseUrl = (process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
 const REPERTOIRE_CACHE_TTL_MS = 60_000;
 const REPERTOIRE_LIST_CACHE_PREFIX = 'canticum:repertoires:list:v1:';
 const REPERTOIRE_DETAIL_CACHE_PREFIX = 'canticum:repertoires:detail:v1:';
@@ -144,39 +145,6 @@ async function getCurrentUserId(): Promise<string> {
   }
 }
 
-async function getAuthIdToken(): Promise<string | null> {
-  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
-
-  if (!hasFirebaseConfig) {
-    return null;
-  }
-
-  try {
-    await waitForAuthHydration();
-    const { auth } = await import('../../services/firebase');
-    if (!auth.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
-
-async function buildAuthHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
-  const token = await getAuthIdToken();
-
-  if (!token) {
-    return baseHeaders;
-  }
-
-  return {
-    ...baseHeaders,
-    Authorization: `Bearer ${token}`
-  };
-}
-
 function mapStatusToReason(status: number): repertoireActionResult['reason'] {
   if (status === 401) {
     return 'unauthorized';
@@ -219,7 +187,7 @@ export async function fetchRepertoireDetailClient(repertoireId: string): Promise
   }
 
   try {
-    const headers = await buildAuthHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/repertoires/${repertoireId}`, {
       method: 'GET',
       headers,
@@ -275,7 +243,7 @@ export async function requestUserRepertoires(): Promise<repertoireListItem[] | n
       return cached;
     }
 
-    const headers = await buildAuthHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(
       `${functionsBaseUrl}/repertoires?userId=${encodeURIComponent(userId)}`,
       { method: 'GET', headers, cache: 'no-store' }
@@ -302,13 +270,7 @@ export async function requestUserRepertoires(): Promise<repertoireListItem[] | n
           id: String(raw.id ?? ''),
           title: String(raw.title ?? 'repertorio sin título'),
           subtitle: String(raw.subtitle ?? raw.description ?? ''),
-          dateLabel: typeof raw.dateLabel === 'string' && raw.dateLabel
-            ? raw.dateLabel
-            : typeof raw.updatedAt === 'string'
-              ? raw.updatedAt
-              : typeof raw.createdAt === 'string'
-                ? raw.createdAt
-                : 'N/D',
+          dateLabel: formatDateForUi(raw.dateLabel ?? raw.updatedAt ?? raw.createdAt),
           liturgicalType: String(raw.liturgicalType ?? raw.type ?? 'General'),
           status,
           songsCount: countFromIds > 0 ? countFromIds : Number(raw.songsCount ?? 0),
@@ -335,7 +297,7 @@ export async function requestDeleterepertoire(repertoireId: string): Promise<rep
 
   try {
     const userId = await getCurrentUserId();
-    const headers = await buildAuthHeaders({
+    const headers = await buildFunctionsHeaders({
       Accept: 'application/json'
     });
 
@@ -412,7 +374,7 @@ export async function requestSearchRepertoireSongs(query: string, limit: number 
   }
 
   try {
-    const headers = await buildAuthHeaders({
+    const headers = await buildFunctionsHeaders({
       Accept: 'application/json'
     });
 
@@ -436,14 +398,24 @@ export async function requestSearchRepertoireSongs(query: string, limit: number 
   }
 }
 
-export async function requestUpdaterepertoire(repertoireId: string, update: repertoireUpdatePayload): Promise<repertoireActionResult> {
+export async function requestUpdaterepertoire(
+  repertoireId: string,
+  update: repertoireUpdatePayload,
+  options?: { allowStatusUpdate?: boolean }
+): Promise<repertoireActionResult> {
   if (!functionsBaseUrl) {
     return { ok: true };
   }
 
   try {
     const userId = await getCurrentUserId();
-    const headers = await buildAuthHeaders({
+    const repertoireUpdate = options?.allowStatusUpdate ? update : { ...update };
+
+    if (!options?.allowStatusUpdate) {
+      delete repertoireUpdate.status;
+    }
+
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });
@@ -451,7 +423,7 @@ export async function requestUpdaterepertoire(repertoireId: string, update: repe
     const response = await fetch(`${functionsBaseUrl}/repertoires/${repertoireId}`, {
       method: 'PATCH',
       headers,
-      body: JSON.stringify({ userId, repertoire: update })
+      body: JSON.stringify({ userId, repertoire: repertoireUpdate })
     });
 
     if (!response.ok) {
@@ -490,7 +462,7 @@ export async function requestCreaterepertoire(payload: CreaterepertoirePayload):
 
   try {
     const userId = await getCurrentUserId();
-    const headers = await buildAuthHeaders({
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });

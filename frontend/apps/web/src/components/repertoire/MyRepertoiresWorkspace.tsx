@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import Skeleton from 'react-loading-skeleton';
 import { requestDeleterepertoire, requestUserRepertoires } from '../../features/repertoire/clientPersistence';
+import { getRepertoireStatusLabel, normalizeRepertoireStatus } from '../../features/repertoire/status';
 import type { repertoireListItem, repertoireStatus } from '../../types/repertoire';
 
 interface MyrepertoiresWorkspaceProps {
@@ -114,65 +115,74 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
   };
 
   return (
-    <section className="repertoires-page-layout layout-h-margin">
-      <aside className="repertoires-left-filters" aria-label="Filtros de repertorios">
-        <h2>Filtros</h2>
+    <section className="repertoires-page-container">
+      <aside className="repertoires-sidebar" aria-label="Filtros de repertorios">
+        <div className="repertoires-filter-panel">
+          <h3 className="repertoires-filter-header">
+            <span className="material-symbols-outlined">filter_list</span>
+            Filtros
+          </h3>
 
-        <div className="repertoires-filter-group">
-          <button type="button" className="repertoires-filter-title" aria-label="Tipo litúrgico">
-            Tipo Litúrgicos
-          </button>
-          {liturgicalTypes.map((type) => (
-            <label key={type} className="repertoires-check-row">
-              <input type="checkbox" checked={selectedTypes.includes(type)} onChange={() => toggleType(type)} />
-              <span>{type}</span>
-            </label>
-          ))}
-        </div>
+          <div className="repertoires-filter-group">
+            <span className="repertoires-filter-label">Tipo Litúrgico</span>
+            {liturgicalTypes.map((type) => (
+              <label key={type} className="repertoires-checkbox-row">
+                <input type="checkbox" checked={selectedTypes.includes(type)} onChange={() => toggleType(type)} />
+                <span>{type}</span>
+              </label>
+            ))}
+          </div>
 
-        <div className="repertoires-filter-group">
-          <button type="button" className="repertoires-filter-title" aria-label="Estado del repertorio">
-            Estado
-          </button>
-          {(['Borrador', 'Publicado'] as repertoireStatus[]).map((status) => (
-            <label key={status} className="repertoires-check-row">
-              <input type="checkbox" checked={selectedStatuses.includes(status)} onChange={() => toggleStatus(status)} />
-              <span>{status}</span>
-            </label>
-          ))}
-        </div>
+          <div className="repertoires-filter-group">
+            <span className="repertoires-filter-label">Estado</span>
+            {(['Borrador', 'Publicado'] as repertoireStatus[]).map((status) => (
+              <label key={status} className="repertoires-checkbox-row">
+                <input type="checkbox" checked={selectedStatuses.includes(status)} onChange={() => toggleStatus(status)} />
+                <span>{status}</span>
+              </label>
+            ))}
+          </div>
 
-        <div className="repertoires-filter-group">
-          <label className="repertoires-select-wrap">
-            <span>Ordenar por</span>
-            <select value={sortBy} onChange={(event) => setSortBy(event.target.value as 'recent' | 'alpha')}>
+          <div className="repertoires-filter-group">
+            <span className="repertoires-filter-label">Ordenar Por</span>
+            <select className="repertoires-sort-select" value={sortBy} onChange={(event) => setSortBy(event.target.value as 'recent' | 'alpha')}>
               <option value="recent">Más reciente</option>
-              <option value="alpha">Alfabético</option>
+              <option value="alpha">Alfabético (A-Z)</option>
+              <option value="alpha-desc">Alfabético (Z-A)</option>
+              <option value="oldest">Antiguos</option>
             </select>
-          </label>
+          </div>
         </div>
       </aside>
 
-      <article className="repertoires-main-panel">
-        <header className="repertoires-main-head">
-          <div>
-            <h1>Mis repertorios Litúrgicos</h1>
-            <p>Gestiona tus repertorios y abre el detalle de canciones.</p>
+      <main className="repertoires-content">
+        <header className="repertoires-header">
+          <div className="repertoires-header-text">
+            <h1 className="repertoires-title">Mis repertorios Litúrgicos</h1>
+            <p className="repertoires-subtitle">Gestiona y organiza la música para las próximas celebraciones.</p>
           </div>
-
-          <button type="button" className="repertoires-create-button" onClick={() => router.push('/create/repertoires')}>
-            + Crear Nuevo repertorio
+          <button type="button" className="repertoires-cta-button" onClick={() => router.push('/create/repertoires')}>
+            <span className="material-symbols-outlined">add_circle</span>
+            Crear Nuevo repertorio
           </button>
         </header>
 
-        <label className="repertoires-search-wrap" aria-label="Buscar en mis repertorios">
-          <input
-            type="search"
-            placeholder="Buscar en mis repertorios..."
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </label>
+        <div className="repertoires-search-bar">
+          <div className="repertoires-search-input-wrap">
+            <span className="material-symbols-outlined">search</span>
+            <input
+              type="text"
+              placeholder="Buscar por título, ocasión o fecha..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+          <div className="repertoires-search-divider"></div>
+          <button type="button" className="repertoires-date-button">
+            <span className="material-symbols-outlined">calendar_month</span>
+            Fecha
+          </button>
+        </div>
 
         {isLoading ? (
           <div className="repertoires-cards-grid" aria-busy aria-label="Cargando repertorios">
@@ -183,63 +193,90 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
         ) : null}
 
         {!isLoading && filteredItems.length === 0 ? (
-          <p className="repertoires-empty-state" style={{ padding: '24px 0', opacity: 0.75 }}>
-            Aún no tienes repertorios. Crea uno con el botón &quot;+ Crear Nuevo repertorio&quot;.
-          </p>
+          <div className="repertoires-empty-state">
+            <span className="material-symbols-outlined">folder_open</span>
+            <h3>Aún no tienes repertorios</h3>
+            <p>Crea tu primer repertorio con el botón &quot;Crear Nuevo repertorio&quot;</p>
+          </div>
         ) : null}
 
         <div className="repertoires-cards-grid" hidden={isLoading}>
           {filteredItems.map((item) => (
-            <article key={item.id} className="repertoires-card">
-              <header className="repertoires-card-head">
-                <strong>{item.title}</strong>
-                <small>{item.subtitle}</small>
-                <small>Data: {item.dateLabel}</small>
-              </header>
-
-              {item.coverImageUrl ? (
-                <div className="repertoires-card-image-wrap">
+            <article key={item.id} className="repertoires-card" onClick={() => router.push(`/repertoires/${item.id}`)} style={{ cursor: 'pointer' }}>
+              <div className="repertoires-card-image">
+                {item.coverImageUrl ? (
                   <Image
                     src={item.coverImageUrl}
                     alt={`Portada de ${item.title}`}
                     fill
-                    className="repertoires-card-image"
+                    className="repertoires-card-image-img"
                     sizes="(max-width: 768px) 100vw, 320px"
                   />
+                ) : (
+                  <div className="repertoires-card-placeholder">
+                    <span className="material-symbols-outlined">church</span>
+                  </div>
+                )}
+                <div className="repertoires-card-overlay"></div>
+                <div className="repertoires-card-badges">
+                  <span className={`repertoires-status-badge ${normalizeRepertoireStatus(item.status) === 'PUBLISHED' ? 'published' : 'draft'}`}>
+                    <span className="material-symbols-outlined">
+                      {normalizeRepertoireStatus(item.status) === 'PUBLISHED' ? 'check_circle' : 'edit_document'}
+                    </span>
+                    {getRepertoireStatusLabel(item.status)}
+                  </span>
                 </div>
-              ) : (
-                <div className="repertoires-card-image-wrap is-empty" aria-hidden>
-                  <span>Sin imagen</span>
-                </div>
-              )}
-
-              <div className="repertoires-card-status-row">
-                <span className={`repertoires-status-badge ${item.status === 'Publicado' ? 'is-published' : 'is-draft'}`}>{item.status}</span>
-                <span className={`repertoires-status-badge ${item.isPublic ? 'is-published' : 'is-draft'}`}>{item.isPublic ? 'Público' : 'Privado'}</span>
+                <button className="repertoires-card-menu" aria-label="Más opciones">
+                  <span className="material-symbols-outlined">more_vert</span>
+                </button>
               </div>
 
-              <p className="repertoires-card-meta">
-                {getSongsCount(item)} canciones, {getSheetsCount(item)} lecturas
-              </p>
+              <div className="repertoires-card-content">
+                <div className="repertoires-card-header">
+                  <div>
+                    <h3 className="repertoires-card-title">{item.title}</h3>
+                    <p className="repertoires-card-date">
+                      <span className="material-symbols-outlined">event</span>
+                      {item.dateLabel}
+                    </p>
+                  </div>
+                  <span className={`repertoires-visibility-badge ${item.isPublic ? 'public' : 'private'}`}>
+                    {item.isPublic ? 'Público' : 'Privado'}
+                  </span>
+                </div>
 
-              <div className="repertoires-card-actions" aria-label="acciones de repertorio">
-                <button type="button" aria-label="Editar repertorio" onClick={() => router.push(`/repertoires/${item.id}/edit`)}>
-                  <Image src="/assets/utils/iconly_light-outline_edit/iconlylightoutlineedit2x.png" alt="Editar" width={16} height={16} />
-                </button>
-                <button type="button" aria-label="Ver repertorio" onClick={() => router.push(`/repertoires/${item.id}`)}>
-                  <Image src="/assets/utils/iconly_light-outline_document/iconlylightoutlinedocument2x.png" alt="Ver" width={16} height={16} />
-                </button>
-                <button type="button" aria-label="Compartir repertorio">
-                  <Image src="/assets/utils/iconshare-social/iconshare2x.png" alt="Compartir" width={16} height={16} />
-                </button>
-                <button type="button" aria-label="Eliminar repertorio" onClick={() => void onDelete(item)}>
-                  <Image src="/assets/utils/iconly_light-outline_delete/iconlylightoutlinedelete2x.png" alt="Eliminar" width={16} height={16} />
+                <div className="repertoires-card-meta">
+                  <div className="repertoires-meta-item">
+                    <span className="material-symbols-outlined">queue_music</span>
+                    {getSongsCount(item)} Cantos
+                  </div>
+                  <div className="repertoires-meta-item">
+                    <span className="material-symbols-outlined">menu_book</span>
+                    {getSheetsCount(item)} Lecturas
+                  </div>
+                </div>
+              </div>
+
+              <div className="repertoires-card-actions">
+                <div className="repertoires-actions-left">
+                  <button type="button" aria-label="Editar repertorio" onClick={(e) => { e.stopPropagation(); router.push(`/repertoires/${item.id}/edit`); }}>
+                    <span className="material-symbols-outlined">edit</span>
+                  </button>
+                  <button type="button" aria-label="Ver repertorio" onClick={() => router.push(`/repertoires/${item.id}`)}>
+                    <span className="material-symbols-outlined">visibility</span>
+                  </button>
+                  <button type="button" aria-label="Compartir repertorio">
+                    <span className="material-symbols-outlined">share</span>
+                  </button>
+                </div>
+                <button type="button" className="repertoires-delete-button" aria-label="Eliminar repertorio" onClick={(e) => { e.stopPropagation(); void onDelete(item); }}>
+                  <span className="material-symbols-outlined">delete</span>
                 </button>
               </div>
             </article>
           ))}
         </div>
-      </article>
+      </main>
     </section>
   );
 }

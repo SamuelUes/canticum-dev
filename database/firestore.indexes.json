@@ -94,20 +94,21 @@
       ]
     },
     {
-      "collectionGroup": "_rate_limits",
+      "collectionGroup": "albumSongs",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "albumId", "order": "ASCENDING" },
+        { "fieldPath": "trackNumber", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "albums",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+        { "fieldPath": "artistId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
-    }
-  ],
-  "fieldOverrides": [
-    {
-      "collectionGroup": "_rate_limits",
-      "fieldPath": "expiresAt",
-      "ttl": {
-        "state": "ENABLED"
-      }
     }
   ]
 }

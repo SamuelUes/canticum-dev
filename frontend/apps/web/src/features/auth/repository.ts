@@ -5,14 +5,15 @@ import {
   onIdTokenChanged,
   type User
 } from 'firebase/auth';
-import { removeClientCacheByPrefix, removeSessionCacheByPrefix } from '../shared/clientCache';
+import { clearAllAppCache } from '../shared/clientCache';
 import { clearAllPendingClientSyncs } from '../song/clientPersistence';
-
-const functionsBaseUrl = (process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+import { functionsBaseUrl } from '../shared/functionsClient';
 
 const hasFirebaseConfig = Boolean(
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
 );
+
+export const BOOTSTRAP_ADMIN_UID = 'ltrJLJ03APUJl31WRsFoSWyRWaG2';
 
 function logRuntimeConnectionStatus(): void {
   if (typeof window === 'undefined') {
@@ -58,6 +59,14 @@ export interface AuthUser {
   displayName: string | null;
   role?: string;
   isPremium?: boolean;
+}
+
+export function isAdminUser(user?: Pick<AuthUser, 'role'> | null): boolean {
+  return user?.role === 'admin';
+}
+
+export function isModeratorUser(user?: Pick<AuthUser, 'role'> | null): boolean {
+  return user?.role === 'admin' || user?.role === 'moderator';
 }
 
 export interface AuthResult {
@@ -319,6 +328,51 @@ export async function signIn(email: string, password: string): Promise<AuthResul
   }
 }
 
+export async function bootstrapInitialAdminAccount(): Promise<AuthResult> {
+  if (!hasFirebaseConfig) {
+    return { ok: false, error: 'Firebase no está configurado en este entorno.' };
+  }
+
+  try {
+    const [{ auth, functions }, { httpsCallable }] = await Promise.all([
+      import('../../services/firebase'),
+      import('firebase/functions')
+    ]);
+
+    if (!auth?.currentUser) {
+      return { ok: false, error: 'Debes iniciar sesión con la cuenta bootstrap para activar el admin inicial.' };
+    }
+
+    if (auth.currentUser.uid !== BOOTSTRAP_ADMIN_UID) {
+      return { ok: false, error: 'Solo la cuenta bootstrap puede ejecutar esta acción.' };
+    }
+
+    const callable = httpsCallable(functions, 'bootstrapInitialAdmin');
+    await callable({});
+
+    const tokenResult = await auth.currentUser.getIdTokenResult(true);
+
+    return {
+      ok: true,
+      user: mapFirebaseUser(auth.currentUser, tokenResult.claims as Record<string, unknown>)
+    };
+  } catch (err) {
+    const error = err as { code?: string; message?: string } | null;
+    const code = error?.code ?? '';
+    const messages: Record<string, string> = {
+      'functions/permission-denied': 'No tienes permisos para activar el admin inicial.',
+      'functions/not-found': 'La función bootstrapInitialAdmin aún no está desplegada.',
+      'functions/unavailable': 'La función no está disponible en este momento.',
+      'auth/network-request-failed': 'Error de red. Intenta de nuevo.'
+    };
+
+    return {
+      ok: false,
+      error: messages[code] ?? error?.message ?? 'No se pudo activar el admin inicial.'
+    };
+  }
+}
+
 export async function signOut(): Promise<void> {
   clearAllPendingClientSyncs();
 
@@ -327,20 +381,14 @@ export async function signOut(): Promise<void> {
     writeDevSession(null);
     setExplicitSignOut(true);
     clearSessionCookie();
-    removeClientCacheByPrefix('canticum:');
-    removeClientCacheByPrefix('song-preferences:');
-    removeClientCacheByPrefix('song-favorite:');
-    removeSessionCacheByPrefix('__canticum_');
+    clearAllAppCache();
     return;
   }
 
   const { auth } = await import('../../services/firebase');
   await firebaseSignOut(auth);
   clearSessionCookie();
-  removeClientCacheByPrefix('canticum:');
-  removeClientCacheByPrefix('song-preferences:');
-  removeClientCacheByPrefix('song-favorite:');
-  removeSessionCacheByPrefix('__canticum_');
+  clearAllAppCache();
 }
 
 function writeSessionCookie(token: string): void {

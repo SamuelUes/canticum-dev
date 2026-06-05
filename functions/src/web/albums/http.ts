@@ -1,7 +1,11 @@
 import * as functions from 'firebase-functions/v1';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
-import { getPathSegments, getQueryString, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { updateAlbumStatusInCloudSql } from '../../shared/cloudSql/artists';
+import { createAlbumInCloudSql } from '../../shared/cloudSql/albums';
+import { getSharedPool } from '../../shared/cloudSql/pool';
+import { getBodyRecord, getOptionalAuthContext, getPathSegments, getQueryString, handlePreflight, sendError, sendJson } from '../../shared/http/http';
 
 type AlbumType = 'album' | 'single' | 'ep' | 'compilation' | 'live';
 
@@ -34,6 +38,7 @@ interface AlbumSongRow {
   hasSheet: boolean;
   isPrimaryRelease: boolean;
   isVerified?: boolean;
+  status?: string;
 }
 
 interface AlbumTracksBucket {
@@ -130,6 +135,35 @@ function computePopularity(raw: unknown, totalViews: number): number {
   return Math.max(0, Math.min(100, Math.round(Math.log10(totalViews + 1) * 20)));
 }
 
+
+function normalizeAlbumStatus(raw: unknown): string {
+  const status = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  return status || 'DRAFT';
+}
+
+function resolveAlbumOwnerUid(data: Record<string, unknown>): string {
+  if (typeof data.ownerUserId === 'string' && data.ownerUserId.trim().length > 0) {
+    return data.ownerUserId.trim();
+  }
+  if (typeof data.createdBy === 'string' && data.createdBy.trim().length > 0) {
+    return data.createdBy.trim();
+  }
+  return '';
+}
+
+function canViewAlbum(data: Record<string, unknown>, viewerUid: string | null, role?: string): boolean {
+  if (role === 'admin') {
+    return true;
+  }
+
+  const status = normalizeAlbumStatus(data.status);
+  if (status === 'PUBLISHED' || status === 'APPROVED') {
+    return true;
+  }
+
+  return Boolean(viewerUid && resolveAlbumOwnerUid(data) === viewerUid);
+}
+
 function deriveReleaseDate(data: Record<string, unknown>): { releaseDate?: string; precision?: 'year' | 'month' | 'day'; year: number } {
   const rd = typeof data.releaseDate === 'string' ? (data.releaseDate as string) : undefined;
   const precision = resolvePrecision(data.releaseDatePrecision);
@@ -175,11 +209,12 @@ function buildSongRow(docId: string, data: Record<string, unknown>, trackNumber:
     hasLyrics: Boolean(data.hasLyrics ?? (typeof data.lyrics === 'string' && (data.lyrics as string).length > 0)),
     hasSheet: Boolean(data.hasSheet ?? (typeof data.sheetUrl === 'string' && (data.sheetUrl as string).length > 0)),
     isPrimaryRelease,
-    isVerified: Boolean(data.isVerified)
+    isVerified: Boolean(data.isVerified),
+    status: typeof data.status === 'string' ? data.status : undefined
   };
 }
 
-async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string): Promise<AlbumDetail | null> {
+async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string, viewerUid: string | null, viewerRole?: string): Promise<AlbumDetail | null> {
   const albumSnap = await db.collection('albums').doc(albumId).get();
 
   if (!albumSnap.exists) {
@@ -187,6 +222,10 @@ async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string): P
   }
 
   const albumData = (albumSnap.data() ?? {}) as Record<string, unknown>;
+
+  if (!canViewAlbum(albumData, viewerUid, viewerRole)) {
+    return null;
+  }
 
   const artistId = String(albumData.artistId ?? '');
   let artistName = String(albumData.artistName ?? '');
@@ -205,29 +244,22 @@ async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string): P
     }
   }
 
-  const albumSongsSnap = await db
-    .collection('albumSongs')
-    .where('albumId', '==', albumId)
-    .orderBy('trackNumber', 'asc')
-    .get();
-
   const songs: AlbumSongRow[] = [];
 
-  if (!albumSongsSnap.empty) {
-    const songFetches = albumSongsSnap.docs.map(async (junctionDoc) => {
-      const jd = (junctionDoc.data() ?? {}) as Record<string, unknown>;
-      const songId = String(jd.songId ?? '');
-      if (!songId) return null;
-
+  // Get songs from songIds array in album document
+  const songIds = Array.isArray(albumData.songIds) ? (albumData.songIds as string[]) : [];
+  if (songIds.length > 0) {
+    const songFetches = songIds.map(async (songId, index) => {
       const songSnap = await db.collection('songs').doc(songId).get();
       if (!songSnap.exists) return null;
 
       const sd = (songSnap.data() ?? {}) as Record<string, unknown>;
+      console.log('[albums] Song data for', songId, 'has status:', typeof sd.status === 'string', 'status value:', sd.status);
       return buildSongRow(
         songSnap.id,
         sd,
-        Number(jd.trackNumber ?? 0),
-        Boolean(jd.isPrimaryRelease)
+        index + 1, // Use array index as track number
+        true // Assume primary release
       );
     });
 
@@ -309,16 +341,17 @@ async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string): P
   };
 }
 
-async function getAlbumsByArtist(db: FirebaseFirestore.Firestore, artistId: string): Promise<AlbumRef[]> {
-  const snap = await db
-    .collection('albums')
-    .where('artistId', '==', artistId)
-    .where('status', '==', 'PUBLISHED')
-    .orderBy('releaseYear', 'desc')
-    .get();
+async function getAlbumsByArtist(db: FirebaseFirestore.Firestore, artistId: string, viewerUid: string | null, viewerRole?: string): Promise<AlbumRef[]> {
+  const isAdmin = viewerRole === 'admin';
+  const baseQuery = db.collection('albums').where('artistId', '==', artistId);
+  const snap = isAdmin
+    ? await baseQuery.orderBy('releaseYear', 'desc').get()
+    : await baseQuery.where('status', '==', 'PUBLISHED').orderBy('releaseYear', 'desc').get();
 
-  return snap.docs.map((doc) => {
-    const d = (doc.data() ?? {}) as Record<string, unknown>;
+  return snap.docs
+    .map((doc) => ({ doc, data: (doc.data() ?? {}) as Record<string, unknown> }))
+    .filter((entry) => canViewAlbum(entry.data, viewerUid, viewerRole))
+    .map(({ doc, data: d }) => {
     const title = String(d.title ?? d.name ?? '');
     const coverUrl = typeof d.coverUrl === 'string' && d.coverUrl ? d.coverUrl : undefined;
     const images = normalizeImages(d.images, coverUrl);
@@ -351,13 +384,215 @@ export const albums = functions.https.onRequest(async (req, res) => {
     return;
   }
 
+  const auth = await getOptionalAuthContext(req);
+  const viewerUid = auth?.uid ?? null;
+  const viewerRole = typeof auth?.token.role === 'string' ? auth.token.role : undefined;
+
+  const segments = getPathSegments(req);
+  const db = getAppFirestore();
+
+  // POST /albums - Create new album
+  if (segments.length === 0 && req.method === 'POST') {
+    if (!auth?.uid || (viewerRole !== 'admin' && viewerRole !== 'editor')) {
+      sendError(res, 403, 'forbidden', 'Solo admin o editor pueden crear álbumes.');
+      return;
+    }
+
+    const body = getBodyRecord(req);
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const artistId = Number(body.artistId);
+    const artistName = typeof body.artistName === 'string' ? body.artistName.trim() : '';
+    const releaseYear = typeof body.releaseYear === 'number' ? body.releaseYear : undefined;
+    const albumType = resolveAlbumType(body.albumType);
+    const genre = typeof body.genre === 'string' ? body.genre.trim() : '';
+    const coverUrl = typeof body.coverUrl === 'string' ? body.coverUrl.trim() : undefined;
+    const tracks = Array.isArray(body.tracks) ? body.tracks as Array<Record<string, unknown>> : [];
+
+    if (!title) {
+      sendError(res, 400, 'bad_request', 'El título es requerido.');
+      return;
+    }
+
+    if (!Number.isFinite(artistId) || artistId <= 0) {
+      sendError(res, 400, 'bad_request', 'El ID del artista es requerido y debe ser un número válido.');
+      return;
+    }
+
+    if (!artistName) {
+      sendError(res, 400, 'bad_request', 'El nombre del artista es requerido.');
+      return;
+    }
+
+    if (!genre) {
+      sendError(res, 400, 'bad_request', 'El género es requerido.');
+      return;
+    }
+
+    if (tracks.length === 0) {
+      sendError(res, 400, 'bad_request', 'El álbum debe tener al menos una pista.');
+      return;
+    }
+
+    const normalizedTracks = tracks
+      .map((t) => ({
+        songId: typeof t.songId === 'string' ? t.songId.trim() : '',
+        songTitle: typeof t.songTitle === 'string' ? t.songTitle.trim() : '',
+        trackNumber: Number(t.trackNumber ?? 0)
+      }))
+      .filter((t) => t.songId && Number.isFinite(t.trackNumber) && t.trackNumber > 0);
+
+    if (normalizedTracks.length === 0) {
+      sendError(res, 400, 'bad_request', 'Las pistas deben tener songId y trackNumber válidos.');
+      return;
+    }
+
+    try {
+      console.log('[albums] Creating album with artistId:', artistId, 'title:', title, 'tracks:', normalizedTracks.length);
+      const result = await createAlbumInCloudSql({
+        artistId,
+        title,
+        releaseYear,
+        albumType,
+        genre,
+        coverUrl,
+        upc: undefined,
+        label: undefined,
+        tracks: normalizedTracks
+      });
+      console.log('[albums] Album created in Cloud SQL with ID:', result.albumId);
+
+      // Generate Firestore document ID
+      const albumId = `album_${result.albumId}`;
+
+      // Optionally project to Firestore
+      console.log('[albums] Creating Firestore document:', albumId);
+      const firestoreData: Record<string, unknown> = {
+        id: albumId,
+        sqlAlbumId: result.albumId,
+        title,
+        artistId: String(artistId),
+        artistName,
+        releaseYear: releaseYear || new Date().getFullYear(),
+        albumType,
+        genres: [genre],
+        status: 'PUBLISHED',
+        songsCount: normalizedTracks.length,
+        totalTracks: normalizedTracks.length,
+        songIds: normalizedTracks.map(t => t.songId),
+        createdBy: auth.uid,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      };
+
+      // Only add coverUrl if it's defined
+      if (coverUrl) {
+        firestoreData.coverUrl = coverUrl;
+      }
+
+      await db.collection('albums').doc(albumId).set(firestoreData);
+      console.log('[albums] Firestore document created successfully');
+
+      sendJson(res, 201, { albumId, sqlAlbumId: result.albumId });
+    } catch (error) {
+      console.error('[albums] Error creating album:', error);
+      if (error instanceof Error) {
+        console.error('[albums] Error message:', error.message);
+        console.error('[albums] Error stack:', error.stack);
+      }
+      sendError(res, 500, 'internal_error', 'Error al crear el álbum en Cloud SQL.');
+    }
+    return;
+  }
+
+  // PATCH /albums/:id - Update album (e.g., cover URL)
+  if (segments.length === 1 && req.method === 'PATCH') {
+    if (!auth?.uid || (viewerRole !== 'admin' && viewerRole !== 'editor')) {
+      sendError(res, 403, 'forbidden', 'Solo admin o editor pueden actualizar álbumes.');
+      return;
+    }
+
+    const albumId = segments[0];
+    const body = getBodyRecord(req);
+    const coverUrl = typeof body.coverUrl === 'string' ? body.coverUrl.trim() : undefined;
+
+    try {
+      const pool = getSharedPool();
+      
+      if (coverUrl) {
+        // Update cover_url and images_json in Cloud SQL
+        const imagesJson = JSON.stringify([{ url: coverUrl, width: 1200, height: 1200 }]);
+        await pool.query(
+          'UPDATE albums SET cover_url = $1, images_json = $2 WHERE id = $3',
+          [coverUrl, imagesJson, Number(albumId.replace('album_', ''))]
+        );
+
+        // Update coverUrl in Firestore
+        await db.collection('albums').doc(albumId).update({
+          coverUrl,
+          images: [{ url: coverUrl, width: 1200, height: 1200 }],
+          updatedAt: FieldValue.serverTimestamp()
+        });
+      }
+
+      sendJson(res, 200, { success: true });
+    } catch (error) {
+      console.error('[albums] Error updating album:', error);
+      sendError(res, 500, 'internal_error', 'Error al actualizar el álbum.');
+    }
+    return;
+  }
+
+  if (segments.length === 2 && segments[1] === 'status' && req.method === 'PATCH') {
+    if (!auth?.uid || viewerRole !== 'admin') {
+      sendError(res, 403, 'forbidden', 'Only admin can change album status.');
+      return;
+    }
+
+    const albumId = segments[0];
+    const albumRef = db.collection('albums').doc(albumId);
+    const albumSnap = await albumRef.get();
+
+    if (!albumSnap.exists) {
+      sendError(res, 404, 'not_found', 'Album not found.');
+      return;
+    }
+
+    const body = getBodyRecord(req);
+    const requestedStatus = typeof body.status === 'string' ? body.status.trim().toUpperCase() : '';
+    const allowed = new Set(['DRAFT', 'IN_REVIEW', 'REJECTED', 'APPROVED', 'PUBLISHED']);
+
+    if (!allowed.has(requestedStatus)) {
+      sendError(res, 400, 'invalid_argument', 'status must be one of DRAFT, IN_REVIEW, REJECTED, APPROVED, PUBLISHED.');
+      return;
+    }
+
+    const albumData = (albumSnap.data() ?? {}) as Record<string, unknown>;
+    const sqlAlbumId = Number(albumData.sqlAlbumId ?? albumId);
+
+    if (Number.isFinite(sqlAlbumId) && sqlAlbumId > 0) {
+      try {
+        await updateAlbumStatusInCloudSql(Math.floor(sqlAlbumId), requestedStatus);
+      } catch (error) {
+        console.error('[albums] Cloud SQL status update failed:', error);
+        sendError(res, 500, 'internal_error', 'Failed to update album status in Cloud SQL.');
+        return;
+      }
+    }
+
+    await albumRef.set({
+      status: requestedStatus,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(requestedStatus === 'PUBLISHED' ? { isPublic: true, publishedAt: FieldValue.serverTimestamp(), publishedBy: auth.uid } : {})
+    }, { merge: true });
+
+    sendJson(res, 200, { ok: true, albumId, status: requestedStatus });
+    return;
+  }
+
   if (req.method !== 'GET') {
     sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
     return;
   }
-
-  const segments = getPathSegments(req);
-  const db = getAppFirestore();
 
   if (segments.length === 0) {
     const artistId = getQueryString(req, 'artistId');
@@ -367,7 +602,7 @@ export const albums = functions.https.onRequest(async (req, res) => {
     }
 
     try {
-      const albumList = await getAlbumsByArtist(db, artistId);
+      const albumList = await getAlbumsByArtist(db, artistId, viewerUid, viewerRole);
       sendJson(res, 200, { albums: albumList });
     } catch (err) {
       console.error('[albums] Error listing by artist:', err);
@@ -379,7 +614,7 @@ export const albums = functions.https.onRequest(async (req, res) => {
   if (segments.length === 1) {
     const albumId = segments[0];
     try {
-      const album = await getAlbumById(db, albumId);
+      const album = await getAlbumById(db, albumId, viewerUid, viewerRole);
       if (!album) {
         sendError(res, 404, 'not_found', 'Álbum no encontrado.');
         return;

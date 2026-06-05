@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { useMemo } from 'react';
 import type { SearchEntityItem, SearchrepertoireItem, SearchSongItem } from '../../types/search';
 import { HorizontalConveyor } from '../ui/HorizontalConveyor';
 
@@ -39,16 +40,21 @@ function formatTimestamp(value?: string | null): number {
  * sorted most-recent first. Renders nothing if the user has no own content.
  */
 export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySectionProps) {
-  if (songs.length === 0 && repertoires.length === 0) {
+  const orderedSongs = useMemo(() => {
+    return [...songs]
+      .sort((a, b) => formatTimestamp(b.publishedAt ?? b.createdAt) - formatTimestamp(a.publishedAt ?? a.createdAt))
+      .slice(0, 8);
+  }, [songs]);
+
+  const orderedRepertoires = useMemo(() => {
+    return [...repertoires]
+      .sort((a, b) => (b.dateLabel || '').localeCompare(a.dateLabel || ''))
+      .slice(0, 8);
+  }, [repertoires]);
+
+  if (orderedSongs.length === 0 && orderedRepertoires.length === 0) {
     return null;
   }
-
-  const orderedSongs = [...songs].sort(
-    (a, b) => formatTimestamp(b.publishedAt ?? b.createdAt) - formatTimestamp(a.publishedAt ?? a.createdAt)
-  );
-  const orderedRepertoires = [...repertoires].sort(
-    (a, b) => (b.dateLabel || '').localeCompare(a.dateLabel || '')
-  );
 
   return (
     <section className="home-section layout-h-margin">
@@ -58,15 +64,15 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
         <div className="my-section-block">
           <h3 className="my-section-heading">Mis canciones</h3>
           <HorizontalConveyor ariaLabel="Mis canciones" className="my-section-conveyor">
-            <div className="my-section-track" role="listbox" aria-label="Mis canciones">
-              {orderedSongs.slice(0, 8).map((song) => {
+            <div className="my-section-track" role="list" aria-label="Mis canciones">
+              {orderedSongs.map((song) => {
                 const imageUrl = pickImage(song);
                 return (
                   <Link
                     key={song.id}
                     href={`/songs/${song.songId ?? song.id}`}
                     className="song-card my-section-card"
-                    role="option"
+                    role="link"
                     aria-label={song.title}
                   >
                     {imageUrl ? (
@@ -77,6 +83,7 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
                           fill
                           className="song-thumb-image"
                           sizes="(max-width: 768px) 60vw, 180px"
+                          loading="lazy"
                         />
                       </div>
                     ) : (
@@ -98,15 +105,15 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
         <div className="my-section-block">
           <h3 className="my-section-heading">Mis repertorios</h3>
           <HorizontalConveyor ariaLabel="Mis repertorios" className="my-section-conveyor">
-            <div className="my-section-track" role="listbox" aria-label="Mis repertorios">
-              {orderedRepertoires.slice(0, 8).map((repertoire) => {
+            <div className="my-section-track" role="list" aria-label="Mis repertorios">
+              {orderedRepertoires.map((repertoire) => {
                 const imageUrl = pickImage(repertoire);
                 return (
                   <Link
                     key={repertoire.id}
                     href={`/repertoires/${repertoire.repertoireId ?? repertoire.id}`}
                     className="song-card my-section-card"
-                    role="option"
+                    role="link"
                     aria-label={repertoire.title}
                   >
                     {imageUrl ? (
@@ -117,6 +124,7 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
                           fill
                           className="song-thumb-image"
                           sizes="(max-width: 768px) 60vw, 180px"
+                          loading="lazy"
                         />
                       </div>
                     ) : (

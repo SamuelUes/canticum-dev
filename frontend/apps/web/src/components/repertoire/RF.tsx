@@ -265,7 +265,7 @@ export function RepertoireDetailClientFallback({ repertoireId }: RepertoireDetai
 
             {repertoire.description ? (
               <div className="repertoire-detail-meta-row">
-                <span className="repertoire-detail-meta-label">Descripción</span>
+                <span className="repertoire-detail-meta-label">DescripciónAAA</span>
                 <p>{repertoire.description}</p>
               </div>
             ) : null}

@@ -1,6 +1,6 @@
 'use client';
 
-import Image from 'next/image';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface AudioPlayerProps {
@@ -20,10 +20,10 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function resolveVolumeIconPath(volume: number, muted: boolean): string {
-  if (muted || volume <= 0) return '/assets/utils/volumeoff/volumeoff2x.png';
-  if (volume < 0.5) return '/assets/utils/volumedown/volumedown2x.png';
-  return '/assets/utils/volumeup/volumup2x.png';
+function resolveVolumeIconName(volume: number, muted: boolean): string {
+  if (muted || volume <= 0) return 'volume_off';
+  if (volume < 0.5) return 'volume_down';
+  return 'volume_up';
 }
 
 export function AudioPlayer({ src, title, autoPlay = false, showMainButton = true, onPlayingChange, onEnded }: AudioPlayerProps) {
@@ -126,14 +126,7 @@ export function AudioPlayer({ src, title, autoPlay = false, showMainButton = tru
           onClick={handleTogglePlay}
           aria-label={isPlaying ? 'Pausar audio' : 'Reproducir audio'}
         >
-          <Image
-            src="/assets/utils/volumeup/volumeup2x.png"
-            alt=""
-            width={40}
-            height={40}
-            aria-hidden="true"
-            className="audio-player-main-icon"
-          />
+          <span className="material-symbols-outlined audio-player-main-icon" aria-hidden="true">volume_up</span>
           <span className="audio-player-play-badge" aria-hidden="true">
             {isPlaying ? '❚❚' : '▶'}
           </span>
@@ -148,13 +141,7 @@ export function AudioPlayer({ src, title, autoPlay = false, showMainButton = tru
             onClick={handleToggleMute}
             aria-label={muted || volume === 0 ? 'Activar sonido' : 'Silenciar'}
           >
-            <Image
-              src={resolveVolumeIconPath(volume, muted)}
-              alt=""
-              width={22}
-              height={22}
-              aria-hidden="true"
-            />
+            <span className="material-symbols-outlined" aria-hidden="true">{resolveVolumeIconName(volume, muted)}</span>
           </button>
 
           <input

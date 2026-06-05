@@ -12,12 +12,14 @@ import type {
   SearchSongItem,
   SearchVersionItem
 } from '../../types/search';
+import { buildFunctionsHeaders, functionsBaseUrl, shouldUseMockFallback } from '../shared/functionsClient';
 
 interface SearchDatasetClientOptions {
   forceRefresh?: boolean;
   timeoutMs?: number;
   scope?: 'home' | 'catalog';
   category?: string;
+  signal?: AbortSignal;
 }
 
 interface SearchDatasetCacheEntry {
@@ -88,7 +90,7 @@ function resolveArtistSubtitle(raw: Record<string, unknown>): string {
 }
 
 export async function getSearchDatasetClient(options: SearchDatasetClientOptions = {}): Promise<SearchDataset> {
-  const { forceRefresh = false, timeoutMs = SEARCH_DATASET_FETCH_TIMEOUT_MS, scope = 'catalog', category } = options;
+  const { forceRefresh = false, timeoutMs = SEARCH_DATASET_FETCH_TIMEOUT_MS, scope = 'catalog', category, signal } = options;
   const normalizedCategory = normalizeCategorySlug(category);
   const shouldUseScopeCache = normalizedCategory.length === 0;
   const cached = getCachedSearchDatasetClient(scope);
@@ -110,16 +112,11 @@ export async function getSearchDatasetClient(options: SearchDatasetClientOptions
 
   const requestPromise = (async (): Promise<SearchDataset> => {
     try {
-      const token = await getAuthIdToken();
-      const headers: Record<string, string> = {
-        Accept: 'application/json'
-      };
-
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
+      const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
 
       const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      signal?.addEventListener('abort', onAbort, { once: true });
       const timeoutHandle = setTimeout(() => {
         controller.abort();
       }, timeoutMs);
@@ -145,16 +142,23 @@ export async function getSearchDatasetClient(options: SearchDatasetClientOptions
         }
 
         const payload = (await response.json()) as unknown;
-        const normalized = normalizeDataset(payload) ?? searchMockData;
+        const normalized = normalizeDataset(payload) ?? (shouldUseMockFallback() ? searchMockData : null);
+        if (!normalized) {
+          throw new Error('Search catalog payload is invalid.');
+        }
         if (shouldUseScopeCache) {
           writeSearchDatasetCache(normalized, scope);
         }
         return normalized;
       } finally {
+        signal?.removeEventListener('abort', onAbort);
         clearTimeout(timeoutHandle);
       }
     } catch {
-      return (shouldUseScopeCache ? cached : null) ?? searchMockData;
+      if (shouldUseScopeCache && cached) {
+        return cached;
+      }
+      return shouldUseMockFallback() ? searchMockData : EMPTY_SEARCH_DATASET;
     } finally {
       if (shouldUseScopeCache) {
         inFlightSearchDatasetRequestByScope.delete(scope);
@@ -230,29 +234,15 @@ function getSearchDatasetCacheKey(scope: 'home' | 'catalog'): string {
   return `${SEARCH_DATASET_CACHE_KEY_PREFIX}:${scope}`;
 }
 
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
-
-async function getAuthIdToken(): Promise<string | null> {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
-  if (!hasFirebaseConfig) {
-    return null;
-  }
-
-  try {
-    const { auth } = await import('../../services/firebase');
-    if (!auth.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
+const EMPTY_SEARCH_DATASET: SearchDataset = {
+  filters: {
+    liturgicalTypes: [],
+    liturgicalTimes: [],
+    authorOrChoirs: [],
+    categories: []
+  },
+  items: []
+};
 
 export async function getClientCurrentUserId(): Promise<string | null> {
   if (typeof window === 'undefined') {
@@ -547,7 +537,7 @@ function normalizeDataset(rawData: unknown): SearchDataset | null {
 
 export async function getSearchDataset(): Promise<SearchDataset> {
   if (!functionsBaseUrl) {
-    return searchMockData;
+    return shouldUseMockFallback() ? searchMockData : EMPTY_SEARCH_DATASET;
   }
 
   try {
@@ -565,8 +555,11 @@ export async function getSearchDataset(): Promise<SearchDataset> {
 
     const payload = (await response.json()) as unknown;
     const normalized = normalizeDataset(payload);
-    return normalized ?? searchMockData;
+    if (normalized) {
+      return normalized;
+    }
+    return shouldUseMockFallback() ? searchMockData : EMPTY_SEARCH_DATASET;
   } catch {
-    return searchMockData;
+    return shouldUseMockFallback() ? searchMockData : EMPTY_SEARCH_DATASET;
   }
 }

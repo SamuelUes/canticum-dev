@@ -1,4 +1,4 @@
-export type AlbumType = 'album' | 'single' | 'ep' | 'compilation' | 'live';
+export type AlbumType = 'album' | 'single' | 'ep' | 'compilation' | 'live' | 'concert';
 
 /** Spotify-aligned image descriptor (largest first when in a list). */
 export interface AlbumImage {
@@ -58,6 +58,7 @@ export interface AlbumSongRow {
   hasSheet: boolean;
   isPrimaryRelease: boolean;
   isVerified?: boolean;
+  status?: string;
 }
 
 /** Paged tracks bucket, Spotify-aligned (`{ href, limit, offset, total, next, previous, items }`). */
@@ -107,6 +108,8 @@ export interface AlbumDetail {
   tracks?: AlbumTracksBucket;
   /** Back-compat flat song list (mirror of `tracks.items`). */
   songs: AlbumSongRow[];
+  /** Array of song IDs in the album. */
+  songIds?: string[];
   /** Spotify-aligned metadata. */
   label?: string;
   genres?: string[];
@@ -115,6 +118,7 @@ export interface AlbumDetail {
   externalUrls?: AlbumExternalUrls;
   /** 0-100 normalized popularity score (derived from total views if absent). */
   popularity?: number;
+  status?: string;
 }
 
 export interface AlbumRef {
@@ -130,4 +134,34 @@ export interface AlbumRef {
   songsCount: number;
   totalTracks?: number;
   artists?: AlbumSimplifiedArtist[];
+  status?: string;
+}
+
+/** Track in album creation flow. */
+export interface AlbumTrack {
+  songId: string;
+  songTitle: string;
+  versionId?: string;
+  versionName?: string;
+  instrumentName?: string;
+  trackNumber: number;
+}
+
+/** Track payload for album creation (simplified for backend). */
+export interface AlbumTrackPayload {
+  songId: string;
+  songTitle: string;
+  trackNumber: number;
+}
+
+/** Payload for creating a new album. */
+export interface CreateAlbumPayload {
+  title: string;
+  artistId: number;
+  artistName: string;
+  releaseYear?: number;
+  albumType: AlbumType;
+  genre: string;
+  coverImageUrl?: string;
+  tracks: AlbumTrack[];
 }

@@ -1,14 +1,29 @@
 'use client';
 
-import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
 export function CreateMenu() {
   const [isOpen, setIsOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { user, loading } = useAuth();
+  const canManageMisales = user?.role === 'admin' || user?.role === 'editor';
+  const canManageAlbums = user?.role === 'admin' || user?.role === 'editor';
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogTitleId = useId();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen && triggerRef.current) {
+      triggerRef.current.focus();
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -43,58 +58,91 @@ export function CreateMenu() {
         aria-label="crear"
         aria-haspopup="dialog"
         aria-expanded={isOpen}
+        aria-controls={isOpen ? dialogTitleId : undefined}
         onClick={handleToggle}
+        ref={triggerRef}
       >
-        <Image
-          src="/assets/utils/iconly_light-outline_plus/iconlylightoutlineplus2x.png"
-          alt="Agregar"
-          width={18}
-          height={18}
-          className="action-icon"
-        />
+        <span className="material-symbols-outlined action-icon" aria-hidden="true">add_circle</span>
       </button>
 
-      {isOpen && (
-        <div className="create-overlay-backdrop" onClick={() => setIsOpen(false)}>
-          <div
-            className="create-overlay-panel"
-            role="dialog"
-            aria-label="Escoge qué se creará"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="create-overlay-title">Escoge que se creará</h2>
-
-            <div className="create-overlay-options">
-              <button
-                type="button"
-                className="create-overlay-card create-overlay-card--song"
-                onClick={() => handleOption('/create/song')}
-              >
-                <span className="create-overlay-card-icon">♫</span>
-                <strong>Canción</strong>
-              </button>
-
-              <button
-                type="button"
-                className="create-overlay-card create-overlay-card--repertoire"
-                onClick={() => handleOption('/create/repertoires')}
-              >
-                <span className="create-overlay-card-icon">☰</span>
-                <strong>Repertorio</strong>
-              </button>
-            </div>
-
-            <button
-              type="button"
-              className="create-overlay-close"
-              aria-label="Cerrar"
+      {isOpen && mounted
+        ? createPortal(
+            <div
+              className="create-overlay-backdrop"
               onClick={() => setIsOpen(false)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  setIsOpen(false);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label="Cerrar selector de creación"
             >
-              ✕
-            </button>
-          </div>
-        </div>
-      )}
+              <div
+                className="create-overlay-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={dialogTitleId}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2 id={dialogTitleId} className="create-overlay-title">Escoge que se creará</h2>
+
+                <div className="create-overlay-options">
+                  <button
+                    type="button"
+                    className="create-overlay-card create-overlay-card--song"
+                    onClick={() => handleOption('/create/song')}
+                  >
+                    <span className="create-overlay-card-icon">♫</span>
+                    <strong>Canción</strong>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="create-overlay-card create-overlay-card--repertoire"
+                    onClick={() => handleOption('/create/repertoires')}
+                  >
+                    <span className="create-overlay-card-icon">☰</span>
+                    <strong>Repertorio</strong>
+                  </button>
+
+                  {canManageMisales ? (
+                    <button
+                      type="button"
+                      className="create-overlay-card create-overlay-card--misal"
+                      onClick={() => handleOption('/admin/misales')}
+                    >
+                      <span className="create-overlay-card-icon">📄</span>
+                      <strong>Misal semanal</strong>
+                    </button>
+                  ) : null}
+
+                  {canManageAlbums ? (
+                    <button
+                      type="button"
+                      className="create-overlay-card create-overlay-card--album"
+                      onClick={() => handleOption('/admin/albums')}
+                    >
+                      <span className="create-overlay-card-icon">💿</span>
+                      <strong>Álbum</strong>
+                    </button>
+                  ) : null}
+                </div>
+
+                <button
+                  type="button"
+                  className="create-overlay-close"
+                  aria-label="Cerrar"
+                  onClick={() => setIsOpen(false)}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </>
   );
 }

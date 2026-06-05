@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Image from 'next/image';
 import type { SubscriptionPlan } from '../../types/subscription';
 
 interface SubscriptionPlansProps {
@@ -79,17 +78,9 @@ export function SubscriptionPlans({ plans, onPlanSelect, currentPlan, processing
               <ul className="sp-features">
                 {plan.features.map((f) => (
                   <li key={f.id} className="sp-feature">
-                    <Image
-                      src={
-                        f.included
-                          ? '/assets/utils/icn-circlecircle-green/icncirclecirclegreen2x.png'
-                          : '/assets/utils/icn-circlecircle-xsmute/icncirclecirclexsmute2x.png'
-                      }
-                      alt={f.included ? 'Incluido' : 'No incluido'}
-                      width={22}
-                      height={22}
-                      className="sp-feature-icon"
-                    />
+                    <span className={`material-symbols-outlined sp-feature-icon ${f.included ? 'sp-feature-icon--included' : 'sp-feature-icon--excluded'}`} aria-hidden="true">
+                      {f.included ? 'check_circle' : 'cancel'}
+                    </span>
                     <span className={`sp-feature-text ${!f.included ? 'sp-feature-text--muted' : ''}`}>
                       {f.title}
                     </span>

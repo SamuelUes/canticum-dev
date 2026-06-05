@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Skeleton from 'react-loading-skeleton';
+import { functionsBaseUrl } from '../../features/shared/functionsClient';
 
 export interface ArtistOption {
   id: number;
@@ -19,17 +20,11 @@ interface ArtistAutocompleteProps {
   disabled?: boolean;
 }
 
-const functionsBaseUrl = [
-  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
-]
-  .map((v) => (typeof v === 'string' ? v.trim() : ''))
-  .find((v) => v.length > 0)?.replace(/\/$/, '') ?? '';
-
-async function fetchArtists(query: string): Promise<ArtistOption[]> {
+async function fetchArtists(query: string, signal?: AbortSignal): Promise<ArtistOption[]> {
   if (!functionsBaseUrl || !query.trim()) return [];
   try {
     const url = `${functionsBaseUrl}/artists?q=${encodeURIComponent(query.trim())}&limit=10`;
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
     if (!res.ok) return [];
     const data = (await res.json()) as { items?: ArtistOption[] };
     return Array.isArray(data.items) ? data.items : [];
@@ -51,6 +46,8 @@ export function ArtistAutocomplete({
   const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchControllerRef = useRef<AbortController | null>(null);
+  const latestQueryRef = useRef('');
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,13 +79,32 @@ export function ArtistAutocomplete({
     }
 
     debounceRef.current = setTimeout(async () => {
+      fetchControllerRef.current?.abort();
+      const controller = new AbortController();
+      fetchControllerRef.current = controller;
+      const requestedQuery = text.trim().toLowerCase();
+      latestQueryRef.current = requestedQuery;
       setLoading(true);
-      const results = await fetchArtists(text);
-      setSuggestions(results);
-      setShowDropdown(results.length > 0);
-      setLoading(false);
+      try {
+        const results = await fetchArtists(text, controller.signal);
+        if (latestQueryRef.current !== requestedQuery) {
+          return;
+        }
+        setSuggestions(results);
+        setShowDropdown(results.length > 0);
+      } finally {
+        if (latestQueryRef.current === requestedQuery) {
+          setLoading(false);
+        }
+      }
     }, 300);
   }, [onChange]);
+
+  useEffect(() => {
+    return () => {
+      fetchControllerRef.current?.abort();
+    };
+  }, []);
 
   const handleSelect = useCallback((artist: ArtistOption) => {
     setInputText(artist.name);

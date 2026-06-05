@@ -84,14 +84,6 @@ function resolveArtistName(item: SearchEntityItem): string {
   return title;
 }
 
-function resolveArtistSubtitle(item: SearchEntityItem): string {
-  const subtitle = item.subtitle.trim();
-  if (!subtitle || subtitle.toLowerCase() === 'unknown') {
-    return 'General';
-  }
-  return subtitle;
-}
-
 export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', dataset }: SearchExplorerProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -130,6 +122,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
 
   useEffect(() => {
     let disposed = false;
+    const controller = new AbortController();
     const normalizedCategory = initialCategory.trim().toLowerCase();
     const categoryParam = !normalizedCategory || normalizedCategory === 'todos' ? '' : normalizedCategory;
 
@@ -137,7 +130,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
       try {
         const [resolvedUserId, resolvedDataset] = await Promise.all([
           getClientCurrentUserId(),
-          getSearchDatasetClient({ scope: 'catalog', category: categoryParam })
+          getSearchDatasetClient({ scope: 'catalog', category: categoryParam, signal: controller.signal })
         ]);
 
         if (disposed) {
@@ -157,6 +150,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
 
     return () => {
       disposed = true;
+      controller.abort();
     };
   }, [initialCategory]);
 
@@ -260,9 +254,12 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
   };
 
   return (
-    <section className="search-page-layout layout-h-margin">
+    <section className="search-page-layout">
       <aside className="search-filter-panel" aria-label="filtros de búsqueda">
-        <h2>Filtros</h2>
+        <h2>
+          <span className="material-symbols-outlined" aria-hidden="true">filter_list</span>
+          Filtros
+        </h2>
 
         <div className="search-filter-group">
           <h3>Mostrar</h3>
@@ -310,9 +307,10 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
       </aside>
 
       <article className="search-results-panel">
-        <header className="search-results-head">
+        <header className="search-results-head ">
           <h1>Gestión de Búsqueda</h1>
-          <label className="search-page-input-wrap" aria-label="buscar canciones, álbumes, Repertorios, artistas y versiones">
+          <div className="search-page-input-wrap" aria-label="buscar canciones, álbumes, Repertorios, artistas y versiones">
+            <span className="material-symbols-outlined search-page-input-icon" aria-hidden="true">search</span>
             <input
               className="search-page-input"
               type="search"
@@ -320,16 +318,17 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-          </label>
+            <button type="button" className="search-page-input-button">Buscar</button>
+          </div>
         </header>
 
         {!isLoading ? (
           <div className="search-type-chips" aria-label="conteo de resultados">
-            <span>{grouped.songs.length} Canciones</span>
-            <span>{grouped.albums.length} Álbumes</span>
-            <span>{grouped.repertoires.length} Repertorios</span>
-            <span>{grouped.artists.length} Artistas</span>
-            <span>{grouped.versions.length} Versiones</span>
+            <span className={selectedKinds.includes('song') ? 'is-active' : ''}>{grouped.songs.length} Canciones</span>
+            <span className={selectedKinds.includes('album') ? 'is-active' : ''}>{grouped.albums.length} Álbumes</span>
+            <span className={selectedKinds.includes('repertoire') ? 'is-active' : ''}>{grouped.repertoires.length} Repertorios</span>
+            <span className={selectedKinds.includes('artist') ? 'is-active' : ''}>{grouped.artists.length} Artistas</span>
+            <span className={selectedKinds.includes('version') ? 'is-active' : ''}>{grouped.versions.length} Versiones</span>
           </div>
         ) : null}
 
@@ -345,50 +344,101 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
         ) : null}
 
         <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('song')}>
-          <h2>Canciones</h2>
+          <div className="search-results-section-header">
+            <h2>
+              <p>♪</p>
+              Canciones
+            </h2>
+            <a href="#" className="search-view-all-link">Ver todas</a>
+          </div>
           <div className="search-generic-grid">
             {grouped.songs.map((item) => (
-              <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
-                <strong>{item.title}</strong>
-                <small>{item.subtitle}</small>
+              <button key={item.id} type="button" className="search-song-card-horizontal" onClick={() => navigateByItem(item)}>
+                <div className="search-song-cover">
+                  {item.images && item.images.length > 0 ? (
+                    <Image src={item.images[0].url} alt={item.title} width={48} height={48} />
+                  ) : (
+                    <div className="search-song-play-icon">
+                      <span className="material-symbols-outlined" aria-hidden="true">music_note</span>
+                    </div>
+                  )}
+                </div>
+                <div className="search-song-card-content">
+                  <strong>{item.title}</strong>
+                  <small>{item.subtitle}</small>
+                </div>
               </button>
             ))}
           </div>
         </section>
 
         <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('album')}>
-          <h2>Álbumes</h2>
-          <div className="search-generic-grid">
+          <div className="search-results-section-header">
+            <h2>
+              <span className="material-symbols-outlined" aria-hidden="true">album</span>
+              Álbumes
+            </h2>
+          </div>
+          <div className="search-albums-grid">
             {grouped.albums.map((album) => (
-              <button key={album.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(album)}>
-                <strong>{album.title}</strong>
-                <small>{album.artistName} · {album.albumType}{album.releaseYear ? ` · ${album.releaseYear}` : ''}</small>
-                <small>{album.totalTracks} Canciones</small>
+              <button key={album.id} type="button" className="search-album-card-horizontal" onClick={() => navigateByItem(album)}>
+                <div className="search-album-cover">
+                  {album.images && album.images.length > 0 ? (
+                    <Image src={album.images[0].url} alt={album.title} width={200} height={200} />
+                  ) : (
+                    <span className="material-symbols-outlined search-album-cover-placeholder" aria-hidden="true">album</span>
+                  )}
+                </div>
+                <div className="search-album-card-content">
+                  <strong>{album.title}</strong>
+                  <small>{album.artistName}</small>
+                  <small className="search-album-quantity-songs"> Canciones {album.totalTracks}</small>
+                </div>
               </button>
             ))}
           </div>
         </section>
 
         <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('repertoire')}>
-          <h2>Repertorios</h2>
-          <div className="search-repertoire-grid">
+          <div className="search-results-section-header">
+            <h2>
+              <span className="material-symbols-outlined" aria-hidden="true">description</span>
+              Repertorios
+            </h2>
+          </div>
+          <div className="search-repertoire-list">
             {grouped.repertoires.map((repertoire) => (
               <button key={repertoire.id} type="button" className="search-repertoire-card search-clickable-card" onClick={() => navigateByItem(repertoire)}>
-                <div>
-                  <strong>{repertoire.title}</strong>
+                <div className={`search-repertoire-left-border ${repertoire.ownerUserId === currentUserId ? 'is-own' : ''}`}></div>
+                <div className="search-repertoire-cover">
+                  {repertoire.images && repertoire.images.length > 0 ? (
+                    <Image src={repertoire.images[0].url} alt={`Portada de ${repertoire.title}`} width={64} height={64} />
+                  ) : null}
+                </div>
+                <div className="search-repertoire-main">
+                  <div className="search-repertoire-header">
+                    <strong>{repertoire.title}</strong>
+                    <span className={`search-repertoire-status-badge ${repertoire.ownerUserId === currentUserId ? 'is-own' : 'is-public'}`}>
+                      {repertoire.ownerUserId === currentUserId ? 'TU REPERTORIO' : repertoire.isPublic ? 'PÚBLICO' : 'PRIVADO'}
+                    </span>
+                  </div>
                   <small>Fecha: {repertoire.dateLabel}</small>
-                  <small>{repertoire.ownerUserId === currentUserId ? 'Tu repertorio' : repertoire.isPublic ? 'repertorio público' : 'repertorio privado'}</small>
                 </div>
 
-                <div className="search-repertoire-structure">
-                  <span>Estructura</span>
-                  <small>Total Canciones: {repertoire.songsCount}</small>
-                  <small>Partituras: {repertoire.sheetsCount}</small>
+                <div className="search-repertoire-stats">
+                  <div className="search-repertoire-stat">
+                    <span className="search-repertoire-stat-value">{repertoire.songsCount}</span>
+                    <span className="search-repertoire-stat-label">Canciones</span>
+                  </div>
+                  <div className="search-repertoire-stat">
+                    <span className="search-repertoire-stat-value">{repertoire.sheetsCount}</span>
+                    <span className="search-repertoire-stat-label">Partituras</span>
+                  </div>
                 </div>
 
                 <div className="search-repertoire-actions" aria-label="acciones de repertorio">
                   <button type="button" aria-label="Guardar repertorio" onClick={(event) => event.stopPropagation()}>
-                    <Image src="/assets/utils/iconly_light-outline_bookmark/iconlylightoutlinebookmark2x.png" alt="Guardar" width={14} height={14} />
+                    <span className="material-symbols-outlined" aria-hidden="true">bookmark</span>
                   </button>
                   {repertoire.ownerUserId === currentUserId ? (
                     <>
@@ -400,7 +450,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
                           onEditrepertoire(repertoire);
                         }}
                       >
-                        <Image src="/assets/utils/iconly_light-outline_edit/iconlylightoutlineedit2x.png" alt="Editar" width={14} height={14} />
+                        <span className="material-symbols-outlined" aria-hidden="true">edit</span>
                       </button>
                       <button
                         type="button"
@@ -410,7 +460,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
                           void onDeleterepertoire(repertoire);
                         }}
                       >
-                        <Image src="/assets/utils/iconly_light-outline_delete/iconlylightoutlinedelete2x.png" alt="Eliminar" width={14} height={14} />
+                        <span className="material-symbols-outlined" aria-hidden="true">delete</span>
                       </button>
                     </>
                   ) : null}
@@ -421,13 +471,31 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
         </section>
 
         <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('artist')}>
-          <h2>Artistas</h2>
-          <div className="search-generic-grid">
+          <div className="search-results-section-header">
+            <h2>
+              <span className="material-symbols-outlined" aria-hidden="true">person</span>
+              Artistas
+            </h2>
+            <a href="#" className="search-view-all-link">Ver todas</a>
+          </div>
+          <div className="artists-track">
             {grouped.artists.length > 0
               ? grouped.artists.map((item) => (
-                  <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
-                    <strong>{resolveArtistName(item)}</strong>
-                    <small>{resolveArtistSubtitle(item)}</small>
+                  <button key={item.id} type="button" className="artist-home-pill artist-card-interactive" onClick={() => navigateByItem(item)}>
+                    {item.images && item.images.length > 0 ? (
+                      <Image
+                        src={item.images[0].url}
+                        alt={resolveArtistName(item)}
+                        className="artist-avatar-image"
+                        width={62}
+                        height={62}
+                      />
+                    ) : (
+                      <div className="artist-avatar">
+                        <span className="material-symbols-outlined placeholder-icon-artist-section" aria-hidden="true">person</span>
+                      </div>
+                    )}
+                    <small className="artist-name">{resolveArtistName(item)}</small>
                   </button>
                 ))
               : <p className="search-empty-state">Sin artistas</p>}
@@ -435,13 +503,22 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
         </section>
 
         <section className="search-results-section" hidden={isLoading || !selectedKinds.includes('version')}>
-          <h2>Versiones</h2>
+          <div className="search-results-section-header">
+            <h2>
+              {/* <Image src="/assets/utils/file-text/filetext2x.png" alt="" width={24} height={24} /> */}
+              ᯓ♪
+              Versiones
+            </h2>
+          </div>
           <div className="search-generic-grid">
             {grouped.versions.length > 0
               ? grouped.versions.map((item) => (
-                  <button key={item.id} type="button" className="search-generic-card search-clickable-card" onClick={() => navigateByItem(item)}>
+                  <button key={item.id} type="button" className="search-version-card-horizontal" onClick={() => navigateByItem(item)}>
                     <strong>{item.title}</strong>
-                    <small>{item.subtitle}</small>
+                    <span className="search-version-instrument-tag">{item.instrument}</span>
+                    <div className="search-version-meta">
+                      <small>{item.subtitle}</small>
+                    </div>
                   </button>
                 ))
               : <p className="search-empty-state">Sin versiones</p>}

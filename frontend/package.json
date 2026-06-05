@@ -21,6 +21,10 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "i18n": "^0.15.3"
+    "i18n": "^0.15.3",
+    "react-beautiful-dnd": "^13.1.1"
+  },
+  "devDependencies": {
+    "@types/react-beautiful-dnd": "^13.1.8"
   }
 }

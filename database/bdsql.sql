@@ -187,7 +187,7 @@ CREATE TABLE artist_discography (
 -- ================================
 CREATE TABLE artist_suggestions (
   id SERIAL PRIMARY KEY,
-  artist_id INT NOT NULL,
+  artist_id INT,3
   suggested_artist_id INT NOT NULL,
   relevance_score NUMERIC(5,2) DEFAULT 1.00,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -577,13 +577,13 @@ CREATE OR REPLACE FUNCTION refresh_featured_songs_snapshot(
   target_week DATE DEFAULT date_trunc('week', CURRENT_DATE)::DATE
 )
 RETURNS TABLE (
-  snapshotWeek DATE,
-  rankPosition INT,
-  songId INT,
+  snapshot_week DATE,
+  rank_position INT,
+  song_id INT,
   score NUMERIC(10,4),
   popularity SMALLINT,
-  totalViews INT,
-  likeCount INT
+  total_views INT,
+  like_count INT
 )
 LANGUAGE plpgsql
 AS $$
@@ -649,13 +649,13 @@ BEGIN
 
   RETURN QUERY
   SELECT
-    fs.snapshot_week AS "snapshotWeek",
-    fs.rank_position AS "rankPosition",
-    fs.song_id AS "songId",
+    fs.snapshot_week,
+    fs.rank_position,
+    fs.song_id,
     fs.score,
     fs.popularity,
-    fs.total_views AS "totalViews",
-    fs.like_count AS "likeCount"
+    fs.total_views,
+    fs.like_count
   FROM featured_songs fs
   WHERE fs.snapshot_week = target_week
   ORDER BY fs.rank_position ASC;
@@ -751,7 +751,7 @@ INSERT INTO permissions (key, description) VALUES
 ('metadata:validate', 'Validar metadatos');
 
 -- Estados de canciones
-INSERT INTO song_states (code, description) VALUES
+INSERT INTO song_3s (code, description) VALUES
 ('DRAFT', 'Borrador'),
 ('UPLOADED', 'Archivo subido'),
 ('IN_REVIEW', 'En revisión'),
@@ -783,3 +783,46 @@ INSERT INTO categories (category_type, slug, name, description, sort_order) VALU
 ('OCCASION', 'adoracion-eucaristica', 'Adoración Eucarística', 'Espacios de adoración.', 20),
 ('OCCASION', 'retiro', 'Retiro', 'Encuentros de retiro espiritual.', 30);
 
+-- ================================
+-- PERMISSIONS
+-- Grant permissions to the Cloud SQL application user
+-- Replace 'canticum_app_user' with your actual database user from CLOUD_SQL_USER/DB_USER
+-- ================================
+
+DO $$
+DECLARE
+  app_user TEXT := COALESCE(current_user, 'canticum_app_user');
+BEGIN
+  -- Grant usage on schema
+  GRANT USAGE ON SCHEMA public TO app_user;
+
+  -- Grant SELECT on all tables
+  GRANT SELECT ON ALL TABLES IN SCHEMA public TO app_user;
+
+  -- Grant INSERT, UPDATE, DELETE on specific tables that the app needs to modify
+  GRANT INSERT, UPDATE, DELETE ON TABLE users TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE songs TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE song_versions TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE instruments TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE favorites TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE artist_likes TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE artist_suggestions TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE repertoires TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE repertoire_songs TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE featured_songs TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE albums TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE album_songs TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE artist_discography TO app_user;
+
+  -- Grant usage on sequences for auto-increment IDs
+  GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+
+  -- Grant execute on functions
+  GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO app_user;
+
+  -- Ensure future tables also get SELECT permissions
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO app_user;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+END $$;
+
+COMMIT;

@@ -16,7 +16,7 @@ const artistMockBaseById: Record<string, ArtistDetailBase> = {
     name: 'Coro Emanuel',
     bio: 'Ministerio coral con enfoque litúrgico y arreglos para coro mixto.',
     ministryType: 'Ministerio Coral',
-    imageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    imageUrl: '/assets/utils/user/user2x.png',
     songsCount: 34,
     highlightedSongs: ['Santo Eres Tú', 'Alabaré Tu Nombre'],
     songs: [
@@ -37,7 +37,7 @@ const artistMockBaseById: Record<string, ArtistDetailBase> = {
     name: 'Grupo Fiat',
     bio: 'Ensamble parroquial para eventos y celebraciones especiales.',
     ministryType: 'Ensamble',
-    imageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    imageUrl: '/assets/utils/user/user2x.png',
     songsCount: 27,
     highlightedSongs: ['Aquí Estoy', 'Renuévame Señor'],
     songs: [
@@ -53,7 +53,7 @@ const artistMockBaseById: Record<string, ArtistDetailBase> = {
     name: 'Juan Pérez',
     bio: 'Cantautor y líder de alabanza con repertorio congregacional.',
     ministryType: 'Cantautor',
-    imageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    imageUrl: '/assets/utils/user/user2x.png',
     songsCount: 12,
     highlightedSongs: ['Alabaré Tu Nombre', 'Canto de Entrada'],
     songs: [
@@ -67,7 +67,7 @@ const artistMockBaseById: Record<string, ArtistDetailBase> = {
     name: 'María Luz',
     bio: 'Voz principal enfocada en ministerios parroquiales y acústicos.',
     ministryType: 'Vocalista',
-    imageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    imageUrl: '/assets/utils/user/user2x.png',
     songsCount: 9,
     highlightedSongs: ['Renuévame Señor', 'Gloria a Dios'],
     songs: [
@@ -80,7 +80,7 @@ const artistMockBaseById: Record<string, ArtistDetailBase> = {
     name: 'David Reyes',
     bio: 'Director musical especializado en arreglos para coro y ensamble.',
     ministryType: 'Director musical',
-    imageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    imageUrl: '/assets/utils/user/user2x.png',
     songsCount: 6,
     highlightedSongs: ['Santo, Santo'],
     songs: [{ id: 'recent-4', title: 'Santo, Santo', views: 99, tone: 'D', hasLyrics: true, hasSheet: true }]
@@ -90,7 +90,7 @@ const artistMockBaseById: Record<string, ArtistDetailBase> = {
     name: 'Ana Sofía',
     bio: 'Compositora de repertorio litúrgico contemporáneo.',
     ministryType: 'Compositora',
-    imageUrl: '/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png',
+    imageUrl: '/assets/utils/user/user2x.png',
     songsCount: 5,
     highlightedSongs: ['Cordero de Dios'],
     songs: [{ id: 'recent-5', title: 'Cordero de Dios', views: 18, tone: 'A#', hasLyrics: true, hasSheet: true }]

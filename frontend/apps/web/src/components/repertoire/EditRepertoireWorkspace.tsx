@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import { useBlobUrl } from '../../hooks/useBlobUrl';
 import {
   fetchRepertoireDetailClient,
@@ -10,6 +11,7 @@ import {
   requestSearchRepertoireSongs,
   requestUpdaterepertoire
 } from '../../features/repertoire/clientPersistence';
+import { isAdminUser } from '../../features/auth/repository';
 import { getSongTitleById } from '../../features/song/repository';
 import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import type { RepertoireSongSearchOption, SongRef } from '../../types/repertoire';
@@ -28,6 +30,8 @@ function parseState(raw: unknown): RepertoireState {
 
 export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspaceProps) {
   const router = useRouter();
+  const { user } = useAuth();
+  const canUpdateStatus = isAdminUser(user);
 
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
@@ -246,8 +250,8 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
         ...(song.versionId ? { versionId: song.versionId } : {})
       })),
       coverImageUrl: nextCoverImageUrl,
-      status: nextState
-    });
+      ...(canUpdateStatus ? { status: nextState } : {})
+    }, { allowStatusUpdate: canUpdateStatus });
 
     setSaving(false);
 

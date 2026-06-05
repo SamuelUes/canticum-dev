@@ -1,11 +1,5 @@
 import { readClientCache, removeClientCacheByPrefix, writeClientCache } from '../shared/clientCache';
-
-const functionsBaseUrl = [
-  process.env.GCP_FUNCTIONS_BASE_URL,
-  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
-]
-  .map((value) => (typeof value === 'string' ? value.trim() : ''))
-  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
 
 const ACCOUNT_SUMMARY_CACHE_PREFIX = 'canticum:account:summary:v1:';
 const ACCOUNT_SUMMARY_CACHE_TTL_MS = 45_000;
@@ -62,36 +56,6 @@ export type AccountSummary = {
   };
 };
 
-async function getAuthIdToken(): Promise<string | null> {
-  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
-  if (!hasFirebaseConfig) {
-    return null;
-  }
-
-  try {
-    const { auth } = await import('../../services/firebase');
-    if (!auth.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
-
-async function buildAuthHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
-  const token = await getAuthIdToken();
-  if (!token) {
-    return baseHeaders;
-  }
-
-  return {
-    ...baseHeaders,
-    Authorization: `Bearer ${token}`
-  };
-}
-
 function isAccountSummary(value: unknown): value is AccountSummary {
   if (!value || typeof value !== 'object') {
     return false;
@@ -113,7 +77,7 @@ export async function fetchAccountSummary(userId?: string): Promise<AccountSumma
   }
 
   try {
-    const headers = await buildAuthHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     if (!headers.Authorization) {
       throw new Error('Debes iniciar sesión para ver tu cuenta.');
     }

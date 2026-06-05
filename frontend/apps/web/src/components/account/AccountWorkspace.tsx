@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { fetchAccountSummary } from '../../features/account/repository';
+import { fetchAccountSummary, invalidateAccountSummaryCache } from '../../features/account/repository';
+import { bootstrapInitialAdminAccount } from '../../features/auth/repository';
 import type { AccountSummary } from '../../features/account/repository';
 import { getCachedSearchDatasetClient, getSearchDatasetClient } from '../../features/search/repository';
 import type { SearchrepertoireItem, SearchSongItem } from '../../types/search';
@@ -75,6 +76,9 @@ export function AccountWorkspace() {
   const [summary, setSummary] = useState<AccountSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [bootstrapLoading, setBootstrapLoading] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [bootstrapSuccess, setBootstrapSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -241,6 +245,33 @@ export function AccountWorkspace() {
   const profileRole = summary?.profile.role ?? user?.role ?? 'usuario';
   const profilePlan = summary?.profile.plan ?? (summary?.profile.premium ?? user?.isPremium ? 'premium' : 'free');
   const profilePremium = summary?.profile.premium ?? user?.isPremium ?? false;
+  const canBootstrapInitialAdmin = profileRole === 'admin';
+
+  const handleBootstrapInitialAdmin = async () => {
+    if (!canBootstrapInitialAdmin || bootstrapLoading) {
+      return;
+    }
+
+    setBootstrapLoading(true);
+    setBootstrapError(null);
+    setBootstrapSuccess(null);
+
+    const result = await bootstrapInitialAdminAccount();
+    if (!result.ok) {
+      setBootstrapError(result.error ?? 'No se pudo activar el admin inicial.');
+      setBootstrapLoading(false);
+      return;
+    }
+
+    invalidateAccountSummaryCache();
+    const refreshedSummary = await fetchAccountSummary();
+    if (refreshedSummary) {
+      setSummary(refreshedSummary);
+    }
+
+    setBootstrapSuccess('Cuenta activada como admin.');
+    setBootstrapLoading(false);
+  };
 
   return (
     <section className="account-page-layout layout-h-margin">
@@ -272,6 +303,24 @@ export function AccountWorkspace() {
             <strong>{profilePremium ? 'Premium' : profilePlan === 'premium' ? 'Premium' : 'Free'}</strong>
           </div>
         </div>
+
+        {canBootstrapInitialAdmin ? (
+          <div className="account-admin-actions">
+            <p className="account-admin-note">
+              Esta cuenta puede convertirse en el administrador inicial para habilitar la gestión de roles.
+            </p>
+            <button
+              type="button"
+              className="create-form-submit account-admin-button"
+              onClick={() => void handleBootstrapInitialAdmin()}
+              disabled={bootstrapLoading}
+            >
+              {bootstrapLoading ? 'Activando...' : 'Activar admin inicial'}
+            </button>
+            {bootstrapError ? <p className="create-form-error">{bootstrapError}</p> : null}
+            {bootstrapSuccess ? <p className="create-form-success">{bootstrapSuccess}</p> : null}
+          </div>
+        ) : null}
       </article>
 
       <section className="account-kpi-grid" aria-label="resumen de cuenta">

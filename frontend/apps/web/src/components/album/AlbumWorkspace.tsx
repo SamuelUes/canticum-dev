@@ -2,7 +2,12 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import { requestUpdateAlbumStatus} from '../../features/album/repository';
+import { loadAlbumFavorite, saveAlbumFavorite } from '../../features/album/clientPersistence';
+import { loadSongFavorite, saveSongFavorite } from '../../features/song/clientPersistence';
+import { getSongStatusLabel } from '../../features/song/status';
 import type { AlbumDetail, AlbumSongRow } from '../../types/album';
 
 type FilterPill = 'Todas' | 'Letra' | 'Partituras';
@@ -12,7 +17,13 @@ interface AlbumWorkspaceProps {
 }
 
 export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
+  const { user } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterPill>('Todas');
+  const [albumStatusSelection, setAlbumStatusSelection] = useState(() => (typeof album.status === 'string' ? album.status.toUpperCase() : 'APPROVED'));
+  const [isAlbumStatusMenuOpen, setIsAlbumStatusMenuOpen] = useState(false);
+  const [isUpdatingAlbumStatus, setIsUpdatingAlbumStatus] = useState(false);
+  const [songFavorites, setSongFavorites] = useState<Record<string, boolean>>({});
+  const [isAlbumFavorite, setIsAlbumFavorite] = useState(false);
   const pills: FilterPill[] = ['Todas', 'Letra', 'Partituras'];
 
   const albumTypeLabel: Record<string, string> = {
@@ -32,6 +43,68 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
   const totalViews = album.songs.reduce((acc, s) => acc + s.views, 0);
 
   const padNumber = (n: number): string => String(n).padStart(2, '0');
+  const isAdminUser = user?.role === 'admin';
+  const albumStatusLabel = albumStatusSelection.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+
+  // Load song favorites on mount
+  useEffect(() => {
+    album.songs.forEach((song) => {
+      loadSongFavorite(song.id, 'default').then((favorite) => {
+        if (typeof favorite === 'boolean') {
+          setSongFavorites((prev) => ({ ...prev, [song.id]: favorite }));
+        }
+      });
+    });
+  }, [album.songs]);
+
+  // Load album favorite on mount
+  useEffect(() => {
+    loadAlbumFavorite(album.id).then((favorite) => {
+      if (typeof favorite === 'boolean') {
+        setIsAlbumFavorite(favorite);
+      }
+    });
+  }, [album.id]);
+
+  const handleToggleFavorite = async (songId: string) => {
+    const currentFavorite = songFavorites[songId] ?? false;
+    const nextFavorite = !currentFavorite;
+    
+    setSongFavorites((prev) => ({ ...prev, [songId]: nextFavorite }));
+    
+    try {
+      await saveSongFavorite(songId, 'default', nextFavorite);
+    } catch {
+      // Revert on error
+      setSongFavorites((prev) => ({ ...prev, [songId]: currentFavorite }));
+    }
+  };
+
+  const handleToggleAlbumFavorite = async () => {
+    const nextFavorite = !isAlbumFavorite;
+    setIsAlbumFavorite(nextFavorite);
+    
+    try {
+      await saveAlbumFavorite(album.id, nextFavorite);
+    } catch {
+      // Revert on error
+      setIsAlbumFavorite(!nextFavorite);
+    }
+  };
+
+  const onAdminChangeAlbumStatus = async () => {
+    if (!isAdminUser || isUpdatingAlbumStatus) {
+      return;
+    }
+
+    setIsUpdatingAlbumStatus(true);
+    const result = await requestUpdateAlbumStatus(album.id, albumStatusSelection);
+    setIsUpdatingAlbumStatus(false);
+
+    if (result.ok && typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  };
 
   return (
     <div className="album-layout">
@@ -81,17 +154,87 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
               <span>{album.artistName}</span>
             </Link>
 
-            <span className="album-meta-dot">·</span>
-            <span className="album-meta-year">{album.releaseYear}</span>
-            <span className="album-meta-dot">·</span>
-            <span className="album-meta-songs">{album.songsCount} canciones</span>
-            {totalViews > 0 ? (
-              <>
-                <span className="album-meta-dot">·</span>
-                <span className="album-meta-views">{totalViews.toLocaleString()} visualizaciones</span>
-              </>
-            ) : null}
+            <div className="album-meta"> 
+             <span className="album-meta-dot">·</span>
+             <span className="album-meta-year">{album.releaseYear}</span>
+             <span className="album-meta-dot">·</span>
+             <span className="album-meta-songs">{album.songsCount} canciones</span>
+             {totalViews > 0 ? (
+               <>
+                 <span className="album-meta-dot">·</span>
+                 <span className="album-meta-views">{totalViews.toLocaleString()} visualizaciones</span>
+               </>
+             ) : null}
+            </div>
           </div>
+
+          <div className="album-hero-actions">
+            <button
+              type="button"
+              className={`album-favorite-icon ${isAlbumFavorite ? 'is-active' : ''}`}
+              aria-label={isAlbumFavorite ? 'Quitar de favoritos' : 'Guardar en favoritos'}
+              aria-pressed={isAlbumFavorite}
+              onClick={handleToggleAlbumFavorite}
+            >
+              <span className="material-symbols-outlined">
+                {isAlbumFavorite ? 'favorite' : 'favorite_border'}
+              </span>
+            </button>
+          </div>
+
+          {isAdminUser ? (
+            <div className="album-admin-actions">
+              <div className="song-admin-status-combobox album-status-combobox" data-open={isAlbumStatusMenuOpen ? 'true' : 'false'}>
+                <button
+                  type="button"
+                  className="song-admin-status-combobox-trigger"
+                  aria-haspopup="listbox"
+                  aria-expanded={isAlbumStatusMenuOpen}
+                  aria-label="Cambiar estado de álbum"
+                  onClick={() => setIsAlbumStatusMenuOpen((prev) => !prev)}
+                >
+                  <span className="song-admin-status-combobox-copy">
+                    <small>Estado actual</small>
+                    <strong>{albumStatusLabel}</strong>
+                  </span>
+                  <span className="song-admin-status-combobox-chevron" aria-hidden>
+                    ▾
+                  </span>
+                </button>
+
+                {isAlbumStatusMenuOpen ? (
+                  <div className="song-admin-status-combobox-menu album-status-combobox-menu" role="listbox" aria-label="Opciones de estado del álbum">
+                    {['DRAFT', 'IN_REVIEW', 'REJECTED', 'APPROVED', 'PUBLISHED'].map((option) => {
+                      const isActive = albumStatusSelection === option;
+                      const label = option.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          className={`song-admin-status-combobox-option status-${option.toLowerCase()} ${isActive ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setAlbumStatusSelection(option);
+                            setIsAlbumStatusMenuOpen(false);
+                          }}
+                        >
+                          <span className="song-admin-status-combobox-option-top">
+                            <strong>{label}</strong>
+                            {isActive ? <span className="song-admin-status-combobox-current">Actual</span> : null}
+                          </span>
+                          <small>Actualizar estado del álbum</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+              <button type="button" className="song-premium-badge" onClick={onAdminChangeAlbumStatus} disabled={isUpdatingAlbumStatus}>
+                {isUpdatingAlbumStatus ? 'Actualizando...' : 'Aplicar estado'}
+              </button>
+            </div>
+          ) : null}
 
           {album.description ? (
             <p className="album-description">{album.description}</p>
@@ -118,8 +261,10 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
           <span className="artist-col-num">#</span>
           <span className="artist-col-thumb" />
           <span className="artist-col-song">Canción</span>
-          <span className="artist-col-views">Visualizaciones</span>
+          {isAdminUser ? <span className="artist-col-status">Estado</span> : null}
           <span className="artist-col-tone">Tono</span>
+          <span className="artist-col-views">Visualizaciones</span>
+          <span className="artist-col-favorite" />
         </div>
 
         <ul className="artist-song-list" role="list">
@@ -145,16 +290,29 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
 
               <Link href={`/songs/${song.id}`} className="artist-col-song">
                 {song.title}
-                {song.isVerified ? (
-                  <span className="artist-verified-badge" title="Verificado">✔</span>
-                ) : null}
-                {!song.isPrimaryRelease ? (
-                  <span className="album-feature-badge" title="Aparece en este álbum">feat.</span>
-                ) : null}
               </Link>
 
-              <span className="artist-col-views">{song.views.toLocaleString()}</span>
+              {isAdminUser ? (
+                <span className="artist-col-status">
+                  <span className={`song-status-badge status-${song.status?.toLowerCase()}`}>{getSongStatusLabel(song.status)}</span>
+                </span>
+              ) : null}
+
               <span className="artist-col-tone">{song.tone}</span>
+              <span className="artist-col-views">{song.views.toLocaleString()}</span>
+              <span className="artist-col-favorite">
+                <button
+                  type="button"
+                  className={`song-favorite-icon ${songFavorites[song.id] ? 'is-active' : ''}`}
+                  aria-label={songFavorites[song.id] ? 'Quitar de favoritos' : 'Guardar en favoritos'}
+                  aria-pressed={songFavorites[song.id]}
+                  onClick={() => handleToggleFavorite(song.id)}
+                >
+                  <span className="material-symbols-outlined">
+                    {songFavorites[song.id] ? 'favorite' : 'favorite_border'}
+                  </span>
+                </button>
+              </span>
             </li>
           ))}
 

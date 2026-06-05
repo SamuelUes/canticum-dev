@@ -2,8 +2,8 @@ import type { HomeText, Locale } from '../types/home';
 
 const dictionary: Record<Locale, HomeText> = {
   es: {
-    brand: 'CANTECUM',
-    searchPlaceholder: 'Busca canciones, artistas o partituras',
+    brand: '',
+    searchPlaceholder: '',
     subscribe: 'Suscribirte',
     repertoires: 'Repertorios',
     userNameLabel: 'Nombre',

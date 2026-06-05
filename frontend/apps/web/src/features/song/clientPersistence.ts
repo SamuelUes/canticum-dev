@@ -1,4 +1,5 @@
 import { invalidateAccountSummaryCache } from '../account/repository';
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
 
 export interface SongUserPreferences {
   currentVersionId?: string;
@@ -41,7 +42,7 @@ export async function requestTrackSongListen(songId: string): Promise<boolean> {
 
   try {
     const userId = await getCurrentUserId();
-    const headers = await buildAuthHeaders({
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });
@@ -58,38 +59,6 @@ export async function requestTrackSongListen(songId: string): Promise<boolean> {
   }
 }
 
-async function getAuthIdToken(): Promise<string | null> {
-  const hasFirebaseConfig = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
-
-  if (!hasFirebaseConfig) {
-    return null;
-  }
-
-  try {
-    const { auth } = await import('../../services/firebase');
-    if (!auth.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
-
-async function buildAuthHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
-  const token = await getAuthIdToken();
-
-  if (!token) {
-    return baseHeaders;
-  }
-
-  return {
-    ...baseHeaders,
-    Authorization: `Bearer ${token}`
-  };
-}
-
 function getFavoriteCompoundKey(songId: string, versionId: string): string {
   return `${songId}::${versionId}`;
 }
@@ -104,7 +73,6 @@ function saveLocalFavorite(songId: string, versionId: string, isFavorite: boolea
   return isFavorite;
 }
 
-const functionsBaseUrl = (process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
 const REMOTE_SYNC_DEBOUNCE_MS = 320;
 
 const preferencesCache = new Map<string, SongUserPreferences>();
@@ -244,7 +212,7 @@ export async function loadSongUserPreferences(songId: string): Promise<SongUserP
         return local;
       }
 
-      const headers = await buildAuthHeaders({
+      const headers = await buildFunctionsHeaders({
         Accept: 'application/json'
       });
       const response = await fetch(`${functionsBaseUrl}/songs/${songId}/preferences?userId=${encodeURIComponent(userId)}`, {
@@ -301,7 +269,7 @@ export async function saveSongUserPreferences(songId: string, preferences: SongU
         return;
       }
 
-      const headers = await buildAuthHeaders({
+      const headers = await buildFunctionsHeaders({
         'Content-Type': 'application/json'
       });
       const payload = JSON.stringify({ userId, preferences: merged });
@@ -355,8 +323,8 @@ export async function loadSongFavorite(songId: string, versionId: string): Promi
         return local;
       }
 
-      const headers = await buildAuthHeaders({ Accept: 'application/json' });
-      const response = await fetch(`${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/${encodeURIComponent(songId)}/${encodeURIComponent(versionId)}`, {
+      const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
+      const response = await fetch(`${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/songs/${encodeURIComponent(songId)}/${encodeURIComponent(versionId)}`, {
         method: 'GET',
         headers
       });
@@ -419,12 +387,12 @@ export async function saveSongFavorite(songId: string, versionId: string, isFavo
         return;
       }
 
-      const headers = await buildAuthHeaders({
+      const headers = await buildFunctionsHeaders({
         'Content-Type': 'application/json'
       });
 
       const response = await fetch(
-        `${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/${encodeURIComponent(songId)}/${encodeURIComponent(versionId)}`,
+        `${functionsBaseUrl}/users/${encodeURIComponent(userId)}/favorites/songs/${encodeURIComponent(songId)}/${encodeURIComponent(versionId)}`,
         {
         method: merged ? 'PUT' : 'DELETE',
         headers
@@ -510,7 +478,7 @@ export async function requestCreateSong(payload: CreateSongPayload): Promise<Son
 
   try {
     const userId = await getCurrentUserId();
-    const headers = await buildAuthHeaders({
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });
@@ -558,7 +526,7 @@ export async function requestSongPurchaseIntent(songId: string): Promise<{ check
 
   try {
     const userId = await getCurrentUserId();
-    const headers = await buildAuthHeaders({
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });

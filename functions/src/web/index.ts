@@ -6,6 +6,7 @@ export * as webPremium from './premium';
 export * as webSubscriptions from './subscriptions';
 export * as webPayments from './payments';
 export * as webAccount from './account';
+export * as webMisales from './misales';
 
 export { songs } from './songs';
 export { search } from './search';
@@ -15,6 +16,7 @@ export { albums } from './albums';
 export { users } from './users';
 export { auth } from './auth';
 export { account } from './account';
+export { misales } from './misales';
 export { subscriptions } from './subscriptions';
 export { payments } from './payments';
 

@@ -258,9 +258,18 @@ export async function getArtistById(artistId: number): Promise<CloudSqlArtistRow
 export async function listTopArtists(limit: number = 30): Promise<CloudSqlArtistRow[]> {
   const result = await getPool().query<CloudSqlArtistRow>(
     `
-      SELECT id, name, type, image_url AS "imageUrl"
+      SELECT
+        id,
+        name,
+        type,
+        image_url AS "imageUrl"
       FROM artists
-      ORDER BY popularity DESC NULLS LAST, name ASC
+      WHERE popularity IS NOT NULL
+        AND popularity > 0
+      ORDER BY
+        compute_artist_popularity(COALESCE(total_views, 0), COALESCE(like_count, 0)) DESC,
+        popularity DESC NULLS LAST,
+        name ASC
       LIMIT $1;
     `,
     [limit]
@@ -334,11 +343,11 @@ interface ArtistAlbumDiscographyQueryRow {
 
 function mapAlbumDiscographyRows(rows: ArtistAlbumDiscographyQueryRow[]): CloudSqlArtistDiscographyProfileRow[] {
   return rows.map((row, index) => ({
-    id: String(row.id ?? `discography-${index}`),
+    id: Number.isFinite(row.albumId) && Number(row.albumId) > 0 ? `album_${row.albumId}` : String(row.id ?? `discography-${index}`),
     title: row.title,
     year: Number.isFinite(row.year) ? Number(row.year) : new Date().getFullYear(),
     coverUrl: row.coverUrl ?? undefined,
-    albumId: Number.isFinite(row.albumId) && Number(row.albumId) > 0 ? String(row.albumId) : undefined,
+    albumId: Number.isFinite(row.albumId) && Number(row.albumId) > 0 ? `album_${row.albumId}` : undefined,
     moderationState: row.moderationState ?? undefined,
     reviewStatus: row.reviewStatus
   }));
@@ -378,6 +387,24 @@ async function listArtistAlbumDiscographyRows(artistId: number): Promise<ArtistA
 export async function listArtistAlbumsByArtistId(artistId: number): Promise<CloudSqlArtistDiscographyProfileRow[]> {
   const rows = await listArtistAlbumDiscographyRows(artistId);
   return mapAlbumDiscographyRows(rows);
+}
+
+export async function updateAlbumStatusInCloudSql(sqlAlbumId: number, status: string): Promise<void> {
+  const albumId = Number(sqlAlbumId);
+  const normalizedStatus = typeof status === 'string' ? status.trim().toUpperCase() : '';
+
+  if (!Number.isFinite(albumId) || albumId <= 0 || !normalizedStatus) {
+    return;
+  }
+
+  await getPool().query(
+    `
+      UPDATE albums
+      SET status = $2
+      WHERE id = $1;
+    `,
+    [Math.floor(albumId), normalizedStatus]
+  );
 }
 
 export async function getArtistProfileBundle(
@@ -807,4 +834,100 @@ export async function removeArtistLike(artistId: number, viewerFirebaseUid: stri
     isLiked: false,
     likeCount: Number(syncResult.rows[0]?.likeCount ?? 0)
   };
+}
+
+export interface FeaturedArtistSnapshotRow {
+  snapshotWeek: string;
+  rankPosition: number;
+  artistId: number;
+  name: string;
+  imageUrl: string | null;
+  score: number;
+  popularity: number;
+  totalViews: number;
+  likeCount: number;
+}
+
+export async function refreshFeaturedArtistsSnapshot(limit: number = 50, snapshotWeek?: string): Promise<FeaturedArtistSnapshotRow[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 50;
+  const normalizedWeek = typeof snapshotWeek === 'string' && snapshotWeek.trim().length > 0
+    ? snapshotWeek.trim()
+    : null;
+
+  const currentWeek = normalizedWeek ?? new Date().toISOString().slice(0, 10);
+
+  const result = await getPool().query<{
+    id: number;
+    name: string;
+    imageUrl: string | null;
+    likeCount: number;
+    totalViews: number;
+    popularity: number;
+    score: number;
+  }>(
+    `
+      SELECT
+        id,
+        name,
+        image_url AS "imageUrl",
+        COALESCE(like_count, 0)::INT AS "likeCount",
+        COALESCE(total_views, 0)::INT AS "totalViews",
+        COALESCE(popularity, 0)::INT AS "popularity",
+        compute_artist_popularity(COALESCE(total_views, 0), COALESCE(like_count, 0)) AS "score"
+      FROM artists
+      WHERE popularity IS NOT NULL
+        AND popularity > 0
+      ORDER BY score DESC, popularity DESC, like_count DESC, total_views DESC, name ASC
+      LIMIT $1;
+    `,
+    [safeLimit]
+  );
+
+  return result.rows.map((row, index) => ({
+    snapshotWeek: currentWeek,
+    rankPosition: index + 1,
+    artistId: row.id,
+    name: row.name,
+    imageUrl: row.imageUrl,
+    score: row.score,
+    popularity: row.popularity,
+    totalViews: row.totalViews,
+    likeCount: row.likeCount
+  }));
+}
+
+export async function syncFeaturedArtistsToSuggestions(artists: FeaturedArtistSnapshotRow[]): Promise<void> {
+  const client = await getPool().connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Delete previous global suggestions
+    await client.query(
+      `
+        DELETE FROM artist_suggestions
+        WHERE artist_id IS NULL;
+      `
+    );
+
+    // Insert new global suggestions
+    for (const artist of artists) {
+      await client.query(
+        `
+          INSERT INTO artist_suggestions (artist_id, suggested_artist_id, relevance_score)
+          VALUES (NULL, $1, $2)
+          ON CONFLICT (artist_id, suggested_artist_id) DO UPDATE SET
+            relevance_score = $2;
+        `,
+        [artist.artistId, artist.score]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }

@@ -1,6 +1,7 @@
 import { Pool, type PoolConfig } from 'pg';
 
 let sharedPool: Pool | null = null;
+let isClosingPool = false;
 
 function getRequiredEnv(key: string, fallbackKey?: string): string {
   const value = process.env[key] ?? (fallbackKey ? process.env[fallbackKey] : undefined);
@@ -38,7 +39,7 @@ function buildPoolConfig(): PoolConfig {
     user,
     password,
     max: 5,
-    min: 0,
+    min: 1,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 8_000,
     allowExitOnIdle: true
@@ -67,9 +68,21 @@ function buildPoolConfig(): PoolConfig {
 export function getSharedPool(): Pool {
   if (!sharedPool) {
     sharedPool = new Pool(buildPoolConfig());
-    sharedPool.on('error', (error) => {
+    sharedPool.on('error', async (error) => {
       console.error('[CloudSQL] Pool error; recreating on next use:', error);
+      if (isClosingPool || !sharedPool) {
+        return;
+      }
+      const previousPool = sharedPool;
       sharedPool = null;
+      isClosingPool = true;
+      try {
+        await previousPool.end();
+      } catch (closeError) {
+        console.error('[CloudSQL] Failed to close errored pool:', closeError);
+      } finally {
+        isClosingPool = false;
+      }
     });
   }
 

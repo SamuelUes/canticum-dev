@@ -190,7 +190,9 @@ export async function uploadCoverImage({
 
   const normalizedFile = prepared.file;
 
-  const safeBase = sanitizeFilename(filenameBase ?? 'cover') || 'cover';
+  // Generate timestamp-based filename if not provided
+  const timestamp = Date.now();
+  const safeBase = sanitizeFilename(filenameBase ?? `cover_${timestamp}`) || `cover_${timestamp}`;
   const ext = inferExt(normalizedFile);
   const path = safeVersionId
     ? `${entity}/${safeEntityId}/versions/${safeVersionId}/cover/${safeBase}.${ext}`

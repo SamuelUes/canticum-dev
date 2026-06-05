@@ -8,19 +8,36 @@ import { AudioPlayer } from './AudioPlayer';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { useAuth } from '../../context/AuthContext';
 import { usePremiumNavigation } from '../../hooks/usePremiumNavigation';
-import { useRequireAuth } from '../../hooks/useRequireAuth';
 import {
   loadSongFavorite,
   loadSongUserPreferences,
-  requestSongPurchaseIntent,
   requestTrackSongListen,
   saveSongFavorite,
   saveSongUserPreferences
 } from '../../features/song/clientPersistence';
+import { requestUpdateSongStatus } from '../../features/song/repository';
 import type { SongDetail } from '../../types/song';
 
-type SidePanelMode = 'versions' | 'instruments' | null;
-type ScrollSpeed = 1 | 1.5 | 2;
+type SongEditorialStatus = 'IN_REVIEW' | 'REJECTED' | 'APPROVED' | 'PUBLISHED';
+
+const SONG_STATUS_OPTIONS: Array<{ value: SongEditorialStatus; label: string; helper: string }> = [
+  { value: 'IN_REVIEW', label: 'En revisión', helper: 'Para auditoría editorial' },
+  { value: 'REJECTED', label: 'Rechazada', helper: 'No cumple el corte' },
+  { value: 'APPROVED', label: 'Aprobada', helper: 'Lista para publicación' },
+  { value: 'PUBLISHED', label: 'Publicada', helper: 'Visible para todos' }
+] as const;
+
+const SONG_STATUS_LABELS: Record<SongEditorialStatus, string> = {
+  IN_REVIEW: 'En revisión',
+  REJECTED: 'Rechazada',
+  APPROVED: 'Aprobada',
+  PUBLISHED: 'Publicada'
+};
+
+function isSongEditorialStatus(value: string): value is SongEditorialStatus {
+  return value === 'IN_REVIEW' || value === 'REJECTED' || value === 'APPROVED' || value === 'PUBLISHED';
+}
+
 
 function getSheetFileExtension(url: string): string {
   if (!url) {
@@ -52,24 +69,20 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const { openPremiumPlans } = usePremiumNavigation();
-  const { requireAuth } = useRequireAuth();
 
   const persistentTools = [
-    { label: 'Agregar a la lista', requiresPremium: false },
-    { label: 'Metrónomo', requiresPremium: true },
-    { label: 'Diccionario', requiresPremium: true },
-    { label: 'Corregir', requiresPremium: true },
-    { label: 'Imprimir', requiresPremium: true },
-    { label: 'Descargar', requiresPremium: true }
+    { label: 'Agregar a la lista', icon: 'bookmark', requiresPremium: false },
+    { label: 'Metrónomo', icon: 'timer', requiresPremium: true },
+    { label: 'Diccionario', icon: 'menu_book', requiresPremium: true },
+    { label: 'Corregir', icon: 'edit', requiresPremium: true },
+    { label: 'Imprimir', icon: 'print', requiresPremium: true },
+    { label: 'Descargar', icon: 'download', requiresPremium: true }
   ];
-  const scrollSpeedOptions: ScrollSpeed[] = [1, 1.5, 2];
 
   const [isFavorite, setIsFavorite] = useState(Boolean(song.isFavorite));
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
-  const [isAudioTriggering, setIsAudioTriggering] = useState(false);
   const [activeAudioSrc, setActiveAudioSrc] = useState<string | null>(null);
   const [audioAutoplayToken, setAudioAutoplayToken] = useState(0);
-  const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode>(null);
   const [selectedVersionId, setSelectedVersionId] = useState(() => {
     const requested = typeof initialVersionId === 'string' ? initialVersionId.trim() : '';
     if (requested && song.versions.some((version) => version.id === requested)) {
@@ -80,11 +93,16 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   });
   const [selectedInstrumentId, setSelectedInstrumentId] = useState(song.currentInstrumentId);
   const [isAutoScrolling, setIsAutoScrolling] = useState(false);
-  const [scrollSpeed, setScrollSpeed] = useState<ScrollSpeed>(1);
-  const [isProcessingPurchase, setIsProcessingPurchase] = useState(false);
+  const scrollSpeed = 1;
   const [songAccessMessage, setSongAccessMessage] = useState('');
   const [isRenderingSheet, setIsRenderingSheet] = useState(false);
   const [sheetRenderError, setSheetRenderError] = useState('');
+  const [songStatusSelection, setSongStatusSelection] = useState<SongEditorialStatus>(() => {
+    const raw = typeof song.status === 'string' ? song.status.trim().toUpperCase() : '';
+    return isSongEditorialStatus(raw) ? raw : 'APPROVED';
+  });
+  const [isSongStatusMenuOpen, setIsSongStatusMenuOpen] = useState(false);
+  const [isUpdatingSongStatus, setIsUpdatingSongStatus] = useState(false);
 
   const lyricsRef = useRef<HTMLDivElement>(null);
   const sheetContainerRef = useRef<HTMLDivElement>(null);
@@ -104,6 +122,28 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   }, [song.userAccess, user]);
 
   const hasAdvancedAccess = userAccess.isPremiumUser || userAccess.hasSongUnlock;
+
+  const isAdminUser = user?.role === 'admin';
+  const selectedSongStatusLabel = SONG_STATUS_LABELS[songStatusSelection];
+
+  const onAdminChangeSongStatus = async () => {
+    if (!isAdminUser || isUpdatingSongStatus) {
+      return;
+    }
+
+    setIsUpdatingSongStatus(true);
+    const result = await requestUpdateSongStatus(song.id, songStatusSelection);
+    setIsUpdatingSongStatus(false);
+
+    if (!result.ok) {
+      setSongAccessMessage('No se pudo actualizar el estado de la canción.');
+      return;
+    }
+
+    setSongAccessMessage(`Estado actualizado a ${songStatusSelection}.`);
+    router.refresh();
+  };
+
 
   const selectedVersion = useMemo(() => {
     const selected = song.versions.find((version) => version.id === selectedVersionId);
@@ -320,9 +360,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
       window.clearTimeout(audioTriggerTimeoutRef.current);
     }
 
-    setIsAudioTriggering(true);
     audioTriggerTimeoutRef.current = window.setTimeout(() => {
-      setIsAudioTriggering(false);
       audioTriggerTimeoutRef.current = null;
     }, 420);
   };
@@ -397,112 +435,79 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     });
   };
 
-  const onStartSongPurchase = async () => {
-    if (!requireAuth('purchase')) {
-      return;
-    }
-
-    setIsProcessingPurchase(true);
-    const result = await requestSongPurchaseIntent(song.id);
-    setIsProcessingPurchase(false);
-
-    if (result?.checkoutUrl) {
-      window.open(result.checkoutUrl, '_blank', 'noopener,noreferrer');
-      return;
-    }
-
-    setSongAccessMessage('No se pudo iniciar la compra ahora. Inténtalo nuevamente en unos minutos.');
-  };
 
   return (
-    <section className="song-page-content layout-h-margin">
-      <aside className="song-left-rail">
-        <div className="song-page-controls">
-          <button
-            type="button"
-            className={sidePanelMode === 'versions' ? 'song-filter-button is-active' : 'song-filter-button'}
-            onClick={() => setSidePanelMode((prev) => (prev === 'versions' ? null : 'versions'))}
-          >
-            Versión
-          </button>
-          <button
-            type="button"
-            className={sidePanelMode === 'instruments' ? 'song-filter-button is-active' : 'song-filter-button'}
-            onClick={() => setSidePanelMode((prev) => (prev === 'instruments' ? null : 'instruments'))}
-          >
-            Instrumentación
-          </button>
+    <section className="song-page">
+      <aside className="song-sidebar ">
+        {/* Filters Card */}
+        <div className="song-sidebar-card song-filters-card">
+          <h3 className="song-sidebar-title">Filtros</h3>
+          
+          <div className="song-filter-group">
+            <label className="song-filter-label" htmlFor="version-select">Versión</label>
+            <select
+              id="version-select"
+              className="song-filter-select"
+              value={selectedVersionId}
+              onChange={(e) => onSelectVersion(e.target.value)}
+            >
+              {song.versions.map((version) => (
+                <option key={version.id} value={version.id}>
+                  {version.versionName ?? version.label}
+                  {version.isPremium && !hasAdvancedAccess ? ' (Premium)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="song-filter-group">
+            <label className="song-filter-label" htmlFor="instrument-select">Instrumentación</label>
+            <select
+              id="instrument-select"
+              className="song-filter-select"
+              value={selectedInstrumentId}
+              onChange={(e) => onSelectInstrument(e.target.value)}
+            >
+              {song.instruments.map((instrument) => (
+                <option key={instrument.id} value={instrument.id}>
+                  {instrument.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        {sidePanelMode ? (
-          <>
-            <button type="button" className="song-drawer-backdrop" aria-label="Cerrar selector" onClick={() => setSidePanelMode(null)} />
-            <aside className="song-side-panel song-side-panel-left" aria-label="selector lateral izquierdo">
-              <div className="song-side-panel-head">
-                <h3>{sidePanelMode === 'versions' ? 'Selecciona versión' : 'Selecciona instrumento'}</h3>
-                <button type="button" className="song-close-panel" onClick={() => setSidePanelMode(null)}>
-                  ✕
-                </button>
-              </div>
-
-              <div className="song-side-panel-list">
-                {sidePanelMode === 'versions'
-                  ? song.versions.map((version) => {
-                      const isActive = version.id === selectedVersionId;
-                      return (
-                        <button
-                          key={version.id}
-                          type="button"
-                          className={isActive ? 'song-side-item is-active' : version.isPremium && !hasAdvancedAccess ? 'song-side-item is-locked' : 'song-side-item'}
-                          onClick={() => onSelectVersion(version.id)}
-                        >
-                          <strong>{version.versionName ?? version.label}</strong>
-                          <small>{version.isPremium && !hasAdvancedAccess ? 'Premium / Compra individual' : version.artistName}</small>
-                        </button>
-                      );
-                    })
-                  : song.instruments.map((instrument) => {
-                      const isActive = instrument.id === selectedInstrumentId;
-                      return (
-                        <button
-                          key={instrument.id}
-                          type="button"
-                          className={isActive ? 'song-side-item is-active' : 'song-side-item'}
-                          onClick={() => onSelectInstrument(instrument.id)}
-                        >
-                          <strong>{instrument.name}</strong>
-                          <small>Aplicar a la canción actual</small>
-                        </button>
-                      );
-                    })}
-              </div>
-            </aside>
-          </>
-        ) : null}
-
-        <div className="song-rail-tools" aria-label="herramientas rápidas">
-          {persistentTools.map((tool) => {
-            const isLocked = tool.requiresPremium && !hasAdvancedAccess;
-            return (
-              <button
-                key={tool.label}
-                type="button"
-                className={isLocked ? 'song-rail-tool-button is-locked' : 'song-rail-tool-button'}
-                aria-disabled={isLocked}
-                title={isLocked ? 'Disponible en Premium o compra individual' : tool.label}
-                onClick={isLocked ? () => { openPremiumPlans(); } : undefined}
-              >
-                {tool.label}{isLocked ? ' 🔒' : ''}
-              </button>
-            );
-          })}
+        {/* Actions Card */}
+        <div className="song-sidebar-card song-actions-card">
+          <ul className="song-actions-list">
+            {persistentTools.map((tool) => {
+              const isLocked = tool.requiresPremium && !hasAdvancedAccess;
+              return (
+                <li key={tool.label}>
+                  <button
+                    type="button"
+                    className="song-action-button"
+                    aria-disabled={isLocked}
+                    title={isLocked ? 'Disponible en Premium o compra individual' : tool.label}
+                    onClick={isLocked ? () => { openPremiumPlans(); } : undefined}
+                  >
+                    <div className="song-action-content">
+                      <span className="material-symbols-outlined song-action-icon">{tool.icon}</span>
+                      <span>{tool.label}</span>
+                    </div>
+                    {isLocked && <span className="material-symbols-outlined song-action-lock">lock</span>}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </aside>
 
-      <article className="song-main-card">
-        <header className="song-headline">
-          <div className="song-cover-card" aria-label="Portada de la canción">
-            <div className="song-cover-frame">
+      <article className="song-main-content">
+        <header className="song-header layout-h-margin">
+          <div className="song-header-top">
+            <div className="song-cover-wrapper">
               {coverImageUrl ? (
                 <Image
                   src={coverImageUrl}
@@ -518,14 +523,13 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                 </div>
               )}
             </div>
-          </div>
 
-          <div className="song-headline-body">
-            <div className="song-headline-row">
-              <div className="song-headline-main">
-                <h1>{song.title}</h1>
-                <strong>
+            <div className="song-header-info">
+              <div className="song-header-title-row">
+                <div className="song-title-section">
+                  <h1 className="song-title">{song.title}</h1>
                   <Link
+                    className="song-artist-link"
                     href={getArtistProfileHref({
                       artistId: selectedVersion?.artistId ?? song.artists?.[0]?.id,
                       artistName: selectedVersion?.artistName ?? song.artistName
@@ -533,133 +537,244 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                   >
                     {selectedVersion?.artistName ?? song.artistName}
                   </Link>
-                </strong>
+                </div>
+
+                <div className="song-header-badges">
+                  {selectedVersion?.isPremium && !hasAdvancedAccess ? (
+                    <span className="song-premium-badge">
+                      <span className="material-symbols-outlined song-premium-icon">workspace_premium</span>
+                      PREMIUM
+                    </span>
+                  ) : null}
+                </div>
               </div>
 
-              <div className="song-access-cta-stack">
-                {hasAdvancedAccess ? (
-                  <span className="song-premium-badge is-active" title="Tienes acceso Premium">
-                    ✓ Premium
-                  </span>
-                ) : (
-                  <button type="button" className="song-premium-badge" onClick={openPremiumPlans}>
-                    Premium
-                  </button>
-                )}
+              <div className="song-version-chips">
+                <div className="song-chip">
+                  <span className="material-symbols-outlined song-chip-icon">difference</span>
+                  {selectedVersion?.versionName ?? selectedVersion?.label ?? 'Versión base'}
+                </div>
+                <div className="song-chip">
+                  <span className="material-symbols-outlined song-chip-icon">mic</span>
+                  {selectedInstrument?.name ?? 'Instrumento base'}
+                </div>
+              </div>
 
-                {!hasAdvancedAccess && userAccess.canPurchaseIndividually ? (
-                  <button type="button" className="song-premium-badge is-buy" onClick={onStartSongPurchase} disabled={isProcessingPurchase}>
-                    {isProcessingPurchase
-                      ? 'Procesando...'
-                      : `Comprar esta canción${typeof userAccess.individualPriceUsd === 'number' ? ` ($${userAccess.individualPriceUsd.toFixed(2)})` : ''}`}
+              <div className="song-header-actions">
+                <div className="song-audio-mini-player">
+                  <button
+                    type="button"
+                    className="song-play-button"
+                    onClick={onPlayReferenceAudio}
+                    aria-label={isAudioPlaying ? 'Pausar audio' : 'Reproducir audio'}
+                  >
+                    <span className="material-symbols-outlined">{isAudioPlaying ? 'pause_circle' : 'play_circle'}</span>
                   </button>
-                ) : null}
+                  
+                  {activeAudioSrc ? (
+                    <div className="song-inline-audio-player">
+                      <AudioPlayer
+                        key={`${activeAudioSrc}-${audioAutoplayToken}`}
+                        src={activeAudioSrc}
+                        title={song.title}
+                        autoPlay
+                        showMainButton={false}
+                        onEnded={() => setIsAudioPlaying(false)}
+                        onPlayingChange={setIsAudioPlaying}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="song-secondary-actions">
+                  <button
+                    type="button"
+                    className={isAutoScrolling ? 'song-secondary-button is-active' : 'song-secondary-button'} 
+                    onClick={() => setIsAutoScrolling((prev) => !prev)}
+                  >
+                    <span className="material-symbols-outlined">swap_vert</span>
+                    Desplazar
+                  </button>
+                  <button
+                    type="button"
+                    className={isFavorite ? 'song-favorite-button is-active' : 'song-favorite-button'}
+                    aria-label="Marcar favorito"
+                    aria-pressed={isFavorite}
+                    onClick={onToggleFavorite}
+                  >
+                    <span className="material-symbols-outlined">favorite</span>
+                  </button>
+                </div>
               </div>
             </div>
+          </div>
 
-            <div className="song-action-row">
-              <button type="button" className="song-scroll-button" onClick={() => setIsAutoScrolling((prev) => !prev)}>
-                <Image src="/assets/utils/arrow-down/arrowdown2x.png" alt="Desplazar" width={16} height={16} />
-                {isAutoScrolling ? 'Detener' : 'Desplazar'}
-              </button>
+          {/* Admin Status Tools */}
+          {isAdminUser ? (
+            <div className="song-admin-status-tools" aria-label="Controles de moderación">
+              <div className="song-admin-status-header">
+                <div className="song-admin-status-title">
+                  <span className="material-symbols-outlined song-admin-status-icon">admin_panel_settings</span>
+                  <div>
+                    <span className="song-admin-status-kicker">Moderación editorial</span>
+                    <h3>Cambiar estado</h3>
+                  </div>
+                </div>
+                <span className={`song-admin-status-badge status-${songStatusSelection.toLowerCase()}`}>
+                  {selectedSongStatusLabel}
+                </span>
+              </div>
 
-              <div className="song-icon-rail" aria-label="acciones rápidas">
+              <div className="song-admin-status-combobox" data-open={isSongStatusMenuOpen ? 'true' : 'false'}>
                 <button
                   type="button"
-                  className={isFavorite ? 'song-icon-action is-active' : 'song-icon-action'}
-                  aria-label="Marcar favorito"
-                  aria-pressed={isFavorite}
-                  onClick={onToggleFavorite}
+                  className="song-admin-status-combobox-trigger"
+                  aria-haspopup="listbox"
+                  aria-expanded={isSongStatusMenuOpen}
+                  aria-label="Seleccionar estado de la canción"
+                  onClick={() => setIsSongStatusMenuOpen((prev) => !prev)}
                 >
-                  <Image src="/assets/utils/heart/heart2x.png" alt="Favorito" width={18} height={18} />
-                </button>
-
-                <button
-                  type="button"
-                  className={[
-                    'song-icon-action',
-                    'song-audio-action',
-                    isAudioPlaying ? 'is-playing' : '',
-                    isAudioTriggering ? 'is-triggered' : ''
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  aria-label={isAudioPlaying ? 'Pausar audio' : 'Reproducir audio'}
-                  aria-pressed={isAudioPlaying}
-                  onClick={onPlayReferenceAudio}
-                >
-                  <Image src="/assets/utils/volumeup/volumeup2x.png" alt="Audio" width={28} height={18} />
-                  <span className="song-audio-bars" aria-hidden>
-                    <span />
-                    <span />
-                    <span />
+                  <span className="song-admin-status-combobox-label">Estado actual</span>
+                  <span className="song-admin-status-combobox-value">{selectedSongStatusLabel}</span>
+                  <span className="material-symbols-outlined song-admin-status-combobox-chevron" aria-hidden>
+                    {isSongStatusMenuOpen ? 'expand_less' : 'expand_more'}
                   </span>
                 </button>
 
-                {activeAudioSrc ? (
-                  <div className="song-inline-audio-player">
-                    <AudioPlayer
-                      key={`${activeAudioSrc}-${audioAutoplayToken}`}
-                      src={activeAudioSrc}
-                      title={song.title}
-                      autoPlay
-                      showMainButton={false}
-                      onEnded={() => setIsAudioPlaying(false)}
-                      onPlayingChange={setIsAudioPlaying}
-                    />
+                {isSongStatusMenuOpen ? (
+                  <div className="song-admin-status-combobox-menu" role="listbox" aria-label="Opciones de estado">
+                    {SONG_STATUS_OPTIONS.map((option) => {
+                      const isActive = songStatusSelection === option.value;
+                      const statusIcon = {
+                        in_review: 'pending',
+                        rejected: 'cancel',
+                        approved: 'check_circle',
+                        published: 'public'
+                      }[option.value.toLowerCase()] || 'circle';
+                      
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          className={`song-admin-status-combobox-option status-${option.value.toLowerCase()} ${isActive ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setSongStatusSelection(option.value);
+                            setIsSongStatusMenuOpen(false);
+                          }}
+                        >
+                          <div className="song-admin-status-option-content">
+                            <div className="song-admin-status-option-left">
+                              <span className="material-symbols-outlined song-admin-status-option-icon">{statusIcon}</span>
+                              <div className="song-admin-status-option-text">
+                                <strong>{option.label}</strong>
+                                <span className="song-admin-status-option-helper">{option.helper}</span>
+                              </div>
+                            </div>
+                            {isActive ? <span className="song-admin-status-current-badge">Actual</span> : null}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>
+
+              <div className="song-admin-status-actions">
+                <button type="button" className="song-admin-status-action" onClick={onAdminChangeSongStatus} disabled={isUpdatingSongStatus}>
+                  {isUpdatingSongStatus ? (
+                    <span className="song-admin-status-action-content">
+                      <span className="material-symbols-outlined song-admin-status-action-icon is-loading">refresh</span>
+                      Actualizando...
+                    </span>
+                  ) : (
+                    <span className="song-admin-status-action-content">
+                      <span className="material-symbols-outlined song-admin-status-action-icon">check</span>
+                      Aplicar estado
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : null}
         </header>
 
-        {!hasAdvancedAccess && userAccess.isAuthenticated ? (
-          <div className="song-paywall-box" aria-label="acceso premium">
-            <p>Algunas versiones y herramientas requieren plan Premium o compra individual.</p>
-          </div>
-        ) : !userAccess.isAuthenticated ? (
-          <div className="song-paywall-box" aria-label="acceso premium">
-            <p><button type="button" className="auth-toggle-link" onClick={openPremiumPlans}>Inicia sesión</button> para acceder a versiones Premium.</p>
+        {/* Premium Banner */}
+        {!hasAdvancedAccess && selectedVersion?.isPremium ? (
+          <div className="song-premium-banner">
+            <div className="song-premium-banner-content">
+              <span className="material-symbols-outlined song-premium-banner-icon">workspace_premium</span>
+              <div>
+                <h4 className="song-premium-banner-title">Acceso Premium Requerido</h4>
+                <p className="song-premium-banner-text">La versión &quot;{selectedVersion?.versionName ?? selectedVersion?.label}&quot; completa está disponible para suscriptores.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="song-premium-banner-cta"
+              onClick={openPremiumPlans}
+            >
+              Mejorar Plan
+            </button>
           </div>
         ) : null}
 
         {songAccessMessage ? <p className="song-access-message">{songAccessMessage}</p> : null}
 
-        <div className={isAutoScrolling ? 'song-speed-control is-visible' : 'song-speed-control'} aria-label="velocidad de desplazamiento">
-          {scrollSpeedOptions.map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={scrollSpeed === option ? 'song-speed-pill is-active' : 'song-speed-pill'}
-              onClick={() => setScrollSpeed(option)}
-            >
-              x{option}
-            </button>
-          ))}
-        </div>
-
-        <div className="song-variant-chip-row" aria-label="versión e instrumento actuales">
-          <span className="song-chip">{selectedVersion?.versionName ?? selectedVersion?.label ?? 'Versión base'}</span>
-          <span className="song-chip">{selectedInstrument?.name ?? 'Instrumento base'}</span>
-        </div>
-
-        <div className="song-lyrics-scroll" ref={lyricsRef}>
-          {shouldRenderMusicXmlSheet ? (
-            <div className="song-sheet-renderer" aria-live="polite">
-              {isRenderingSheet ? <p className="song-sheet-status">Cargando partitura…</p> : null}
-              <div className="song-sheet-canvas" ref={sheetContainerRef} aria-label="Partitura renderizada" />
-              {sheetRenderError ? <p className="song-sheet-error">{sheetRenderError}</p> : null}
+        {/* Lyrics/Sheet Workspace */}
+        <div className="song-workspace layout-h-margin">
+          <div className="song-workspace-toolbar">
+            <div className="song-workspace-toolbar-left">
+              <button
+                type="button"
+                className="song-workspace-tool-button"
+                aria-label="Acercar"
+              >
+                <span className="material-symbols-outlined">zoom_in</span>
+                Acercar
+              </button>
+              <button
+                type="button"
+                className="song-workspace-tool-button"
+                aria-label="Alejar"
+              >
+                <span className="material-symbols-outlined">zoom_out</span>
+                Alejar
+              </button>
             </div>
-          ) : (
-            <pre className="song-lyrics">{activeLyrics}</pre>
-          )}
+            <div className="song-workspace-toolbar-right">
+              <span className="song-workspace-mode-badge">MODO TEXTO</span>
+            </div>
+          </div>
 
-          {activeSheetUrl ? (
-            <p className="song-sheet-hint">
-              <a href={activeSheetUrl} target="_blank" rel="noreferrer">Abrir archivo de partitura</a>
-            </p>
-          ) : null}
+          <div className="song-workspace-content" ref={lyricsRef}>
+            {shouldRenderMusicXmlSheet ? (
+              <div className="song-sheet-renderer" aria-live="polite">
+                {isRenderingSheet ? <p className="song-sheet-status">Cargando partitura…</p> : null}
+                <div className="song-sheet-canvas" ref={sheetContainerRef} aria-label="Partitura renderizada" />
+                {sheetRenderError ? <p className="song-sheet-error">{sheetRenderError}</p> : null}
+              </div>
+            ) : (
+              <pre className="song-lyrics">{activeLyrics}</pre>
+            )}
+
+            {activeSheetUrl ? (
+              <p className="song-sheet-hint">
+                <a href={activeSheetUrl} target="_blank" rel="noreferrer">Abrir archivo de partitura</a>
+              </p>
+            ) : null}
+
+            {/* Paywall Overlay */}
+            {!hasAdvancedAccess && selectedVersion?.isPremium ? (
+              <div className="song-workspace-paywall">
+                <div className="song-workspace-paywall-content">
+                  <span className="material-symbols-outlined song-workspace-paywall-icon">lock</span>
+                  Desbloquea para ver la partitura completa
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
       </article>
     </section>

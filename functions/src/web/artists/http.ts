@@ -120,7 +120,8 @@ function buildSongRow(docId: string, data: Record<string, unknown>): ArtistSongR
     tone: String(data.tone ?? data.defaultTone ?? ''),
     hasLyrics: Boolean(data.hasLyrics ?? (typeof data.lyrics === 'string' && (data.lyrics as string).length > 0)),
     hasSheet: Boolean(data.hasSheet ?? (typeof data.sheetUrl === 'string' && (data.sheetUrl as string).length > 0)),
-    isVerified: Boolean(data.isVerified)
+    isVerified: Boolean(data.isVerified),
+    moderationState: typeof data.status === 'string' ? data.status : undefined
   };
 }
 
@@ -461,6 +462,7 @@ export const artists = functions.https.onRequest(async (req, res) => {
     }
   } catch (error) {
     console.error('Cloud SQL artist bundle lookup failed:', error);
+    // Continue to Firestore fallback
   }
 
   const artistSnap = await db.collection('artists').doc(artistId).get();
@@ -507,25 +509,11 @@ export const artists = functions.https.onRequest(async (req, res) => {
   const isNumericArtistId = Number.isFinite(numericArtistId) && numericArtistId > 0 && String(numericArtistId) === artistId;
 
   let fallbackSqlArtist: Awaited<ReturnType<typeof getArtistById>> | null = null;
-  let sqlDiscography: ArtistDiscographyItem[] = [];
 
   try {
     fallbackSqlArtist = isNumericArtistId
       ? await getArtistById(numericArtistId)
       : await findArtistByNameSlug(decodeURIComponent(artistId));
-
-    if (fallbackSqlArtist?.id) {
-      const sqlAlbums = await listArtistAlbumsByArtistId(fallbackSqlArtist.id);
-      sqlDiscography = sqlAlbums.map((album) => ({
-        id: album.id,
-        title: album.title,
-        year: album.year,
-        coverUrl: album.coverUrl,
-        albumId: album.albumId,
-        moderationState: album.moderationState,
-        reviewStatus: album.reviewStatus
-      }));
-    }
   } catch {
     // keep Firestore fallback available even if SQL enrichment fails
   }
@@ -558,14 +546,45 @@ export const artists = functions.https.onRequest(async (req, res) => {
     ? (artistData.discography as unknown[])
         .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object')
         .map(normalizeDiscographyItem)
-    : songs.slice(0, 5).map((song, index) => ({
+    : [];
+
+  // If no discography in artist document, query albums collection directly
+  if (firestoreDiscography.length === 0) {
+    console.log('[artists] No discography in artist document, querying albums collection');
+    try {
+      const albumsSnap = await db.collection('albums')
+        .where('artistId', '==', artistId)
+        .where('status', '==', 'PUBLISHED')
+        .limit(5)
+        .get();
+
+      console.log('[artists] Found', albumsSnap.size, 'albums for artist', artistId);
+      firestoreDiscography.push(...albumsSnap.docs.map((doc) => {
+        const data = doc.data() as Record<string, unknown>;
+        return {
+          id: doc.id,
+          title: String(data.title ?? data.name ?? ''),
+          year: Number(data.releaseYear ?? new Date().getFullYear()),
+          coverUrl: typeof data.coverUrl === 'string' ? data.coverUrl : undefined,
+          moderationState: typeof data.status === 'string' ? data.status : undefined,
+          reviewStatus: (data.status === 'PUBLISHED' || data.status === 'APPROVED') ? 'reviewed' : 'pending' as 'reviewed' | 'pending'
+        };
+      }));
+    } catch (error) {
+      console.error('[artists] Error querying albums collection:', error);
+      // If query fails, fall back to songs
+      firestoreDiscography.push(...songs.slice(0, 5).map((song, index) => ({
         id: `discography-${song.id}`,
         title: song.title,
         year: new Date().getFullYear() - (index + 3),
         coverUrl: song.thumbnailUrl,
         songId: song.id
-      }));
-  const discography = sqlDiscography.length > 0 ? sqlDiscography : firestoreDiscography;
+      })));
+    }
+  }
+
+  console.log('[artists] Final discography count:', firestoreDiscography.length);
+  const discography = firestoreDiscography;
 
   const suggestedArtists = await resolveSuggestedArtists(db, artistData);
 

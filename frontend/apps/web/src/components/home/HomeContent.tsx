@@ -96,6 +96,7 @@ export function HomeContent({
     }
 
     let disposed = false;
+    const controller = new AbortController();
 
     const hydrate = async () => {
       const cached = getCachedSearchDatasetClient('home');
@@ -108,9 +109,9 @@ export function HomeContent({
 
       try {
         const resolvedDataset = await getSearchDatasetClient({
-          forceRefresh: true,
           scope: 'home',
-          category: selectedCategory === 'todos' ? '' : selectedCategory
+          category: selectedCategory === 'todos' ? '' : selectedCategory,
+          signal: controller.signal
         });
         if (disposed) return;
         setDataset(resolvedDataset);
@@ -125,6 +126,7 @@ export function HomeContent({
 
     return () => {
       disposed = true;
+      controller.abort();
     };
   }, [authLoading, currentUserId, selectedCategory]);
 
@@ -228,7 +230,9 @@ export function HomeContent({
         left={{
           title: text.trendsTitle,
           viewAllLabel: text.viewAll,
+          viewAllHref: '/search?kind=artist',
           items: trends,
+          variant: 'trends',
           resolveItemHref: (item) =>
             getArtistProfileHref({
               artistId: item.id,
@@ -238,8 +242,10 @@ export function HomeContent({
         right={{
           title: text.recentTitle,
           viewAllLabel: text.viewAll,
+          viewAllHref: '/search?kind=song',
           items: recentSongs,
-          linkBasePath: '/songs'
+          linkBasePath: '/songs',
+          variant: 'recent'
         }}
       />
     </>

@@ -1,21 +1,8 @@
 import { repertoireListMock, repertoireMockById } from './mockData';
 import type { RepertoireSelectedSong, repertoireDetail, repertoireListItem, SongRef } from '../../types/repertoire';
 import { getSongTitleById } from '../song/repository';
-
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
-
-async function getServerSessionToken(): Promise<string | null> {
-  if (typeof window !== 'undefined') {
-    return null;
-  }
-
-  try {
-    const { cookies } = await import('next/headers');
-    return cookies().get('__session')?.value ?? null;
-  } catch {
-    return null;
-  }
-}
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
+import { normalizeRepertoireStatus } from './status';
 
 function parseUnknownDate(value: unknown): Date | null {
   if (!value) {
@@ -51,7 +38,7 @@ function parseUnknownDate(value: unknown): Date | null {
   return null;
 }
 
-function formatDateForUi(value: unknown): string {
+export function formatDateForUi(value: unknown): string {
   const date = parseUnknownDate(value);
   if (!date) {
     return 'N/D';
@@ -115,19 +102,6 @@ async function getPublicrepertoireDetailFromFunctions(repertoireId: string): Pro
   }
 }
 
-async function buildServerAuthHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
-  const token = await getServerSessionToken();
-
-  if (!token) {
-    return baseHeaders;
-  }
-
-  return {
-    ...baseHeaders,
-    Authorization: `Bearer ${token}`
-  };
-}
-
 function isrepertoireDetail(value: unknown): value is repertoireDetail {
   if (!value || typeof value !== 'object') {
     return false;
@@ -159,7 +133,15 @@ function normalizerepertoireDetail(raw: repertoireDetail): repertoireDetail {
   return {
     ...raw,
     createdAt: formatDateForUi((raw as unknown as { updatedAt?: unknown }).updatedAt ?? raw.createdAt),
-    status: raw.status === 'Publicado' ? 'Publicado' : 'Borrador',
+    status: normalizeRepertoireStatus(raw.status) === 'DRAFT'
+      ? 'Borrador'
+      : normalizeRepertoireStatus(raw.status) === 'IN_REVIEW'
+        ? 'En revisión'
+        : normalizeRepertoireStatus(raw.status) === 'REJECTED'
+          ? 'Rechazado'
+          : normalizeRepertoireStatus(raw.status) === 'APPROVED'
+            ? 'Aprobado'
+            : 'Publicado',
     songIds,
     selectedSongs,
     songsCount: calculatedCount > 0 ? calculatedCount : Number(raw.songsCount ?? 0),
@@ -186,7 +168,7 @@ async function getrepertoireDetailFromFunctions(repertoireId: string): Promise<r
   }
 
   try {
-    const headers = await buildServerAuthHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/repertoires/${repertoireId}`, {
       method: 'GET',
       headers,
@@ -228,7 +210,7 @@ async function searchSongFromRepertoireSearch(songId: string, versionId?: string
 
   for (const query of queries) {
     try {
-      const headers = await buildServerAuthHeaders({ Accept: 'application/json' });
+      const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
       const response = await fetch(
         `${functionsBaseUrl}/repertoires/song-search?q=${encodeURIComponent(query)}&limit=12`,
         {
@@ -355,7 +337,16 @@ function isrepertoireListItem(value: unknown): value is repertoireListItem {
 }
 
 function normalizerepertoireListItem(rawItem: Record<string, unknown>): repertoireListItem {
-  const status = String(rawItem.status ?? 'Borrador') === 'Publicado' ? 'Publicado' : 'Borrador';
+  const normalizedStatus = normalizeRepertoireStatus(rawItem.status);
+  const status = normalizedStatus === 'DRAFT'
+    ? 'Borrador'
+    : normalizedStatus === 'IN_REVIEW'
+      ? 'En revisión'
+      : normalizedStatus === 'REJECTED'
+        ? 'Rechazado'
+        : normalizedStatus === 'APPROVED'
+          ? 'Aprobado'
+          : 'Publicado';
   const songIds = Array.isArray(rawItem.songIds) ? rawItem.songIds.filter((id): id is string => typeof id === 'string') : [];
   const countFromIds = songIds.length;
 
@@ -381,7 +372,15 @@ function finalizerepertoireListItem(item: repertoireListItem): repertoireListIte
 
   return {
     ...item,
-    status: item.status === 'Publicado' ? 'Publicado' : 'Borrador',
+    status: normalizeRepertoireStatus(item.status) === 'DRAFT'
+      ? 'Borrador'
+      : normalizeRepertoireStatus(item.status) === 'IN_REVIEW'
+        ? 'En revisión'
+        : normalizeRepertoireStatus(item.status) === 'REJECTED'
+          ? 'Rechazado'
+          : normalizeRepertoireStatus(item.status) === 'APPROVED'
+            ? 'Aprobado'
+            : 'Publicado',
     songsCount: countFromIds > 0 ? countFromIds : Number(item.songsCount ?? 0),
     sheetsCount: countFromIds > 0 ? countFromIds : Number(item.sheetsCount ?? 0),
     coverImageUrl: item.coverImageUrl && item.coverImageUrl.length > 0 ? item.coverImageUrl : undefined,
@@ -416,7 +415,7 @@ async function getrepertoiresFromFunctions(userId: string): Promise<repertoireLi
   }
 
   try {
-    const headers = await buildServerAuthHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/repertoires?userId=${encodeURIComponent(userId)}`, {
       method: 'GET',
       headers,
@@ -441,4 +440,70 @@ export async function getUserrepertoires(userId: string): Promise<repertoireList
   }
 
   return repertoireListMock.filter((item) => item.ownerUserId === userId).map(finalizerepertoireListItem);
+}
+
+
+export async function requestPublishRepertoire(repertoireId: string): Promise<{ ok: boolean; reason?: string; status?: string }> {
+  if (!functionsBaseUrl) {
+    return { ok: false, reason: 'network' };
+  }
+
+  try {
+    const headers = await buildFunctionsHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+
+    const response = await fetch(`${functionsBaseUrl}/repertoires/${repertoireId}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ repertoire: { isPublic: true, status: 'PUBLISHED' } })
+    });
+
+    if (!response.ok) {
+      return { ok: false, reason: String(response.status) };
+    }
+
+    const payload = (await response.json()) as { repertoire?: { status?: unknown } };
+    return { ok: true, status: typeof payload.repertoire?.status === 'string' ? payload.repertoire.status : 'PUBLISHED' };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
+}
+
+export async function requestUpdateRepertoireStatus(
+  repertoireId: string,
+  status: string,
+  isPublic?: boolean
+): Promise<{ ok: boolean; reason?: string; status?: string }> {
+  if (!functionsBaseUrl) {
+    return { ok: false, reason: 'network' };
+  }
+
+  try {
+    const headers = await buildFunctionsHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+
+    const response = await fetch(`${functionsBaseUrl}/repertoires/${repertoireId}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        repertoire: {
+          status,
+          ...(typeof isPublic === 'boolean' ? { isPublic } : {})
+        }
+      })
+    });
+
+    if (!response.ok) {
+      return { ok: false, reason: String(response.status) };
+    }
+
+    const payload = (await response.json()) as { repertoire?: { status?: unknown } };
+    return { ok: true, status: typeof payload.repertoire?.status === 'string' ? payload.repertoire.status : status };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
 }

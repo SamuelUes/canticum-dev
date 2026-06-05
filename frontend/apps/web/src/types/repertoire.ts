@@ -1,4 +1,4 @@
-export type repertoireStatus = 'Borrador' | 'Publicado';
+export type repertoireStatus = 'Borrador' | 'En revisión' | 'Rechazado' | 'Aprobado' | 'Publicado';
 
 export interface SongRef {
   id: string;
@@ -39,6 +39,7 @@ export interface repertoireDetail {
   liturgicalType: string;
   songsCount: number;
   sheetsCount: number;
+  coverImageUrl?: string;
   songIds: string[];
   selectedSongs?: RepertoireSelectedSong[];
   description: string;

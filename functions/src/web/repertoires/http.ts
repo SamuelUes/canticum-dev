@@ -61,7 +61,47 @@ function asMillis(value: unknown): number {
   return 0;
 }
 
-function normalizerepertoireResponse(repertoireId: string, raw: Record<string, unknown>): Record<string, unknown> {
+function normalizeRepertoireStatus(rawStatus: unknown, isPublic: boolean): string {
+  const normalized = typeof rawStatus === 'string'
+    ? rawStatus
+      .trim()
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+    : '';
+
+  if (normalized === 'BORRADOR' || normalized === 'DRAFT') return 'DRAFT';
+  if (normalized === 'IN_REVIEW' || normalized === 'EN REVISION' || normalized === 'REVIEW' || normalized === 'REVISION') return 'IN_REVIEW';
+  if (normalized === 'REJECTED' || normalized === 'RECHAZADO') return 'REJECTED';
+  if (normalized === 'APPROVED' || normalized === 'APROBADO') return 'APPROVED';
+  if (normalized === 'PUBLISHED' || normalized === 'PUBLICADO') return 'PUBLISHED';
+  return isPublic ? 'PUBLISHED' : 'DRAFT';
+}
+
+async function resolveUserDisplayName(userId: string, fallback: string): Promise<string> {
+  if (!userId) {
+    return fallback;
+  }
+
+  try {
+    const snap = await getAppFirestore().collection('users').doc(userId).get();
+    const data = (snap.data() ?? {}) as Record<string, unknown>;
+    const displayName = typeof data.displayName === 'string' ? data.displayName.trim() : '';
+    if (displayName) {
+      return displayName;
+    }
+
+    const email = typeof data.email === 'string' ? data.email.trim() : '';
+    if (email) {
+      return email;
+    }
+  } catch {
+  }
+
+  return fallback;
+}
+
+async function normalizerepertoireResponse(repertoireId: string, raw: Record<string, unknown>): Promise<Record<string, unknown>> {
   const songIds = Array.isArray(raw.songIds) ? raw.songIds.map((value) => String(value)) : [];
   const selectedSongs = Array.isArray(raw.songs)
     ? raw.songs
@@ -78,18 +118,20 @@ function normalizerepertoireResponse(repertoireId: string, raw: Record<string, u
       .filter((value) => value.songId.length > 0)
     : [];
   const isPublic = Boolean(raw.isPublic ?? raw.visibility === 'public');
+  const creatorUserId = String(raw.createdBy ?? raw.userId ?? raw.ownerUserId ?? '').trim();
+  const createdBy = await resolveUserDisplayName(creatorUserId, creatorUserId);
 
   return {
     id: repertoireId,
     title: String(raw.title ?? ''),
     createdAt: raw.createdAt ?? null,
     updatedAt: raw.updatedAt ?? null,
-    createdBy: String(raw.createdBy ?? raw.userId ?? ''),
+    createdBy,
     ownerUserId: String(raw.ownerUserId ?? raw.userId ?? ''),
     userId: String(raw.userId ?? raw.ownerUserId ?? ''),
     isPublic,
     visibility: isPublic ? 'public' : 'private',
-    status: String(raw.status ?? (isPublic ? 'PUBLISHED' : 'DRAFT')).toUpperCase(),
+    status: normalizeRepertoireStatus(raw.status, isPublic),
     liturgicalType: String(raw.liturgicalType ?? raw.type ?? 'General'),
     songsCount: Number(raw.songsCount ?? songIds.length),
     sheetsCount: Number(raw.sheetsCount ?? 0),
@@ -100,7 +142,11 @@ function normalizerepertoireResponse(repertoireId: string, raw: Record<string, u
   };
 }
 
-function canReadrepertoire(repertoire: Record<string, unknown>, requestUserId: string | null): boolean {
+function canReadrepertoire(repertoire: Record<string, unknown>, requestUserId: string | null, role?: string): boolean {
+  if (role === 'admin') {
+    return true;
+  }
+
   if (requestUserId && String(repertoire.userId ?? repertoire.ownerUserId ?? '') === requestUserId) {
     return true;
   }
@@ -128,6 +174,7 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
   const segments = getPathSegments(req);
   const auth = await getOptionalAuthContext(req);
   const requestUserId = resolveRequestUserId(req, auth);
+  const isAdmin = auth?.token.role === 'admin';
 
   // ── GET /repertoires  →  list repertoires by userId or public ──
   if (segments.length === 0 && req.method === 'GET') {
@@ -156,6 +203,19 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
             .limit(100)
             .get();
         }
+      } else if ((auth?.token.role as string | undefined) === 'admin') {
+        try {
+          repertoiresSnap = await db
+            .collection('repertoires')
+            .orderBy('updatedAt', 'desc')
+            .limit(100)
+            .get();
+        } catch {
+          repertoiresSnap = await db
+            .collection('repertoires')
+            .limit(100)
+            .get();
+        }
       } else if (requestUserId) {
         try {
           repertoiresSnap = await db
@@ -180,13 +240,13 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
         return;
       }
 
-      const repertoires = repertoiresSnap.docs
-        .map((doc) => normalizerepertoireResponse(doc.id, (doc.data() ?? {}) as Record<string, unknown>))
-        .sort((a, b) => {
-          const aTs = asMillis(a.updatedAt ?? a.createdAt);
-          const bTs = asMillis(b.updatedAt ?? b.createdAt);
-          return bTs - aTs;
-        });
+      const repertoires = (await Promise.all(
+        repertoiresSnap.docs.map((doc) => normalizerepertoireResponse(doc.id, (doc.data() ?? {}) as Record<string, unknown>))
+      )).sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+        const aTs = asMillis(a.updatedAt ?? a.createdAt);
+        const bTs = asMillis(b.updatedAt ?? b.createdAt);
+        return bTs - aTs;
+      });
 
       sendJson(res, 200, { repertoires });
       return;
@@ -293,7 +353,7 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
     sendJson(res, 201, {
       ok: true,
       ...(cloudSqlRepertoireId ? { cloudSqlRepertoireId } : {}),
-      repertoire: normalizerepertoireResponse(newrepertoireRef.id, {
+      repertoire: await normalizerepertoireResponse(newrepertoireRef.id, {
         title,
         songIds,
         ...(songs.length > 0 ? { songs } : {}),
@@ -359,6 +419,17 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
 
   const repertoireId = segments[0];
 
+  let patchUpdate: Record<string, unknown> | null = null;
+  if (req.method === 'PATCH') {
+    const body = getBodyRecord(req);
+    patchUpdate = (body.repertoire ?? {}) as Record<string, unknown>;
+
+    if (typeof patchUpdate.status === 'string' && patchUpdate.status.trim() && !isAdmin) {
+      sendError(res, 403, 'forbidden', 'Only admin can update repertoire status.');
+      return;
+    }
+  }
+
   const repertoireRef = getAppFirestore().collection('repertoires').doc(repertoireId);
   const repertoireSnap = await repertoireRef.get();
 
@@ -370,12 +441,12 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
   const repertoireData = (repertoireSnap.data() ?? {}) as Record<string, unknown>;
 
   if (req.method === 'GET') {
-    if (!canReadrepertoire(repertoireData, requestUserId)) {
+    if (!canReadrepertoire(repertoireData, requestUserId, auth?.token.role as string | undefined)) {
       sendError(res, 403, 'forbidden', 'repertoire is private.');
       return;
     }
 
-    sendJson(res, 200, normalizerepertoireResponse(repertoireId, repertoireData));
+    sendJson(res, 200, await normalizerepertoireResponse(repertoireId, repertoireData));
     return;
   }
 
@@ -385,8 +456,7 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
       return;
     }
 
-    const body = getBodyRecord(req);
-    const update = (body.repertoire ?? {}) as Record<string, unknown>;
+    const update = patchUpdate ?? {};
 
     const updatedSelectedSongs = Array.isArray(update.songs)
       ? update.songs
@@ -458,15 +528,15 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
     }
 
     if (typeof update.status === 'string' && update.status.trim()) {
-      payload.status = update.status.trim().toUpperCase();
-    } else if (isPublic && String(repertoireData.status ?? '').toUpperCase() === 'DRAFT') {
+      payload.status = normalizeRepertoireStatus(update.status, isPublic);
+    } else if (isAdmin && isPublic && String(repertoireData.status ?? '').toUpperCase() === 'DRAFT') {
       payload.status = 'PUBLISHED';
     }
 
     await repertoireRef.set(payload, { merge: true });
 
     const updatedSnap = await repertoireRef.get();
-    sendJson(res, 200, { ok: true, repertoire: normalizerepertoireResponse(repertoireId, (updatedSnap.data() ?? {}) as Record<string, unknown>) });
+    sendJson(res, 200, { ok: true, repertoire: await normalizerepertoireResponse(repertoireId, (updatedSnap.data() ?? {}) as Record<string, unknown>) });
     return;
   }
 

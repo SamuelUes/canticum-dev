@@ -20,6 +20,14 @@ service cloud.firestore {
       return hasRole('admin');
     }
 
+    function isEditor() {
+      return hasRole('editor');
+    }
+
+    function isAdminOrEditor() {
+      return isAdmin() || isEditor();
+    }
+
     function isPremium() {
       return isAuthenticated() && request.auth.token.premium == true;
     }
@@ -75,6 +83,11 @@ service cloud.firestore {
         allow read: if resource.data.isPremium == false || isPremium() || hasSongUnlock(songId);
         allow write: if isAdmin();
       }
+    }
+
+    match /misales/{misalId} {
+      allow read: if true;
+      allow create, update, delete: if isAdminOrEditor();
     }
 
     match /artists/{artistId} {

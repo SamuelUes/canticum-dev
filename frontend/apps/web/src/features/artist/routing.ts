@@ -1,11 +1,5 @@
 import { artistMockById } from './mockData';
-
-const functionsBaseUrl = [
-  process.env.GCP_FUNCTIONS_BASE_URL,
-  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
-]
-  .map((value) => (typeof value === 'string' ? value.trim() : ''))
-  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
+import { functionsBaseUrl } from '../shared/functionsClient';
 
 function normalizeArtistName(value: string): string {
   return value

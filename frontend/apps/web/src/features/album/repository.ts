@@ -1,5 +1,4 @@
-import { albumMockById, albumsByArtistMock } from './mockData';
-import { readClientCache, writeClientCache } from '../shared/clientCache';
+import { readClientCache, removeClientCacheByPrefix, writeClientCache } from '../shared/clientCache';
 import type {
   AlbumCopyright,
   AlbumDetail,
@@ -10,12 +9,24 @@ import type {
   AlbumTracksBucket,
   AlbumType
 } from '../../types/album';
-
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
 
 const ALBUM_DETAIL_CACHE_PREFIX = 'canticum:album:detail:v1:';
 const ALBUM_ARTIST_LIST_CACHE_PREFIX = 'canticum:album:artist-list:v1:';
 const ALBUM_CACHE_TTL_MS = 300_000;
+
+export interface AlbumActionResult {
+  ok: boolean;
+  reason?: 'forbidden' | 'unauthorized' | 'not_found' | 'network' | 'unknown';
+  status?: string;
+}
+
+function mapAlbumStatusToReason(status: number): AlbumActionResult['reason'] {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  return 'unknown';
+}
 
 function getAlbumDetailCacheKey(albumId: string): string {
   return `${ALBUM_DETAIL_CACHE_PREFIX}${albumId}`;
@@ -121,7 +132,8 @@ function normalizeAlbumSongRow(raw: Record<string, unknown>, index: number): Alb
     hasLyrics: Boolean(raw.hasLyrics),
     hasSheet: Boolean(raw.hasSheet),
     isPrimaryRelease: Boolean(raw.isPrimaryRelease),
-    isVerified: Boolean(raw.isVerified)
+    isVerified: Boolean(raw.isVerified),
+    status: typeof raw.status === 'string' ? raw.status : undefined
   };
 }
 
@@ -198,6 +210,7 @@ function normalizeAlbumDetail(raw: Record<string, unknown>): AlbumDetail {
     label: typeof raw.label === 'string' ? raw.label : undefined,
     genres: Array.isArray(raw.genres) ? (raw.genres as unknown[]).filter((g): g is string => typeof g === 'string') : undefined,
     copyrights: normalizeCopyrights(raw.copyrights),
+    status: typeof raw.status === 'string' ? raw.status.toUpperCase() : undefined,
     externalIds: raw.externalIds && typeof raw.externalIds === 'object'
       ? { upc: typeof (raw.externalIds as Record<string, unknown>).upc === 'string' ? (raw.externalIds as Record<string, string>).upc : undefined }
       : undefined,
@@ -232,8 +245,10 @@ async function getAlbumDetailFromFunctions(albumId: string): Promise<AlbumDetail
   }
 
   try {
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/albums/${albumId}`, {
       method: 'GET',
+      headers,
       cache: 'no-store'
     });
 
@@ -254,10 +269,7 @@ async function getAlbumDetailFromFunctions(albumId: string): Promise<AlbumDetail
 }
 
 export async function getAlbumDetailById(albumId: string): Promise<AlbumDetail | null> {
-  const remote = await getAlbumDetailFromFunctions(albumId);
-  if (remote) return remote;
-  const mock = albumMockById[albumId];
-  return mock ? normalizeAlbumDetail(mock as unknown as Record<string, unknown>) : null;
+  return await getAlbumDetailFromFunctions(albumId);
 }
 
 async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRef[] | null> {
@@ -270,8 +282,10 @@ async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRe
   }
 
   try {
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/albums?artistId=${encodeURIComponent(artistId)}`, {
       method: 'GET',
+      headers,
       cache: 'no-store'
     });
 
@@ -308,7 +322,8 @@ async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRe
           albumType: normalizeAlbumType(item.albumType),
           songsCount: totalTracks,
           totalTracks,
-          artists: normalizeArtists(item.artists)
+          artists: normalizeArtists(item.artists),
+          status: typeof item.status === 'string' ? item.status.toUpperCase() : undefined
         };
       })
       .filter((a) => a.id.length > 0);
@@ -322,23 +337,36 @@ async function getAlbumsByArtistFromFunctions(artistId: string): Promise<AlbumRe
 
 export async function getAlbumsByArtist(artistId: string): Promise<AlbumRef[]> {
   const remote = await getAlbumsByArtistFromFunctions(artistId);
-  if (remote) return remote;
+  return remote ?? [];
+}
 
-  const ids = albumsByArtistMock[artistId] ?? [];
-  return ids
-    .map((id) => albumMockById[id])
-    .filter(Boolean)
-    .map((album) => ({
-      id: album.id,
-      type: 'album' as const,
-      title: album.title,
-      name: album.title,
-      coverUrl: album.coverUrl,
-      images: album.coverUrl ? [{ url: album.coverUrl }] : undefined,
-      releaseYear: album.releaseYear,
-      albumType: album.albumType,
-      songsCount: album.songsCount,
-      totalTracks: album.songsCount,
-      artists: [{ id: album.artistId, name: album.artistName, type: 'artist' as const, imageUrl: album.artistImageUrl }]
-    }));
+
+export async function requestUpdateAlbumStatus(albumId: string, status: string): Promise<AlbumActionResult> {
+  if (!functionsBaseUrl) {
+    return { ok: false, reason: 'network' };
+  }
+
+  try {
+    const headers = await buildFunctionsHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+
+    const response = await fetch(`${functionsBaseUrl}/albums/${albumId}/status`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status })
+    });
+
+    if (!response.ok) {
+      return { ok: false, reason: mapAlbumStatusToReason(response.status) };
+    }
+
+    const payload = (await response.json()) as { status?: string };
+    removeClientCacheByPrefix(ALBUM_DETAIL_CACHE_PREFIX);
+    removeClientCacheByPrefix(ALBUM_ARTIST_LIST_CACHE_PREFIX);
+    return { ok: true, status: typeof payload.status === 'string' ? payload.status.toUpperCase() : undefined };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
 }

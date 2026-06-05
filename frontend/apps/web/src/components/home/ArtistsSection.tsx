@@ -56,16 +56,18 @@ export function ArtistsSection({ title, artists, loading = false }: ArtistsSecti
                 onClick={() => setSelectedArtistId(artist.id)}
               >
                 {artist.avatarUrl ? (
-                  <Image src={artist.avatarUrl} alt={artist.name} className="artist-avatar-image" width={62} height={62} />
+                  <Image
+                    src={artist.avatarUrl}
+                    alt={artist.name}
+                    className="artist-avatar-image"
+                    width={62}
+                    height={62}
+                    sizes="(max-width: 768px) 88px, 62px"
+                    priority={selectedArtistId === null && artists.indexOf(artist) < 2}
+                  />
                 ) : (
                   <div className="artist-avatar">
-                    <Image
-                      src="/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png"
-                      alt="Artista"
-                      width={86}
-                      height={86}
-                      className="placeholder-icon"
-                    />
+                    <span className="material-symbols-outlined placeholder-icon-artist-section" aria-hidden="true">person</span>
                   </div>
                 )}
                 <small className="artist-name">{artist.name}</small>

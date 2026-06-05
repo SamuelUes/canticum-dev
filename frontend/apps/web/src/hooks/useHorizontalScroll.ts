@@ -16,6 +16,27 @@ export function useHorizontalScroll(step = 320): UseHorizontalScrollResult {
   const trackRef = useRef<HTMLDivElement>(null);
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(false);
+  const frameRef = useRef<number | null>(null);
+
+  const flushFrame = useCallback(() => {
+    if (frameRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  const scheduleUpdate = useCallback((callback: () => void) => {
+    if (typeof window === 'undefined') {
+      callback();
+      return;
+    }
+
+    flushFrame();
+    frameRef.current = window.requestAnimationFrame(() => {
+      callback();
+      frameRef.current = null;
+    });
+  }, [flushFrame]);
 
   const updateScrollState = useCallback(() => {
     const track = trackRef.current;
@@ -52,30 +73,32 @@ export function useHorizontalScroll(step = 320): UseHorizontalScrollResult {
       return;
     }
 
-    updateScrollState();
+    scheduleUpdate(updateScrollState);
 
-    track.addEventListener('scroll', updateScrollState, { passive: true });
-    window.addEventListener('resize', updateScrollState, { passive: true });
+    const handleTrackScroll = () => scheduleUpdate(updateScrollState);
+    const handleWindowResize = () => scheduleUpdate(updateScrollState);
+
+    track.addEventListener('scroll', handleTrackScroll, { passive: true });
+    window.addEventListener('resize', handleWindowResize, { passive: true });
 
     const resizeObserver = new ResizeObserver(() => {
-      updateScrollState();
+      scheduleUpdate(updateScrollState);
     });
     resizeObserver.observe(track);
-    Array.from(track.children).forEach((child) => resizeObserver.observe(child));
 
     const mutationObserver = new MutationObserver(() => {
-      updateScrollState();
-      Array.from(track.children).forEach((child) => resizeObserver.observe(child));
+      scheduleUpdate(updateScrollState);
     });
     mutationObserver.observe(track, { childList: true });
 
     return () => {
-      track.removeEventListener('scroll', updateScrollState);
-      window.removeEventListener('resize', updateScrollState);
+      track.removeEventListener('scroll', handleTrackScroll);
+      window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
       mutationObserver.disconnect();
+      flushFrame();
     };
-  }, [updateScrollState]);
+  }, [flushFrame, scheduleUpdate, updateScrollState]);
 
   return {
     trackRef,

@@ -371,6 +371,38 @@ function formatDateLabel(value: unknown): string {
   }
 }
 
+function toComparableMillis(value: unknown): number {
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+
+  if (value && typeof value === 'object' && 'toMillis' in value && typeof (value as { toMillis?: unknown }).toMillis === 'function') {
+    try {
+      return (value as { toMillis: () => number }).toMillis();
+    } catch {
+      return 0;
+    }
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.getTime();
+    }
+  }
+
+  return 0;
+}
+
+function getSongPublicSortMillis(data: Record<string, unknown>): number {
+  return Math.max(
+    toComparableMillis(data.publishedAt),
+    toComparableMillis(data.approvedAt),
+    toComparableMillis(data.updatedAt),
+    toComparableMillis(data.createdAt)
+  );
+}
+
 export const search = functions.https.onRequest(async (req, res) => {
   if (handlePreflight(req, res)) {
     return;
@@ -390,6 +422,7 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const auth = await getOptionalAuthContext(req);
   const currentUserId = auth?.uid ?? null;
+  const isAdmin = (auth?.token.role as string | undefined) === 'admin';
   const db = getAppFirestore();
 
   // Accept Spotify-style `type=song,album,repertoire,artist,version` AND legacy `kind=song`.
@@ -442,9 +475,12 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const emptySnap = { docs: [] as FirebaseFirestore.QueryDocumentSnapshot[] };
 
-  const [publishedSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, albumsSnap, repertoiresSnap, artistsSnap] = await Promise.all([
+  const [publicSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, adminSongsSnap, albumsSnap, repertoiresSnap, artistsSnap] = await Promise.all([
     wants('song')
-      ? db.collection('songs').where('status', '==', 'PUBLISHED').orderBy('publishedAt', 'desc').limit(firestoreScanLimit).get()
+      ? db.collection('songs')
+        .where('status', 'in', ['APPROVED', 'PUBLISHED'])
+        .limit(firestoreScanLimit)
+        .get()
       : Promise.resolve(emptySnap),
     wants('song') && currentUserId
       ? db.collection('songs').where('ownerUserId', '==', currentUserId).limit(firestoreScanLimit).get()
@@ -452,8 +488,13 @@ export const search = functions.https.onRequest(async (req, res) => {
     wants('song') && currentUserId
       ? db.collection('songs').where('createdBy', '==', currentUserId).limit(firestoreScanLimit).get()
       : Promise.resolve(emptySnap),
+    wants('song') && isAdmin
+      ? db.collection('songs').limit(firestoreScanLimit).get()
+      : Promise.resolve(emptySnap),
     wants('album')
-      ? db.collection('albums').where('status', '==', 'PUBLISHED').limit(firestoreScanLimit).get()
+      ? (isAdmin
+          ? db.collection('albums').limit(firestoreScanLimit).get()
+          : db.collection('albums').where('status', '==', 'PUBLISHED').limit(firestoreScanLimit).get())
       : Promise.resolve(emptySnap),
     wants('repertoire')
       ? db.collection('repertoires').limit(firestoreScanLimit).get()
@@ -471,10 +512,17 @@ export const search = functions.https.onRequest(async (req, res) => {
   const artists: SearchItem[] = [];
   const versions: SearchItem[] = []; // reserved for future SearchService
 
+  const publicSongDocs = [...publicSongsSnap.docs].sort((a, b) => {
+    const aData = a.data() as Record<string, unknown>;
+    const bData = b.data() as Record<string, unknown>;
+    return getSongPublicSortMillis(bData) - getSongPublicSortMillis(aData);
+  });
+
   const allSongDocs = [
-    ...publishedSongsSnap.docs,
+    ...publicSongDocs,
     ...ownerSongsByOwnerIdSnap.docs,
-    ...ownerSongsByCreatedBySnap.docs
+    ...ownerSongsByCreatedBySnap.docs,
+    ...adminSongsSnap.docs
   ];
   const sqlSongIds = allSongDocs
     .map((doc) => Number((doc.data() as Record<string, unknown>).sqlSongId))
@@ -483,7 +531,7 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const sqlSongMetricsBySqlSongId = await getSongMetricsBySqlIds(sqlSongIds);
 
-  publishedSongsSnap.docs.forEach((doc) => {
+  publicSongDocs.forEach((doc) => {
     pushSongItemIfMatch(songs, seenSongIds, seenSqlSongIds, doc, query, sqlSongMetricsBySqlSongId);
   });
 
@@ -497,6 +545,15 @@ export const search = functions.https.onRequest(async (req, res) => {
   ownerSongsByCreatedBySnap.docs.forEach((doc) => {
     const data = doc.data() as Record<string, unknown>;
     if (String(data.status ?? '').toUpperCase() === 'DRAFT') {
+      pushSongItemIfMatch(songs, seenSongIds, seenSqlSongIds, doc, query, sqlSongMetricsBySqlSongId);
+    }
+  });
+
+
+  adminSongsSnap.docs.forEach((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    const status = String(data.status ?? '').toUpperCase();
+    if (status === 'DRAFT' || status === 'IN_REVIEW' || status === 'REJECTED' || status === 'APPROVED' || status === 'PUBLISHED') {
       pushSongItemIfMatch(songs, seenSongIds, seenSqlSongIds, doc, query, sqlSongMetricsBySqlSongId);
     }
   });
@@ -560,7 +617,7 @@ export const search = functions.https.onRequest(async (req, res) => {
     const ownerUserId = String(data.userId ?? data.ownerUserId ?? '');
     const isPublic = Boolean(data.isPublic ?? data.visibility === 'public');
 
-    if (!isPublic && ownerUserId !== currentUserId) {
+    if (!isPublic && ownerUserId !== currentUserId && !isAdmin) {
       return;
     }
 

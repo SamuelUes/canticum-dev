@@ -87,6 +87,15 @@ service firebase.storage {
       allow write: if canUploadRepertoireCover(repertoireId);
     }
 
+    match /misal/{weekId}/{misalId} {
+      allow read: if true;
+      allow write: if isAdminOrEditor()
+        && weekId.size() > 0 && weekId.size() <= 40
+        && misalId.size() > 0 && misalId.size() <= 80
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size < 20 * 1024 * 1024;
+    }
+
     match /users/{userId}/{allPaths=**} {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
     }

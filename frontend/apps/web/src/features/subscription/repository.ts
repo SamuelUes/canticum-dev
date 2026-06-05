@@ -1,23 +1,9 @@
 import type { SubscriptionPlan, UserSubscription, PaymentIntent } from '../../types/subscription';
 import { readClientCache, writeClientCache } from '../shared/clientCache';
 import { subscriptionPlansMock } from './mockData';
-
-const functionsBaseUrl = (process.env.GCP_FUNCTIONS_BASE_URL ?? process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL ?? '').replace(/\/$/, '');
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
 const SUBSCRIPTION_PLANS_CACHE_KEY = 'canticum:subscription:plans:v1';
 const SUBSCRIPTION_PLANS_CACHE_TTL_MS = 1_800_000;
-
-async function getAuthToken(): Promise<string | null> {
-  try {
-    const { auth } = await import('../../services/firebase');
-    if (!auth?.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
 
 async function getSubscriptionPlansFromFunctions(): Promise<SubscriptionPlan[]> {
   if (!functionsBaseUrl) {
@@ -25,11 +11,7 @@ async function getSubscriptionPlansFromFunctions(): Promise<SubscriptionPlan[]> 
   }
 
   try {
-    const token = await getAuthToken();
-    const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    const headers = await buildFunctionsHeaders({ 'Cache-Control': 'no-store' });
 
     const response = await fetch(`${functionsBaseUrl}/subscriptions/plans`, {
       method: 'GET',
@@ -71,15 +53,15 @@ async function getUserSubscriptionFromFunctions(userId: string): Promise<UserSub
   }
 
   try {
-    const token = await getAuthToken();
-    if (!token) {
+    const headers = await buildFunctionsHeaders({ 'Cache-Control': 'no-store' });
+    if (!headers.Authorization) {
       return null;
     }
 
     const response = await fetch(`${functionsBaseUrl}/subscriptions/user/${userId}`, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        ...headers,
         'Cache-Control': 'no-store'
       },
       cache: 'no-store'
@@ -112,15 +94,15 @@ async function createPaymentIntentFromFunctions(planId: string): Promise<Payment
   }
 
   try {
-    const token = await getAuthToken();
-    if (!token) {
+    const headers = await buildFunctionsHeaders({ 'Cache-Control': 'no-store' });
+    if (!headers.Authorization) {
       return null;
     }
 
     const response = await fetch(`${functionsBaseUrl}/payments/create-intent`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        ...headers,
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store'
       },
@@ -155,15 +137,15 @@ async function cancelSubscriptionFromFunctions(subscriptionId: string): Promise<
   }
 
   try {
-    const token = await getAuthToken();
-    if (!token) {
+    const headers = await buildFunctionsHeaders({ 'Cache-Control': 'no-store' });
+    if (!headers.Authorization) {
       return false;
     }
 
     const response = await fetch(`${functionsBaseUrl}/subscriptions/${subscriptionId}/cancel`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        ...headers,
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store'
       },

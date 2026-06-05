@@ -17,6 +17,7 @@ export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
       <div className="banner-stats" aria-label="estadísticas">
         {stats.map((stat) => (
           <article key={stat.id}>
+            <span className="banner-stat-icon" aria-hidden />
             <strong>{stat.value}</strong>
             <span>{stat.label}</span>
           </article>

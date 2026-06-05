@@ -137,4 +137,5 @@ export interface SongDetail {
   versions: SongVersion[];
   instruments: SongInstrument[];
   userAccess?: SongUserAccess;
+  status?: string;
 }

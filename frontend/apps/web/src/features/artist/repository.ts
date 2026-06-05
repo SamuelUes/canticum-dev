@@ -8,6 +8,7 @@ import type {
   ArtistSongRow,
   SuggestedArtistItem
 } from '../../types/artist';
+import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
 
 function computePopularity(totalViews: number): number {
   if (!Number.isFinite(totalViews) || totalViews <= 0) {
@@ -42,13 +43,6 @@ function normalizeImages(raw: Record<string, unknown>): ArtistImage[] {
   return fallback ? [{ url: fallback }] : [];
 }
 
-const functionsBaseUrl = [
-  process.env.GCP_FUNCTIONS_BASE_URL,
-  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
-]
-  .map((value) => (typeof value === 'string' ? value.trim() : ''))
-  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
-
 const ARTIST_DETAIL_CACHE_PREFIX = 'canticum:artist:detail:v1:';
 const ARTIST_DETAIL_CACHE_TTL_MS = 300_000;
 const ARTIST_FAVORITE_CACHE_PREFIX = 'canticum:artist:favorite:v1:';
@@ -59,56 +53,6 @@ function getArtistDetailCacheKey(artistId: string): string {
 
 function getArtistFavoriteStorageKey(artistId: string): string {
   return `${ARTIST_FAVORITE_CACHE_PREFIX}${artistId}`;
-}
-
-async function getServerSessionToken(): Promise<string | null> {
-  if (typeof window !== 'undefined') {
-    return null;
-  }
-
-  try {
-    const { cookies } = await import('next/headers');
-    return cookies().get('__session')?.value ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function getAuthToken(): Promise<string | null> {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  try {
-    const { auth } = await import('../../services/firebase');
-    if (!auth?.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
-
-async function buildArtistHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
-  const clientToken = await getAuthToken();
-  if (clientToken) {
-    return {
-      ...baseHeaders,
-      Authorization: `Bearer ${clientToken}`
-    };
-  }
-
-  const serverToken = await getServerSessionToken();
-  if (serverToken) {
-    return {
-      ...baseHeaders,
-      Authorization: `Bearer ${serverToken}`
-    };
-  }
-
-  return baseHeaders;
 }
 
 function normalizeSongRow(raw: Record<string, unknown>): ArtistSongRow {
@@ -276,7 +220,7 @@ async function getArtistDetailFromFunctions(artistId: string): Promise<ArtistDet
   }
 
   try {
-    const headers = await buildArtistHeaders({ 'Cache-Control': 'no-store' });
+    const headers = await buildFunctionsHeaders({ 'Cache-Control': 'no-store' });
     const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(artistId)}`, {
       method: 'GET',
       headers,
@@ -377,7 +321,7 @@ export async function requestTrackArtistProfileView(artistId: string): Promise<b
   }
 
   try {
-    const headers = await buildArtistHeaders({
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });
@@ -444,7 +388,7 @@ export async function loadArtistFavoriteState(artistId: string): Promise<ArtistF
   }
 
   try {
-    const headers = await buildArtistHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     if (!headers.Authorization) {
       return local;
     }
@@ -486,7 +430,7 @@ export async function saveArtistFavoriteState(artistId: string, isFavorite: bool
   }
 
   try {
-    const headers = await buildArtistHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     if (!headers.Authorization) {
       return null;
     }
@@ -540,7 +484,7 @@ export async function fetchSongsByArtist(artistId: string | number): Promise<Art
   }
 
   try {
-    const headers = await buildArtistHeaders({ 'Cache-Control': 'no-store' });
+    const headers = await buildFunctionsHeaders({ 'Cache-Control': 'no-store' });
     const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(id)}/songs`, {
       method: 'GET',
       headers,

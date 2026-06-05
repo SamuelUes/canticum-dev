@@ -2,6 +2,7 @@ import { songMockById } from './mockData';
 import type { SongDetail, SongImage, SongSimplifiedArtist } from '../../types/song';
 import type { SongRef } from '../../types/repertoire';
 import { invalidateAccountSummaryCache } from '../account/repository';
+import { buildFunctionsHeaders, functionsBaseUrl, shouldUseMockFallback } from '../shared/functionsClient';
 import { readClientCache, removeClientCacheByPrefix, writeClientCache } from '../shared/clientCache';
 
 export interface SongVersionUpdatePayload {
@@ -40,13 +41,6 @@ export interface SongActionResult {
     createdVersionIds?: string[];
   };
 }
-
-const functionsBaseUrl = [
-  process.env.GCP_FUNCTIONS_BASE_URL,
-  process.env.NEXT_PUBLIC_GCP_FUNCTIONS_BASE_URL
-]
-  .map((value) => (typeof value === 'string' ? value.trim() : ''))
-  .find((value) => value.length > 0)?.replace(/\/$/, '') ?? '';
 
 const SONG_DETAIL_CACHE_PREFIX = 'canticum:song:detail:v1:';
 const SONG_TITLE_CACHE_PREFIX = 'canticum:song:title:v1:';
@@ -89,39 +83,6 @@ function normalizeImages(raw: unknown): SongImage[] | undefined {
     })
     .filter((value): value is SongImage => value !== null);
   return list.length > 0 ? list : undefined;
-}
-
-async function getServerSessionToken(): Promise<string | null> {
-  if (typeof window !== 'undefined') {
-    return null;
-  }
-
-  try {
-    const { cookies } = await import('next/headers');
-    return cookies().get('__session')?.value ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function buildSongHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
-  const clientToken = await getAuthToken();
-  if (clientToken) {
-    return {
-      ...baseHeaders,
-      Authorization: `Bearer ${clientToken}`
-    };
-  }
-
-  const serverToken = await getServerSessionToken();
-  if (serverToken) {
-    return {
-      ...baseHeaders,
-      Authorization: `Bearer ${serverToken}`
-    };
-  }
-
-  return baseHeaders;
 }
 
 function mapSongStatusToReason(status: number): SongActionResult['reason'] {
@@ -208,23 +169,6 @@ function extractSongPayload(payload: unknown): SongDetail | null {
   return isSongDetail(envelope.song) ? envelope.song : null;
 }
 
-async function getAuthToken(): Promise<string | null> {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  try {
-    const { auth } = await import('../../services/firebase');
-    if (!auth?.currentUser) {
-      return null;
-    }
-
-    return auth.currentUser.getIdToken();
-  } catch {
-    return null;
-  }
-}
-
 async function getSongDetailFromFunctions(songId: string, versionId?: string): Promise<SongDetail | null> {
   if (!functionsBaseUrl) {
     return null;
@@ -237,7 +181,7 @@ async function getSongDetailFromFunctions(songId: string, versionId?: string): P
   }
 
   try {
-    const headers = await buildSongHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const qs = versionId && versionId.trim()
       ? `?versionId=${encodeURIComponent(versionId.trim())}`
       : '';
@@ -274,6 +218,10 @@ export async function getSongDetailById(songId: string, versionId?: string): Pro
     return remoteSong;
   }
 
+  if (!shouldUseMockFallback()) {
+    return null;
+  }
+
   const song = songMockById[songId];
 
   if (!song) {
@@ -306,7 +254,7 @@ export async function getSongTitleById(songId: string, versionId?: string): Prom
 
   if (functionsBaseUrl) {
     try {
-      const headers = await buildSongHeaders({ Accept: 'application/json' });
+      const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
       const response = await fetch(`${functionsBaseUrl}/songs/${songId}`, {
         method: 'GET',
         headers,
@@ -355,6 +303,10 @@ export async function getSongTitleById(songId: string, versionId?: string): Prom
     }
   }
 
+  if (!shouldUseMockFallback()) {
+    return null;
+  }
+
   const mock = songMockById[songId];
   if (!mock) {
     return null;
@@ -377,7 +329,7 @@ export async function requestUpdateSong(songId: string, update: SongUpdatePayloa
   }
 
   try {
-    const headers = await buildSongHeaders({
+    const headers = await buildFunctionsHeaders({
       'Content-Type': 'application/json',
       Accept: 'application/json'
     });
@@ -423,7 +375,7 @@ export async function requestDeleteSong(songId: string): Promise<SongActionResul
   }
 
   try {
-    const headers = await buildSongHeaders({ Accept: 'application/json' });
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
     const response = await fetch(`${functionsBaseUrl}/songs/${songId}`, {
       method: 'DELETE',
       headers
@@ -436,6 +388,37 @@ export async function requestDeleteSong(songId: string): Promise<SongActionResul
     invalidateSongCache(songId);
     invalidateAccountSummaryCache();
     return { ok: true };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
+}
+
+
+export async function requestUpdateSongStatus(songId: string, status: string): Promise<SongActionResult> {
+  if (!functionsBaseUrl) {
+    return { ok: false, reason: 'network', message: 'Functions base URL no configurada.' };
+  }
+
+  try {
+    const headers = await buildFunctionsHeaders({
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    });
+
+    const response = await fetch(`${functionsBaseUrl}/songs/${songId}/status`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status })
+    });
+
+    if (!response.ok) {
+      return { ok: false, reason: mapSongStatusToReason(response.status) };
+    }
+
+    const payload = (await response.json()) as { status?: string };
+    invalidateSongCache(songId);
+    invalidateAccountSummaryCache();
+    return { ok: true, data: { status: payload.status } };
   } catch {
     return { ok: false, reason: 'network' };
   }

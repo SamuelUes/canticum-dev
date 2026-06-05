@@ -1115,6 +1115,79 @@ export const songs = functions.https.onRequest(async (req, res) => {
     return;
   }
 
+  if (segments.length === 2 && segments[1] === 'status' && req.method === 'PATCH') {
+    if (!authContext) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const role = (authContext.token.role as string | undefined) ?? '';
+    if (role !== 'admin') {
+      sendError(res, 403, 'forbidden', 'Only admin can change song status.');
+      return;
+    }
+
+    const songSnap = await resolveSongSnapshotByAnyId(db, songId);
+    if (!songSnap || !songSnap.exists) {
+      sendError(res, 404, 'not_found', 'Song not found.');
+      return;
+    }
+
+    const body = getBodyRecord(req);
+    const requestedStatus = typeof body.status === 'string' ? body.status.trim().toUpperCase() : '';
+    const allowedStatuses = new Set(['IN_REVIEW', 'REJECTED', 'APPROVED', 'PUBLISHED']);
+
+    if (!allowedStatuses.has(requestedStatus)) {
+      sendError(res, 400, 'invalid_argument', 'status must be one of IN_REVIEW, REJECTED, APPROVED, PUBLISHED.');
+      return;
+    }
+
+    const nowPatch: Record<string, unknown> = {
+      status: requestedStatus,
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    if (requestedStatus === 'IN_REVIEW') {
+      nowPatch.submittedAt = FieldValue.serverTimestamp();
+      nowPatch.submittedBy = authContext.uid;
+    }
+
+    if (requestedStatus === 'REJECTED') {
+      nowPatch.rejectedAt = FieldValue.serverTimestamp();
+      nowPatch.rejectedBy = authContext.uid;
+    }
+
+    if (requestedStatus === 'APPROVED') {
+      nowPatch.approvedAt = FieldValue.serverTimestamp();
+      nowPatch.approvedBy = authContext.uid;
+    }
+
+    if (requestedStatus === 'PUBLISHED') {
+      nowPatch.publishedAt = FieldValue.serverTimestamp();
+      nowPatch.publishedBy = authContext.uid;
+      nowPatch.isPublic = true;
+    }
+
+    const songData = (songSnap.data() ?? {}) as Record<string, unknown>;
+    const sqlSongId = resolveSqlSongIdFromSongSnapshot(songSnap.id, songData);
+
+    if (sqlSongId) {
+      try {
+        await updateSongMetadataInCloudSql({
+          sqlSongId,
+          status: requestedStatus
+        });
+      } catch (error) {
+        console.error('Cloud SQL song status update failed:', error);
+        sendError(res, 500, 'internal_error', 'Failed to update song status in Cloud SQL.');
+        return;
+      }
+    }
+
+    await songSnap.ref.set(nowPatch, { merge: true });
+    sendJson(res, 200, { ok: true, songId: songSnap.id, status: requestedStatus });
+    return;
+  }
   if (segments.length === 1 && req.method === 'DELETE') {
     if (!authContext) {
       sendError(res, 401, 'unauthorized', 'Authenticated user required.');

@@ -7,9 +7,11 @@ import type { HomeText, ListItemData } from '../../types/home';
 interface ListColumnProps {
   title: string;
   viewAllLabel: HomeText['viewAll'];
+  viewAllHref?: string;
   items: ListItemData[];
   linkBasePath?: string;
   resolveItemHref?: (item: ListItemData) => string | null;
+  variant?: 'trends' | 'recent';
 }
 
 interface DualListSectionProps {
@@ -18,7 +20,7 @@ interface DualListSectionProps {
   loading?: boolean;
 }
 
-function ListColumn({ title, viewAllLabel, items, linkBasePath, resolveItemHref }: ListColumnProps) {
+function ListColumn({ title, viewAllLabel, viewAllHref, items, linkBasePath, resolveItemHref, variant = 'recent' }: ListColumnProps) {
   const buildHref = (item: ListItemData): string | null => {
     if (resolveItemHref) {
       try {
@@ -41,59 +43,59 @@ function ListColumn({ title, viewAllLabel, items, linkBasePath, resolveItemHref 
       title={title}
       className="list-column"
       rightSlot={
-        <a href="#" className="view-all-link more-pill-link">
-          {viewAllLabel}
-        </a>
+        viewAllHref ? (
+          <Link href={viewAllHref} className="view-all-link more-pill-link" aria-label={`${viewAllLabel}: ${title}`}>
+            {viewAllLabel}
+          </Link>
+        ) : null
       }
     >
-      <div className="mini-list">
-        {items.map((item) => (
+      <div className={`mini-list mini-list--${variant}`}>
+        {items.map((item, index) => (
           (() => {
             const href = buildHref(item);
+            const leading = variant === 'trends'
+              ? <span className="mini-item-rank" aria-hidden>{index + 1}</span>
+              : null;
+            const trailing = variant === 'recent'
+              ? <span className="mini-item-action" aria-hidden>♡</span>
+              : <span className="mini-item-action mini-item-action--trend" aria-hidden>↗</span>;
 
             if (href) {
               return (
                 <Link key={item.id} href={href} className="mini-item mini-item-button" aria-label={item.title}>
+                  {leading}
                   {item.avatarUrl ? (
                     <Image src={item.avatarUrl} alt={item.title} className="mini-avatar-image" width={38} height={38} />
                   ) : (
                     <div className="mini-avatar">
-                      <Image
-                        src="/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png"
-                        alt={item.title}
-                        width={14}
-                        height={14}
-                        className="placeholder-icon"
-                      />
+                      <span className="material-symbols-outlined placeholder-icon" aria-hidden="true">x_circle</span>
                     </div>
                   )}
                   <div className="mini-item-content">
                     <strong>{item.title}</strong>
                     <small>{item.subtitle}</small>
                   </div>
+                  {trailing}
                 </Link>
               );
             }
 
             return (
               <button key={item.id} type="button" className="mini-item mini-item-button" aria-label={item.title}>
+                {leading}
                 {item.avatarUrl ? (
                   <Image src={item.avatarUrl} alt={item.title} className="mini-avatar-image" width={38} height={38} />
                 ) : (
                   <div className="mini-avatar">
-                    <Image
-                      src="/assets/utils/iconly_light-outline_profile/iconlylightoutlineprofile2x.png"
-                      alt={item.title}
-                      width={14}
-                      height={14}
-                      className="placeholder-icon"
-                    />
+                    <span className="material-symbols-outlined placeholder-icon" aria-hidden="true">person</span>
                   </div>
                 )}
                 <div className="mini-item-content">
                   <strong>{item.title}</strong>
                   <small>{item.subtitle}</small>
                 </div>
+                {trailing}
               </button>
             );
           })()
@@ -129,18 +131,22 @@ export function DualListSection({ left, right, loading = false }: DualListSectio
         <ListColumn
           title={left.title}
           viewAllLabel={left.viewAllLabel}
+          viewAllHref={left.viewAllHref}
           items={left.items}
           linkBasePath={left.linkBasePath}
           resolveItemHref={left.resolveItemHref}
+          variant={left.variant}
         />
       ) : null}
       {right.items.length > 0 ? (
         <ListColumn
           title={right.title}
           viewAllLabel={right.viewAllLabel}
+          viewAllHref={right.viewAllHref}
           items={right.items}
           linkBasePath={right.linkBasePath}
           resolveItemHref={right.resolveItemHref}
+          variant={right.variant}
         />
       ) : null}
     </section>

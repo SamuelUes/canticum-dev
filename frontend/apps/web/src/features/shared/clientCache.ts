@@ -110,3 +110,38 @@ export function removeSessionCacheByPrefix(prefix: string): void {
   } catch {
   }
 }
+
+export function clearAllAppCache(): void {
+  if (!hasWindow()) {
+    return;
+  }
+
+  const localStoragePrefixes = [
+    'canticum:',
+    'song-preferences:',
+    'song-favorite:',
+    'canticum:artist:detail:v1:',
+    'canticum:artist:favorite:v1:',
+    'canticum:repertoires:list:v1:',
+    'canticum:repertoires:detail:v1:',
+    'canticum:song:detail:v1:',
+    'canticum:song:title:v1:',
+    'canticum:subscription:plans:v1',
+    'canticum:album:detail:v1:',
+    'canticum:album:artist-list:v1:',
+    'canticum:account:summary:v1:'
+  ];
+
+  const sessionStoragePrefixes = [
+    '__canticum_search_dataset_cache_v1__:',
+    '__canticum_'
+  ];
+
+  localStoragePrefixes.forEach((prefix) => {
+    removeClientCacheByPrefix(prefix);
+  });
+
+  sessionStoragePrefixes.forEach((prefix) => {
+    removeSessionCacheByPrefix(prefix);
+  });
+}

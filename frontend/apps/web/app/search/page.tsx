@@ -1,5 +1,6 @@
 import { HomeFooter } from '../../src/components/home/Footer';
 import { Header } from '../../src/components/home/Header';
+import { Nav } from '../../src/components/home/nav';
 import { SearchExplorer } from '../../src/components/search/SearchExplorer';
 import { homeMockData } from '../../src/features/home/mockData';
 import { getHomeText } from '../../src/i18n/home';
@@ -21,8 +22,9 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
 
   return (
     <main className="home-page search-page-root">
-      <div className="home-shell search-page-shell">
-        <Header text={text} selectedCategory={normalizedCategory || 'todos'} showCategories />
+      <div className="home-shell search-page-shell layout-h-margin">
+        <Header text={text} />
+        <Nav selectedCategory={normalizedCategory || 'todos'} />
 
         {/* SearchExplorer hace fetch en cliente al endpoint /search/catalog y muestra skeleton hasta que llega el dataset real */}
         <SearchExplorer initialQuery={searchParams?.q ?? ''} initialCategory={normalizedCategory || 'todos'} />

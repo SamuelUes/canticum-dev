@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   getArtistDetailById,
   getPublicrepertoiresForArtist,
@@ -11,21 +11,11 @@ import {
   saveArtistFavoriteState
 } from '../../features/artist/repository';
 import { getArtistProfileHref } from '../../features/artist/routing';
+import { useAuth } from '../../context/AuthContext';
+import { isModeratorUser } from '../../features/auth/repository';
+import { getSongStatusLabel, normalizeSongStatus } from '../../features/song/status';
+import { getAlbumStatusLabel, normalizeAlbumStatus } from '../../features/album/status';
 import type { ArtistDetail, ArtistImage, ArtistrepertoireRef, ArtistSongRow } from '../../types/artist';
-
-function getModerationStateLabel(state?: string): string {
-  const normalized = (state ?? '').trim().toUpperCase();
-  if (normalized === 'APPROVED') return 'Aprobada';
-  if (normalized === 'PUBLISHED') return 'Publicada';
-  if (normalized === 'DRAFT') return 'Borrador';
-  if (normalized === 'IN_REVIEW') return 'En revisión';
-  if (normalized === 'REJECTED') return 'Rechazada';
-  return 'Pendiente';
-}
-
-function getReviewLabel(reviewStatus?: 'reviewed' | 'pending'): string {
-  return reviewStatus === 'reviewed' ? 'Revisada' : 'No revisada';
-}
 
 function pickImage(images: ArtistImage[] | undefined, targetSize: number, fallback?: string): string | undefined {
   if (!images || images.length === 0) {
@@ -48,11 +38,13 @@ interface ArtistProfileWorkspaceProps {
 }
 
 export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWorkspaceProps) {
+  const { user } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterPill>('Letra');
   const [favoriteState, setFavoriteState] = useState<{ isFavorite: boolean; likeCount: number }>({
     isFavorite: false,
     likeCount: artist.likeCount
   });
+  const [showAllSongsModal, setShowAllSongsModal] = useState(false);
   const [isFavoritePending, setIsFavoritePending] = useState(false);
   const [resolvedArtist, setResolvedArtist] = useState<ArtistDetail>(artist);
   const [resolvedRepertoires, setResolvedRepertoires] = useState<ArtistrepertoireRef[]>(repertoires);
@@ -94,19 +86,22 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
   const avatarSrc = pickImage(artistData.images, 160, artistData.imageUrl);
 
   const discographyCards = useMemo(() => {
-    return artistData.discography.slice(0, 5).map((album, index) => ({
-      id: album.id || `album-${index}`,
-      title: album.title,
-      year: album.year,
-      coverUrl: album.coverUrl,
-      moderationState: album.moderationState,
-      reviewStatus: album.reviewStatus,
-      href: album.albumId
-        ? `/albums/${album.albumId}`
-        : album.songId
-          ? `/songs/${album.songId}`
-          : `/search?artist=${encodeURIComponent(displayArtistName)}`
-    }));
+    return artistData.discography.slice(0, 5).map((album, index) => {
+      const normalizedStatus = normalizeAlbumStatus(album.moderationState);
+      return {
+        id: album.id || `album-${index}`,
+        title: album.title,
+        year: album.year,
+        coverUrl: album.coverUrl,
+        moderationState: normalizedStatus,
+        reviewStatus: (normalizedStatus === 'PUBLISHED' || normalizedStatus === 'APPROVED' ? 'reviewed' : 'pending') as 'reviewed' | 'pending',
+        href: album.id
+          ? `/albums/${album.id}`
+          : album.songId
+            ? `/songs/${album.songId}`
+            : `/search?artist=${encodeURIComponent(displayArtistName)}`
+      };
+    });
   }, [artistData.discography, displayArtistName]);
 
   const relatedArtists = useMemo(() => {
@@ -173,15 +168,35 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
 
   const songsToRender = useMemo(() => {
     if (filteredSongs.length > 0) {
-      return filteredSongs;
+      return filteredSongs.map((song) => {
+        const normalizedStatus = normalizeSongStatus(song.moderationState);
+        return {
+          ...song,
+          moderationState: normalizedStatus,
+          reviewStatus: (normalizedStatus === 'PUBLISHED' || normalizedStatus === 'APPROVED' ? 'reviewed' : 'pending') as 'reviewed' | 'pending'
+        };
+      });
     }
 
     if (activeFilter === 'Letra' || activeFilter === 'Partituras') {
-      return artistData.songs;
+      return artistData.songs.map((song) => {
+        const normalizedStatus = normalizeSongStatus(song.moderationState);
+        return {
+          ...song,
+          moderationState: normalizedStatus,
+          reviewStatus: (normalizedStatus === 'PUBLISHED' || normalizedStatus === 'APPROVED' ? 'reviewed' : 'pending') as 'reviewed' | 'pending'
+        };
+      });
     }
 
     return [] as ArtistSongRow[];
   }, [activeFilter, filteredSongs, artistData.songs]);
+
+  const displayedSongs = useMemo(() => {
+    return songsToRender.slice(0, 5);
+  }, [songsToRender]);
+
+  const hasMoreSongs = songsToRender.length > 5;
 
   const metricGenreLabel = useMemo(() => {
     const genres = Array.isArray(artistData.genres)
@@ -192,6 +207,8 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
 
     return genres.slice(0, 2).join(' / ') || artistData.ministryType || 'General';
   }, [artistData.genres, artistData.ministryType]);
+
+  const canViewStatus = isModeratorUser(user);
 
   const padNumber = (index: number): string => String(index + 1).padStart(2, '0');
 
@@ -225,65 +242,77 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
   };
 
   return (
-    <div className="artist-profile-layout">
-      {/* ── Left sidebar ── */}
-      <aside className="artist-sidebar">
-        <div className="artist-avatar-wrap">
+    <div className="artist-profile-container">
+      {/* ── Left sidebar with artist info and quick actions ── */}
+      <aside className="artist-sidebar-glass">
+        <div className="artist-avatar-section">
           {avatarSrc ? (
-            <Image src={avatarSrc} alt={displayArtistName} width={60} height={60} className="artist-avatar-img" />
+            <div className="artist-avatar-ring">
+              <Image src={avatarSrc} alt={displayArtistName} width={80} height={80} className="artist-avatar-modern" />
+            </div>
           ) : (
-            <div className="artist-avatar-placeholder" aria-hidden>
+            <div className="artist-avatar-ring artist-avatar-placeholder-modern" aria-hidden>
               <span>{displayArtistName.charAt(0)}</span>
             </div>
           )}
+          <h1 className="artist-name-display">{displayArtistName}</h1>
+          <p className="artist-genre-label">{metricGenreLabel}</p>
         </div>
 
-        <h1 className="artist-sidebar-name">{displayArtistName}</h1>
+        <div className="artist-quick-actions">
+          <button
+            type="button"
+            className={`artist-action-modern ${favoriteState.isFavorite ? 'is-favorite' : ''}`}
+            aria-label={favoriteState.isFavorite ? 'Quitar de Favoritos' : 'Agregar a Favoritos'}
+            onClick={handleToggleFavorite}
+            disabled={isFavoritePending}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">
+              {favoriteState.isFavorite ? 'favorite' : 'favorite_border'}
+            </span>
+            <span>{favoriteState.isFavorite ? 'En Favoritos' : 'Favorito'}</span>
+          </button>
+          <button type="button" className="artist-action-modern" aria-label="Compartir">
+            <span className="material-symbols-outlined" aria-hidden="true">share</span>
+            <span>Compartir</span>
+          </button>
+        </div>
 
-        <div className="artist-sidebar-actions">
-          <div className="artist-action-control">
-            <button
-              type="button"
-              className={favoriteState.isFavorite ? 'artist-action-btn artist-action-btn--favorite is-active' : 'artist-action-btn artist-action-btn--favorite'}
-              aria-label={favoriteState.isFavorite ? 'Quitar de Favoritos' : 'Agregar a Favoritos'}
-              onClick={handleToggleFavorite}
-              disabled={isFavoritePending}
-            >
-              <Image src="/assets/utils/heart/heart2x.png" alt="" width={20} height={20} />
-            </button>
-            <span className="artist-action-label">{favoriteState.isFavorite ? 'En Favoritos' : 'Agregar a Favoritos'}</span>
+        <div className="artist-metrics-mini">
+          <div className="metric-item">
+            <strong>{fanCount.toLocaleString()}</strong>
+            <small>Fans</small>
           </div>
-          <div className="artist-action-control">
-            <button type="button" className="artist-action-btn" aria-label="Compartir">
-              <Image src="/assets/utils/iconshare-social/iconshare2x.png" alt="" width={20} height={20} />
-              
-            </button>
-            <span className="artist-action-label">Compartir</span>
+          <div className="metric-item">
+            <strong>{totalViews.toLocaleString()}</strong>
+            <small>Vistas</small>
           </div>
-          {/* <button type="button" className="artist-action-btn" aria-label="Enviar acordes">
-            <Image src="/assets/utils/volumeup/volumeup2x.png" alt="" width={20} height={20} />
-            <span>Enviar acordes</span>
-          </button> */}
-          
         </div>
       </aside>
 
-      {/* ── Main content ── */}
-      <section className="artist-main">
-        <header className="artist-main-head">
-          <h2>Canciones populares</h2>
-          <Link href={`/search?artist=${encodeURIComponent(displayArtistName)}`} className="artist-see-more more-pill-link">
-            Ver más &rsaquo;
-          </Link>
-        </header>
+      {/* ── Main content area ── */}
+      <section className="artist-main-content">
+        {/* Hero section with artist info */}
+        <div className="artist-hero-card">
+          <div className="artist-hero-info">
+            <div className="artist-hero-badges">
+              <span className="badge-pill badge-primary">Artista</span>
+            </div>
+            <h2 className="artist-hero-title">Canciones populares</h2>
+            <Link href={`/search?artist=${encodeURIComponent(displayArtistName)}`} className="view-all-modern">
+              Ver todas las canciones
+              <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
+            </Link>
+          </div>
+        </div>
 
-        {/* pill filters */}
-        <nav className="artist-pills" aria-label="filtrar contenido del artista">
+        {/* Filter pills */}
+        <nav className="filter-pills-row" aria-label="filtrar contenido del artista">
           {pills.map((pill) => (
             <button
               key={pill}
               type="button"
-              className={`artist-pill ${activeFilter === pill ? 'is-active' : ''}`}
+              className={`filter-pill-modern ${activeFilter === pill ? 'is-active' : ''}`}
               onClick={() => setActiveFilter(pill)}
             >
               {pill}
@@ -291,141 +320,337 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
           ))}
         </nav>
 
-        {/* songs / repertoires */}
-        {activeFilter === 'Repertorios' ? (
-          <ul className="artist-repertoire-list" role="list">
-            {relevantrepertoires.map((repertoire) => (
-              <li key={repertoire.id} className="artist-repertoire-card">
-                <Link href={`/repertoires/${repertoire.id}`} className="artist-repertoire-link">
-                  <strong>{repertoire.title}</strong>
-                  <small>por {repertoire.ownerName}</small>
-                  <small>{repertoire.songIds.length} canciones</small>
-                </Link>
-              </li>
-            ))}
-            {relevantrepertoires.length === 0 ? (
-              <li className="artist-repertoire-card artist-empty-row">
-                <span>No hay repertorios públicos que contengan canciones de este artista.</span>
-              </li>
-            ) : null}
-          </ul>
-        ) : songsToRender.length > 0 ? (
-          <ul className="artist-song-list" role="list">
-            {songsToRender.map((song, index) => (
-              <li key={song.id} className="artist-song-row">
-                <span className="artist-col-num">{padNumber(index)}</span>
+        {/* Content: songs or repertoires */}
+        <div className={`content-scroll-area ${displayedSongs.length === 1 ? 'content-scroll-area--compact' : ''}`}>
+          {activeFilter === 'Repertorios' ? (
+            <ul className="repertoire-grid-modern" role="list">
+              {relevantrepertoires.map((repertoire) => (
+                <li key={repertoire.id} className="repertoire-card-modern">
+                  <Link href={`/repertoires/${repertoire.id}`} className="repertoire-card-link">
+                    <div className="repertoire-card-icon">
+                      <span className="material-symbols-outlined" aria-hidden="true">library_music</span>
+                    </div>
+                    <div className="repertoire-card-content">
+                      <strong>{repertoire.title}</strong>
+                      <small>por {repertoire.ownerName}</small>
+                      <span className="repertoire-count">{repertoire.songIds.length} canciones</span>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+              {relevantrepertoires.length === 0 ? (
+                <li className="empty-state-modern">
+                  <span className="material-symbols-outlined" aria-hidden="true">folder_open</span>
+                  <p>No hay repertorios públicos con canciones de este artista.</p>
+                </li>
+              ) : null}
+            </ul>
+          ) : displayedSongs.length > 0 ? (
+            <>
+              <ul className="song-list-modern" role="list">
+                {displayedSongs.map((song, index) => (
+                  <li key={song.id} className="song-row-modern">
+                    <span className="song-index">{padNumber(index)}</span>
 
-                <span className="artist-col-thumb">
-                  {song.thumbnailUrl ? (
-                    <Image src={song.thumbnailUrl} alt="" width={36} height={36} className="artist-song-thumb" />
-                  ) : (
-                    <span className="artist-song-thumb-placeholder" aria-hidden />
-                  )}
-                </span>
+                    <div className="song-thumbnail">
+                      {song.thumbnailUrl ? (
+                        <Image src={song.thumbnailUrl} alt="" width={48} height={48} className="song-thumb-img" />
+                      ) : (
+                        <div className="song-thumb-placeholder" aria-hidden>
+                          <span className="material-symbols-outlined" aria-hidden="true">music_note</span>
+                        </div>
+                      )}
+                    </div>
 
-                <Link href={`/songs/${song.id}`} className="artist-col-song">
-                  {song.title}
-                  {song.isVerified ? <span className="artist-verified-badge" title="Verificado">✔</span> : null}
-                </Link>
+                    <Link href={`/songs/${song.id}`} className="song-title-link">
+                      <span className="song-title">{song.title}</span>
+                      {song.isVerified && (
+                        <span className="verified-icon" title="Verificado">
+                          <span className="material-symbols-outlined" aria-hidden="true">verified</span>
+                        </span>
+                      )}
+                    </Link>
 
-                <span className={`artist-col-status artist-status-chip ${song.reviewStatus === 'reviewed' ? 'is-reviewed' : 'is-pending'}`}>
-                  {getModerationStateLabel(song.moderationState)} · {getReviewLabel(song.reviewStatus)}
-                </span>
-                <span className="artist-col-views">{song.views.toLocaleString()}</span>
-                <span className="artist-col-tone">{song.tone}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="artist-empty-state">
-            {activeFilter === 'Partituras'
-              ? 'No hay partituras disponibles para este artista.'
-              : 'No hay canciones con letra disponibles.'}
-          </p>
-        )}
+                    <div className="song-meta">
+                      {canViewStatus && (
+                        <span className={`status-badge ${song.reviewStatus === 'reviewed' ? 'status-reviewed' : 'status-pending'}`}>
+                          {getSongStatusLabel(song.moderationState)}
+                        </span>
+                      )}
+                      <span className="song-views">{song.views.toLocaleString()} vistas</span>
+                      {song.tone && <span className="song-tone">{song.tone}</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {hasMoreSongs && (
+                <div className="show-more-section">
+                  <button
+                    type="button"
+                    className="show-more-button"
+                    onClick={() => setShowAllSongsModal(true)}
+                  >
+                    Ver todas las canciones ({songsToRender.length})
+                    <span className="material-symbols-outlined" aria-hidden="true">expand_more</span>
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="empty-state-modern">
+              <span className="material-symbols-outlined" aria-hidden="true">search_off</span>
+              <p>
+                {activeFilter === 'Partituras'
+                  ? 'No hay partituras disponibles para este artista.'
+                  : 'No hay canciones con letra disponibles.'}
+              </p>
+            </div>
+          )}
+        </div>
 
-        {/* bottom "Ver más" */}
-        {activeFilter !== 'Repertorios' && songsToRender.length > 0 ? (
-          <div className="artist-bottom-more">
-            <Link href={`/search?artist=${encodeURIComponent(artistData.name)}`} className="artist-see-more more-pill-link">
-              Ver más &rsaquo;
+        {/* Bottom CTA */}
+        {/* {activeFilter !== 'Repertorios' && songsToRender.length > 0 ? (
+          <div className="bottom-cta-section">
+            <Link href={`/search?artist=${encodeURIComponent(artistData.name)}`} className="cta-button-modern">
+              Explorar catálogo completo
+              <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
             </Link>
           </div>
-        ) : null}
+        ) : null} */}
 
-        {activeFilter !== 'Repertorios' ? (
+        {/* Related content sections */}
+        {activeFilter !== 'Repertorios' && (
           <>
-            <section className="artist-extra-section" aria-label="discografía">
-              <header className="artist-main-head artist-main-head--compact">
-                <h2>Discografía</h2>
-                <Link href={`/search?artist=${encodeURIComponent(artistData.name)}`} className="artist-see-more more-pill-link">
-                  Ver más &rsaquo;
+            {/* Discography section */}
+            <section className="discography-section" aria-label="discografía">
+              <div className="section-header-modern">
+                <h3>Discografía</h3>
+                <Link href={`/search?artist=${encodeURIComponent(artistData.name)}`} className="section-link-modern">
+                  Ver todo
+                  <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
                 </Link>
-              </header>
+              </div>
 
-              <div className="artist-discography-grid">
+              <div className="discography-grid-modern">
                 {discographyCards.map((album) => (
-                  <Link key={album.id} href={album.href} className="artist-album-card">
-                    {album.coverUrl ? (
-                      <Image src={album.coverUrl} alt={album.title} width={140} height={110} className="artist-album-cover" />
-                    ) : (
-                      <div className="artist-album-cover artist-album-cover--placeholder" aria-hidden>
-                        <span>{album.title.charAt(0)}</span>
-                      </div>
-                    )}
-                    <strong>{album.title}</strong>
-                    <small>{album.year} • Álbum</small>
-                    <small className={`artist-status-chip ${album.reviewStatus === 'reviewed' ? 'is-reviewed' : 'is-pending'}`}>
-                      {getModerationStateLabel(album.moderationState)} · {getReviewLabel(album.reviewStatus)}
-                    </small>
+                  <Link key={album.id} href={album.href} className="album-card-modern">
+                    <div className="album-cover-wrapper">
+                      {album.coverUrl? (
+                        <Image src={album.coverUrl} alt={album.title} width={160} height={120} className="album-cover-img" />
+                      ) : (
+                        <div className="album-cover-placeholder" aria-hidden>
+                          <span>{album.title.charAt(0)}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="album-info">
+                      <strong>{album.title}</strong>
+                      <small>{album.year}</small>
+                      {canViewStatus && (
+                        <span className={`album-status ${album.reviewStatus === 'reviewed' ? 'status-reviewed' : 'status-pending'}`}>
+                          {getAlbumStatusLabel(album.moderationState)}
+                        </span>
+                      )}
+                    </div>
                   </Link>
                 ))}
               </div>
             </section>
 
-            <section className="artist-extra-section" aria-label="también te puede gustar">
-              <header className="artist-main-head artist-main-head--compact">
-                <h2>También te puede gustar</h2>
-              </header>
+            {/* Related artists section */}
+            <section className="related-artists-section" aria-label="también te puede gustar">
+              <div className="section-header-modern">
+                <h3>Artistas relacionados</h3>
+              </div>
 
-              <div className="artist-related-row">
+              <div className="related-artists-grid">
                 {relatedArtists.map((relatedArtist) => (
                   <Link
                     key={relatedArtist.id}
                     href={getArtistProfileHref({ artistId: relatedArtist.id, artistName: relatedArtist.name })}
-                    className="artist-related-item"
+                    className="related-artist-card"
                     aria-label={relatedArtist.name}
                   >
-                    {relatedArtist.imageUrl ? (
-                      <Image src={relatedArtist.imageUrl} alt={relatedArtist.name} width={108} height={108} className="artist-related-avatar artist-related-avatar--img" unoptimized={relatedArtist.imageUrl.startsWith('http')} />
-                    ) : (
-                      <div className="artist-related-avatar" aria-hidden>
-                        <span>{relatedArtist.name.charAt(0)}</span>
-                      </div>
-                    )}
-                    <span>{relatedArtist.name}</span>
+                    <div className="related-avatar-wrapper">
+                      {relatedArtist.imageUrl ? (
+                        <Image src={relatedArtist.imageUrl} alt={relatedArtist.name} width={80} height={80} className="related-avatar-img" unoptimized={relatedArtist.imageUrl.startsWith('http')} />
+                      ) : (
+                        <div className="related-avatar-placeholder" aria-hidden>
+                          <span>{relatedArtist.name.charAt(0)}</span>
+                        </div>
+                      )}
+                    </div>
+                    <span className="related-artist-name">{relatedArtist.name}</span>
                   </Link>
                 ))}
               </div>
             </section>
-
-            <section className="artist-metrics-band" aria-label="estadísticas del artista">
-              <article className="artist-metric artist-metric--fans">
-                <strong>{fanCount.toLocaleString()}</strong>
-                <small>Fans estimados</small>
-              </article>
-              <article className="artist-metric">
-                <strong>{totalViews.toLocaleString()}</strong>
-                <small>Visualizaciones</small>
-              </article>
-              <article className="artist-metric">
-                <strong>{metricGenreLabel}</strong>
-                <small>Género / estilo</small>
-              </article>
-            </section>
           </>
-        ) : null}
+        )}
       </section>
+      
+      {/* All Songs Modal */}
+      {showAllSongsModal && (
+        <AllSongsModal
+          songs={songsToRender}
+          artistName={displayArtistName}
+          canViewStatus={canViewStatus}
+          onClose={() => setShowAllSongsModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface AllSongsModalProps {
+  songs: ArtistSongRow[];
+  artistName: string;
+  canViewStatus: boolean;
+  onClose: () => void;
+}
+
+function AllSongsModal({ songs, artistName, canViewStatus, onClose }: AllSongsModalProps) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [visibleCount, setVisibleCount] = useState(20);
+  const [isLoading, setIsLoading] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  const filteredSongs = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return songs;
+    }
+    const query = searchQuery.toLowerCase();
+    return songs.filter((song) => 
+      song.title.toLowerCase().includes(query)
+    );
+  }, [songs, searchQuery]);
+
+  const displayedSongs = filteredSongs.slice(0, visibleCount);
+  const hasMore = filteredSongs.length > visibleCount;
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 100 && hasMore && !isLoading) {
+      setIsLoading(true);
+      // Simulate loading delay
+      setTimeout(() => {
+        setVisibleCount((prev) => prev + 20);
+        setIsLoading(false);
+      }, 500);
+    }
+  }, [hasMore, isLoading]);
+
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [onClose]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div 
+        className="modal-content" 
+        ref={modalRef}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2>Todas las canciones de {artistName}</h2>
+          <button 
+            type="button" 
+            className="modal-close-button"
+            onClick={onClose}
+            aria-label="Cerrar"
+          >
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div className="modal-search">
+          <div className="search-input-wrapper">
+            <span className="material-symbols-outlined search-icon">search</span>
+            <input
+              type="text"
+              placeholder="Buscar canciones..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="search-input"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="search-clear-button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Limpiar búsqueda"
+              >
+                <span className="material-symbols-outlined">clear</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="modal-song-list" onScroll={handleScroll}>
+          {displayedSongs.length > 0 ? (
+            <ul className="song-list-modern">
+              {displayedSongs.map((song, index) => (
+                <li key={song.id} className="song-row-modern">
+                  <span className="song-index">{String(index + 1).padStart(2, '0')}</span>
+
+                  <div className="song-thumbnail">
+                    {song.thumbnailUrl ? (
+                      <Image src={song.thumbnailUrl} alt="" width={48} height={48} className="song-thumb-img" />
+                    ) : (
+                      <div className="song-thumb-placeholder" aria-hidden>
+                        <span className="material-symbols-outlined" aria-hidden="true">music_note</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <Link href={`/songs/${song.id}`} className="song-title-link">
+                    <span className="song-title">{song.title}</span>
+                    {song.isVerified && (
+                      <span className="verified-icon" title="Verificado">
+                        <span className="material-symbols-outlined" aria-hidden="true">verified</span>
+                      </span>
+                    )}
+                  </Link>
+
+                  <div className="song-meta">
+                    {canViewStatus && (
+                      <span className={`status-badge ${song.reviewStatus === 'reviewed' ? 'status-reviewed' : 'status-pending'}`}>
+                        {getSongStatusLabel(song.moderationState)}
+                      </span>
+                    )}
+                    <span className="song-views">{song.views.toLocaleString()} vistas</span>
+                    {song.tone && <span className="song-tone">{song.tone}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="empty-state-modern">
+              <span className="material-symbols-outlined" aria-hidden="true">search_off</span>
+              <p>No se encontraron canciones.</p>
+            </div>
+          )}
+
+          {isLoading && (
+            <div className="loading-indicator">
+              <span className="material-symbols-outlined loading-spinner">refresh</span>
+              <span>Cargando más canciones...</span>
+            </div>
+          )}
+
+          {!hasMore && filteredSongs.length > 0 && (
+            <div className="end-of-list">
+              <span>Mostrando {filteredSongs.length} canciones</span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
