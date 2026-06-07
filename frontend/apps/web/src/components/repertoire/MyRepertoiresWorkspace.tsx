@@ -3,9 +3,9 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import Skeleton from 'react-loading-skeleton';
-import { requestDeleterepertoire, requestUserRepertoires } from '../../features/repertoire/clientPersistence';
+import { requestDeleterepertoire, requestUserRepertoires, loadRepertoireBookmark, saveRepertoireBookmark } from '../../features/repertoire/clientPersistence';
 import { getRepertoireStatusLabel, normalizeRepertoireStatus } from '../../features/repertoire/status';
+import { SkeletonCard } from '../ui/skeleton';
 import type { repertoireListItem, repertoireStatus } from '../../types/repertoire';
 
 interface MyrepertoiresWorkspaceProps {
@@ -22,6 +22,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
   const [selectedStatuses, setSelectedStatuses] = useState<repertoireStatus[]>([]);
   const [sortBy, setSortBy] = useState<'recent' | 'alpha'>('recent');
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
+  const [bookmarkedRepertoires, setBookmarkedRepertoires] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let disposed = false;
@@ -46,6 +47,49 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
       disposed = true;
     };
   }, []);
+
+  // Load bookmark states for repertoires
+  useEffect(() => {
+    if (items.length === 0) {
+      return;
+    }
+
+    items.forEach((item) => {
+      void loadRepertoireBookmark(item.id).then((isBookmarked) => {
+        if (typeof isBookmarked === 'boolean') {
+          setBookmarkedRepertoires((prev) => {
+            const next = new Set(prev);
+            if (isBookmarked) {
+              next.add(item.id);
+            } else {
+              next.delete(item.id);
+            }
+            return next;
+          });
+        }
+      });
+    });
+  }, [items]);
+
+  const toggleBookmark = async (repertoireId: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    const isCurrentlyBookmarked = bookmarkedRepertoires.has(repertoireId);
+    const newState = !isCurrentlyBookmarked;
+
+    // Optimistic update
+    setBookmarkedRepertoires((prev) => {
+      const next = new Set(prev);
+      if (newState) {
+        next.add(repertoireId);
+      } else {
+        next.delete(repertoireId);
+      }
+      return next;
+    });
+
+    // Persist to backend
+    await saveRepertoireBookmark(repertoireId, newState);
+  };
 
   const liturgicalTypes = useMemo(() => Array.from(new Set(items.map((item) => item.liturgicalType))), [items]);
 
@@ -186,12 +230,10 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
 
         {isLoading ? (
           <div className="repertoires-cards-grid" aria-busy aria-label="Cargando repertorios">
-            {Array.from({ length: 6 }).map((_, idx) => (
-              <Skeleton key={idx} className="repertoires-skeleton-card" />
-            ))}
+            <SkeletonCard count={6} className="repertoires-skeleton-card" />
           </div>
         ) : null}
-
+  
         {!isLoading && filteredItems.length === 0 ? (
           <div className="repertoires-empty-state">
             <span className="material-symbols-outlined">folder_open</span>
@@ -226,8 +268,14 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
                     {getRepertoireStatusLabel(item.status)}
                   </span>
                 </div>
-                <button className="repertoires-card-menu" aria-label="Más opciones">
-                  <span className="material-symbols-outlined">more_vert</span>
+                <button
+                  className={`repertoire-bookmark-button ${bookmarkedRepertoires.has(item.id) ? 'is-bookmarked' : ''}`}
+                  aria-label={bookmarkedRepertoires.has(item.id) ? 'Quitar de guardados' : 'Guardar repertorio'}
+                  onClick={(e) => { e.stopPropagation(); void toggleBookmark(item.id, e); }}
+                >
+                  <span className="material-symbols-outlined" aria-hidden="true">
+                    {bookmarkedRepertoires.has(item.id) ? 'bookmark_added' : 'bookmark'}
+                  </span>
                 </button>
               </div>
 

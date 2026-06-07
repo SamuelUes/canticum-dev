@@ -2,10 +2,10 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import Skeleton from 'react-loading-skeleton';
 import { useState } from 'react';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { HorizontalConveyor } from '../ui/HorizontalConveyor';
+import { SkeletonPill, SkeletonTitle } from '../ui/skeleton';
 import type { ArtistData, HomeText } from '../../types/home';
 
 interface ArtistsSectionProps {
@@ -20,11 +20,9 @@ export function ArtistsSection({ title, artists, loading = false }: ArtistsSecti
   if (loading) {
     return (
       <section className="home-section layout-h-margin" aria-busy>
-        <Skeleton className="home-skeleton-title" />
+        <SkeletonTitle />
         <div className="home-skeleton-row">
-          {Array.from({ length: 6 }).map((_, idx) => (
-            <Skeleton key={idx} className="home-skeleton-pill" />
-          ))}
+          <SkeletonPill count={6} />
         </div>
       </section>
     );

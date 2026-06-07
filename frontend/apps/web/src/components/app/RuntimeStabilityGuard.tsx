@@ -56,6 +56,10 @@ function hasNextAssetFailureInEvent(event: ErrorEvent): boolean {
 }
 
 function recoverFromNextAssetFailure(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
   try {
     if (window.sessionStorage.getItem(NEXT_CHUNK_RECOVERY_KEY) === '1') {
       return;
@@ -72,6 +76,10 @@ function recoverFromNextAssetFailure(): void {
 
 export function RuntimeStabilityGuard() {
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
     try {
       window.sessionStorage.removeItem(NEXT_CHUNK_RECOVERY_KEY);
     } catch {

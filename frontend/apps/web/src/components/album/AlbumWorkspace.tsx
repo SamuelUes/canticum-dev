@@ -4,6 +4,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo, useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { PlayQueueButton } from '../audio/PlayQueueButton';
 import { requestUpdateAlbumStatus} from '../../features/album/repository';
 import { loadAlbumFavorite, saveAlbumFavorite } from '../../features/album/clientPersistence';
 import { loadSongFavorite, saveSongFavorite } from '../../features/song/clientPersistence';
@@ -107,71 +108,78 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
   };
 
   return (
-    <div className="album-layout">
+    <div className="album-page">
       {/* ── Hero cover ── */}
-      <section className="album-hero">
-        <div className="album-cover-wrap">
+      <header className="album-page__hero">
+        <div className="album-page__cover-wrap">
           {album.coverUrl ? (
             <Image
               src={album.coverUrl}
               alt={album.title}
               width={220}
               height={220}
-              className="album-cover-img"
+              className="album-page__cover-img"
             />
           ) : (
-            <div className="album-cover-placeholder" aria-hidden>
+            <div className="album-page__cover-placeholder" aria-hidden>
               <span>{album.title.charAt(0)}</span>
             </div>
           )}
         </div>
 
-        <div className="album-hero-info">
-          <span className="album-type-badge">
-            {albumTypeLabel[album.albumType] ?? 'Álbum'}
-          </span>
+        <div className="album-page__content">
+          <div className="album-page__header">
+            <span className="album-page__type-badge">
+              {albumTypeLabel[album.albumType] ?? 'Álbum'}
+            </span>
 
-          <h1 className="album-title">{album.title}</h1>
+            <h1 className="album-page__title">{album.title}</h1>
+          </div>
 
-          <div className="album-hero-meta">
+          <div className="album-page__meta">
             <Link
               href={`/artists/${album.artistId}`}
-              className="album-artist-link"
+              className="album-page__artist-link"
             >
               {album.artistImageUrl ? (
                 <Image
                   src={album.artistImageUrl}
                   alt={album.artistName}
-                  width={28}
-                  height={28}
-                  className="album-artist-avatar"
+                  width={38}
+                  height={38}
+                  className="album-page__artist-avatar"
                 />
               ) : (
-                <span className="album-artist-avatar album-artist-avatar--placeholder" aria-hidden>
+                <span className="album-page__artist-avatar album-page__artist-avatar--placeholder" aria-hidden>
                   {album.artistName.charAt(0)}
                 </span>
               )}
               <span>{album.artistName}</span>
             </Link>
 
-            <div className="album-meta"> 
-             <span className="album-meta-dot">·</span>
+            <div className="album-page__meta-group"> 
+             <span className="album-page__meta-dot">·</span>
              <span className="album-meta-year">{album.releaseYear}</span>
-             <span className="album-meta-dot">·</span>
+             <span className="album-page__meta-dot">·</span>
              <span className="album-meta-songs">{album.songsCount} canciones</span>
              {totalViews > 0 ? (
                <>
-                 <span className="album-meta-dot">·</span>
+                 <span className="album-page__meta-dot">·</span>
                  <span className="album-meta-views">{totalViews.toLocaleString()} visualizaciones</span>
                </>
              ) : null}
             </div>
           </div>
 
-          <div className="album-hero-actions">
+          <div className="album-page__actions">
+            <PlayQueueButton
+              songIds={filteredSongs.map((s) => ({ songId: s.id }))}
+              source="album"
+              className="album-page__play-btn"
+            />
             <button
               type="button"
-              className={`album-favorite-icon ${isAlbumFavorite ? 'is-active' : ''}`}
+              className={`album-page__favorite-btn ${isAlbumFavorite ? 'is-active' : ''}`}
               aria-label={isAlbumFavorite ? 'Quitar de favoritos' : 'Guardar en favoritos'}
               aria-pressed={isAlbumFavorite}
               onClick={handleToggleAlbumFavorite}
@@ -237,14 +245,14 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
           ) : null}
 
           {album.description ? (
-            <p className="album-description">{album.description}</p>
+            <p className="album-page__description">{album.description}</p>
           ) : null}
         </div>
-      </section>
+      </header>
 
       {/* ── Track list ── */}
-      <section className="album-tracklist-section">
-        <nav className="artist-pills album-pills" aria-label="filtrar canciones">
+      <section className="album-page__tracklist">
+        <nav className="artist-pills album-page__filters" aria-label="filtrar canciones">
           {pills.map((pill) => (
             <button
               key={pill}
@@ -257,7 +265,7 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
           ))}
         </nav>
 
-        <div className="artist-table-head album-table-head">
+        <div className="artist-table-head album-page__table-head">
           <span className="artist-col-num">#</span>
           <span className="artist-col-thumb" />
           <span className="artist-col-song">Canción</span>
@@ -265,11 +273,12 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
           <span className="artist-col-tone">Tono</span>
           <span className="artist-col-views">Visualizaciones</span>
           <span className="artist-col-favorite" />
+          <span className="artist-col-play" />
         </div>
 
-        <ul className="artist-song-list" role="list">
+        <ul className="artist-song-list album-page__song-list" role="list">
           {filteredSongs.map((song) => (
-            <li key={song.id} className="artist-song-row">
+            <li key={song.id} className="artist-song-row album-page__song-row">
               <span className="artist-col-num">
                 {padNumber(song.trackNumber ?? 0)}
               </span>
@@ -289,12 +298,15 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
               </span>
 
               <Link href={`/songs/${song.id}`} className="artist-col-song">
-                {song.title}
+                <span>{song.title}</span>
+                {isAdminUser ? (
+                  <span className={`song-status-badge status-${song.status?.toLowerCase()} artist-col-song--status-mobile`}>{getSongStatusLabel(song.status)}</span>
+                ) : null}
               </Link>
 
               {isAdminUser ? (
                 <span className="artist-col-status">
-                  <span className={`song-status-badge status-${song.status?.toLowerCase()}`}>{getSongStatusLabel(song.status)}</span>
+                  <span className={`song-status-badge status-${song.status?.toLowerCase()} artist-col-status--badge`}>{getSongStatusLabel(song.status)}</span>
                 </span>
               ) : null}
 
@@ -317,7 +329,7 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
           ))}
 
           {filteredSongs.length === 0 ? (
-            <li className="artist-song-row artist-empty-row">
+            <li className="artist-song-row album-page__song-row artist-empty-row">
               <span>
                 No hay canciones con {activeFilter.toLowerCase()} disponibles.
               </span>
@@ -327,9 +339,9 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
       </section>
 
       {/* ── Back to artist ── */}
-      <div className="album-back-row">
-        <Link href={`/artists/${album.artistId}`} className="album-back-link">
-          ‹ Volver al perfil de {album.artistName}
+      <div className="album-page__back">
+        <Link href={`/artists/${album.artistId}`} className="album-page__back-link">
+          Volver al perfil de {album.artistName}
         </Link>
       </div>
     </div>

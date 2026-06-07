@@ -32,13 +32,18 @@ const ALLOWED_SHEET_TYPES = new Set([
   'image/jpg',
   'application/xml',
   'text/xml',
+  'text/plain',
   'application/vnd.recordare.musicxml',
   'application/vnd.recordare.musicxml+xml',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/zip',
   'application/x-zip-compressed'
 ]);
 
-const ALLOWED_SHEET_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'xml', 'musicxml', 'mxl']);
+const ALLOWED_SHEET_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'xml', 'musicxml', 'mxl', 'doc', 'docx', 'mscz', 'mscx', 'txt']);
 
 export type VersionAssetKind = 'audio' | 'lyrics' | 'sheet';
 
@@ -55,6 +60,24 @@ function sanitizeFilename(name: string): string {
     .replace(/[^a-z0-9._-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
+}
+
+function sanitizePathSegment(value: string): string {
+  return value.trim().replace(/^\/+|\/+$/g, '');
+}
+
+export function buildInstrumentationAssetPath(
+  songId: string,
+  versionId: string,
+  instrumentationId: string,
+  assetType: 'audio' | 'lyrics' | 'sheet',
+  fileName: string
+): string {
+  const safeSongId = sanitizePathSegment(songId);
+  const safeVersionId = sanitizePathSegment(versionId);
+  const safeInstrumentationId = sanitizePathSegment(instrumentationId);
+  const safeFileName = sanitizePathSegment(fileName);
+  return `songs/${safeSongId}/versions/${safeVersionId}/instrumentations/${safeInstrumentationId}/${assetType}/${safeFileName}`;
 }
 
 function inferExt(file: File, fallback: string): string {
@@ -91,7 +114,7 @@ export function validateSheetFile(file: File): string | null {
   const hasAllowedExt = fileExt.length > 0 && ALLOWED_SHEET_EXTENSIONS.has(fileExt);
 
   if (!hasAllowedMime && !hasAllowedExt) {
-    return 'Formato inválido. Solo se permiten PDF, PNG, JPG, XML o MXL.';
+    return 'Formato inválido. Solo se permiten PDF, PNG, JPG, XML, MXL, DOC, DOCX, MSCZ, MSCX o TXT.';
   }
   if (file.size > MAX_SHEET_SIZE_BYTES) {
     return `El archivo de partitura supera ${MAX_SHEET_SIZE_MB}MB.`;
@@ -169,6 +192,64 @@ export async function uploadVersionAsset({
   const ext = inferExt(file, defaultExtFor(kind, file));
   const safeBase = sanitizeFilename(filenameBase ?? kind);
   const path = `songs/${safeSongId}/versions/${safeVersionId}/${kind}/${safeBase}-${now}.${ext}`;
+
+  try {
+    const objectRef = ref(storage, path);
+    await uploadBytes(objectRef, file, { contentType: file.type || undefined });
+    const url = await getDownloadURL(objectRef);
+    return { ok: true, url, path };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('storage/unauthorized')) {
+      return { ok: false, error: 'Sin permisos para subir archivos en Storage. Verifica sesión y reglas.' };
+    }
+    return { ok: false, error: 'No se pudo subir el archivo. Intenta nuevamente.' };
+  }
+}
+
+export interface UploadInstrumentationAssetParams {
+  file: File;
+  songId: string;
+  versionId: string;
+  instrumentationId: string;
+  kind: VersionAssetKind;
+  filenameBase?: string;
+}
+
+/**
+ * Uploads a per-instrumentation asset to:
+ *   songs/{songId}/versions/{versionId}/instrumentations/{instrumentationId}/{kind}/{filenameBase}-{ts}.{ext}
+ * and returns the public download URL.
+ */
+export async function uploadInstrumentationAsset({
+  file,
+  songId,
+  versionId,
+  instrumentationId,
+  kind,
+  filenameBase
+}: UploadInstrumentationAssetParams): Promise<UploadAssetResult> {
+  if (!storage) {
+    return { ok: false, error: 'Firebase Storage no está configurado.' };
+  }
+
+  const safeSongId = songId.trim();
+  const safeVersionId = versionId.trim();
+  const safeInstrumentationId = instrumentationId.trim();
+  if (!safeSongId || !safeVersionId || !safeInstrumentationId) {
+    return { ok: false, error: 'Faltan songId, versionId o instrumentationId para subir el archivo.' };
+  }
+
+  const validationError = validateFor(kind, file);
+  if (validationError) {
+    return { ok: false, error: validationError };
+  }
+
+  const now = Date.now();
+  const ext = inferExt(file, defaultExtFor(kind, file));
+  const safeBase = sanitizeFilename(filenameBase ?? kind);
+  const fileName = `${safeBase}-${now}.${ext}`;
+  const path = buildInstrumentationAssetPath(safeSongId, safeVersionId, safeInstrumentationId, kind, fileName);
 
   try {
     const objectRef = ref(storage, path);

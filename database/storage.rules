@@ -29,6 +29,21 @@ service firebase.storage {
       return isAdminOrEditor() || isAuthenticated();
     }
 
+    function isSongOwner(songId) {
+      return isAuthenticated()
+        && firestore.exists(/databases/(default)/documents/songs/$(songId))
+        && (
+          firestore.get(/databases/(default)/documents/songs/$(songId)).data.ownerUserId == request.auth.uid
+          || firestore.get(/databases/(default)/documents/songs/$(songId)).data.createdBy == request.auth.uid
+        );
+    }
+
+    function canWriteSongAssets(songId) {
+      return isAdminOrEditor()
+        || isSongOwner(songId)
+        || (isAuthenticated() && !firestore.exists(/databases/(default)/documents/songs/$(songId)));
+    }
+
     match /songs/{songId}/lyrics/{allPaths=**} {
       allow read: if true;
       allow write: if isAdminOrEditor();
@@ -51,25 +66,33 @@ service firebase.storage {
 
     // Per-version assets (audio, lyrics file, sheet file).
     // Reads are public for non-premium, owner-only granular checks delegated to backend.
-    // Writes allowed to any authenticated user; backend validates DRAFT/published and ownership rules.
+    // Writes allowed for owner/admin/editor.
+    // Sheet files (PDF, PNG, JPG, MusicXML/MXL) are publicly readable for browser rendering.
     match /songs/{songId}/versions/{versionId}/audio/{allPaths=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if canWriteSongAssets(songId);
     }
 
     match /songs/{songId}/versions/{versionId}/lyrics/{allPaths=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if canWriteSongAssets(songId);
     }
 
     match /songs/{songId}/versions/{versionId}/sheet/{allPaths=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if canWriteSongAssets(songId);
     }
 
     match /songs/{songId}/versions/{versionId}/cover/{allPaths=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if canWriteSongAssets(songId);
+    }
+
+    // Per-instrumentation assets (audio, lyrics, sheet files).
+    // Supports the new data model where 1 version can have multiple instrumentations.
+    match /songs/{songId}/versions/{versionId}/instrumentations/{instrumentationId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if canWriteSongAssets(songId);
     }
 
     match /songs/{songId}/cover/{allPaths=**} {

@@ -75,6 +75,7 @@ export interface SearchrepertoireItem extends SearchEntityBase {
   ownerUserId: string;
   isPublic: boolean;
   isTrending?: boolean;
+  isBookmarked?: boolean;
 }
 
 export interface SearchArtistItem extends SearchEntityBase {

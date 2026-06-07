@@ -18,6 +18,20 @@ export function buildVersionAssetPath(
   return `songs/${safeSongId}/versions/${safeVersionId}/${assetType}/${safeFileName}`;
 }
 
+export function buildInstrumentationAssetPath(
+  songId: string,
+  versionId: string,
+  instrumentationId: string,
+  assetType: 'audio' | 'lyrics' | 'sheet',
+  fileName: string
+): string {
+  const safeSongId = sanitizePathSegment(songId);
+  const safeVersionId = sanitizePathSegment(versionId);
+  const safeInstrumentationId = sanitizePathSegment(instrumentationId);
+  const safeFileName = sanitizePathSegment(fileName);
+  return `songs/${safeSongId}/versions/${safeVersionId}/instrumentations/${safeInstrumentationId}/${assetType}/${safeFileName}`;
+}
+
 export function buildSongAssetPath(songId: string, assetType: 'lyrics' | 'audio' | 'sheet', fileName: string, variant?: string): string {
   const safeSongId = sanitizePathSegment(songId);
   const safeFileName = sanitizePathSegment(fileName);

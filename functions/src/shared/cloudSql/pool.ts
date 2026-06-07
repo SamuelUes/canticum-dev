@@ -38,11 +38,14 @@ function buildPoolConfig(): PoolConfig {
     database,
     user,
     password,
-    max: 5,
+    max: 10,
     min: 1,
-    idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 8_000,
-    allowExitOnIdle: true
+    idleTimeoutMillis: 20_000,
+    connectionTimeoutMillis: 10_000,
+    statement_timeout: 30_000,  // Prevent runaway queries
+    query_timeout: 30_000,       // Prevent runaway queries
+    // allowExitOnIdle: true,
+    allowExitOnIdle: false     // Keep pool alive
   };
 
   if (host) {

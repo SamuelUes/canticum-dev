@@ -340,15 +340,37 @@ CREATE TABLE song_versions (
   id SERIAL PRIMARY KEY,
   song_id INT NOT NULL,
   artist_id INT,
-  instrument_id INT,
   version_name VARCHAR(150) NOT NULL,
-  tone VARCHAR(20),
-  notation_type VARCHAR(50),
+  --- Deprecated ----
+  -- instrument_id INT,
+  -- tone VARCHAR(20),
+  -- notation_type VARCHAR(50),
+  ------------------------------
+  audio_mode VARCHAR(20) DEFAULT 'shared',
   audio_reference_url TEXT,
   is_premium BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
-  FOREIGN KEY (artist_id) REFERENCES artists(id),
+  FOREIGN KEY (artist_id) REFERENCES artists(id)
+);
+
+-- ================================
+-- SONG VERSION INSTRUMENTATIONS
+-- ================================
+-- Each version can have multiple instrumentations with their own assets
+CREATE TABLE song_version_instrumentations (
+  id SERIAL PRIMARY KEY,
+  song_version_id INT NOT NULL,
+  instrument_id INT,
+  instrument_name VARCHAR(150) NOT NULL,
+  lyrics TEXT,
+  lyrics_file_url TEXT,
+  sheet_file_url TEXT,
+  audio_reference_url TEXT,
+  tone VARCHAR(20),
+  notation_type VARCHAR(50),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (song_version_id) REFERENCES song_versions(id) ON DELETE CASCADE,
   FOREIGN KEY (instrument_id) REFERENCES instruments(id)
 );
 
@@ -727,6 +749,62 @@ CREATE INDEX idx_songs_categories_json ON songs USING GIN (categories_json);
 CREATE INDEX idx_albums_categories_json ON albums USING GIN (categories_json);
 CREATE INDEX idx_repertoires_categories_json ON repertoires USING GIN (categories_json);
 CREATE INDEX idx_artists_categories_json ON artists USING GIN (categories_json);
+
+-- ================================
+-- CRITICAL PERFORMANCE INDEXES (Optimization Phase 1)
+-- ================================
+
+-- For search endpoint performance
+CREATE INDEX idx_songs_status_popularity ON songs(state_id, popularity DESC NULLS LAST, id DESC);
+CREATE INDEX idx_songs_artist_popularity ON songs(artist_id, popularity DESC NULLS LAST, id DESC);
+
+-- For artist profile songs query
+CREATE INDEX idx_song_versions_artist_song ON song_versions(artist_id, song_id);
+CREATE INDEX idx_song_versions_song_instrument ON song_versions(song_id, instrument_id);
+
+-- For featured songs queries (improved composite index)
+CREATE INDEX idx_featured_songs_snapshot_week_rank ON featured_songs(snapshot_week DESC, rank_position ASC);
+CREATE INDEX idx_featured_songs_song_week ON featured_songs(song_id, snapshot_week DESC);
+
+-- For album queries
+CREATE INDEX idx_albums_artist_status ON albums(artist_id, status, release_year DESC);
+CREATE INDEX idx_album_songs_album_track ON album_songs(album_id, track_number);
+
+-- For user queries
+CREATE INDEX idx_users_firebase_uid ON users(firebase_uid);
+CREATE INDEX idx_users_email ON users(email);
+
+-- For artist suggestions
+CREATE INDEX idx_artist_suggestions_artist_score ON artist_suggestions(artist_id, relevance_score DESC);
+CREATE INDEX idx_artist_suggestions_suggested_score ON artist_suggestions(suggested_artist_id, relevance_score DESC);
+
+-- For song metrics (only if table exists)
+-- CREATE INDEX idx_song_metrics_song_id ON song_metrics(song_id);
+
+-- ================================
+-- PARTIAL INDEXES (Optimization Phase 2)
+-- ================================
+
+-- Only index active categories
+CREATE INDEX idx_categories_active_slug
+ON categories(slug)
+WHERE is_active = TRUE;
+
+-- Only index artists with popularity (simplified - no function call in index)
+CREATE INDEX idx_artists_popularity_score
+ON artists(popularity DESC NULLS LAST)
+WHERE popularity IS NOT NULL AND popularity > 0;
+
+-- ================================
+-- TEXT SEARCH OPTIMIZATION
+-- ================================
+
+-- GIN index for artist name trigram search (requires pg_trgm extension)
+-- CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- CREATE INDEX idx_artists_name_trgm ON artists USING GIN (name gin_trgm_ops);
+
+-- GIN index for genres_json to improve artist suggestions query
+CREATE INDEX idx_artists_genres ON artists USING GIN (genres_json);
 
 -- ================================
 -- BASE DATA (Opcional pero recomendado)

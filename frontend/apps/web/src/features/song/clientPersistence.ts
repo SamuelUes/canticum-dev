@@ -420,18 +420,32 @@ export async function saveSongFavorite(songId: string, versionId: string, isFavo
   pendingFavoriteSyncTimeout.set(favoriteKey, timeoutId);
 }
 
+export interface CreateSongPayloadInstrumentation {
+  instrumentationId?: string;
+  instrumentName: string;
+  lyrics?: string;
+  lyricsFileUrl?: string;
+  sheetFileUrl?: string;
+  audioReferenceUrl?: string;
+  tone?: string;
+  notationType?: string;
+}
+
 export interface CreateSongPayloadVersion {
   /** Client-pre-generated Firestore version doc id; backend will use it verbatim. */
   versionDocId?: string;
   versionName: string;
-  instrumentName: string;
   artistId?: number;
   artistName?: string;
   isOwnVersion?: boolean;
-  tone?: string;
-  notationType?: string;
+  audioMode: 'shared' | 'per_instrumentation';
   audioReferenceUrl?: string;
   coverImageUrl?: string;
+  instrumentations?: CreateSongPayloadInstrumentation[];
+  // Legacy fields for backward compatibility
+  instrumentName?: string;
+  tone?: string;
+  notationType?: string;
   /** Per-version lyrics text (replaces the previous song-level `lyrics`). */
   lyrics?: string;
   /** Optional uploaded lyrics file URL. */

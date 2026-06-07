@@ -129,7 +129,8 @@ export function clearAllAppCache(): void {
     'canticum:subscription:plans:v1',
     'canticum:album:detail:v1:',
     'canticum:album:artist-list:v1:',
-    'canticum:account:summary:v1:'
+    'canticum:account:summary:v1:',
+    'canticum:bookmarks:v1:'
   ];
 
   const sessionStoragePrefixes = [

@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Skeleton from 'react-loading-skeleton';
 import { listLatestWeeklyMisales, type WeeklyMisalRecord } from '../../features/misales/repository';
+import { SkeletonText } from './skeleton';
 
 function WeeklyMisalSkeletonCard() {
   return (
     <article className="weekly-misal-card is-skeleton" aria-hidden>
       <div className="weekly-misal-card-copy">
-        <Skeleton width="72%" height={16} className="weekly-misal-skeleton-line" />
-        <Skeleton width="48%" height={12} className="weekly-misal-skeleton-line" />
+        <SkeletonText width="72%" className="weekly-misal-skeleton-line" />
+        <SkeletonText width="48%" className="weekly-misal-skeleton-line" />
       </div>
-      <Skeleton circle width={42} height={42} className="weekly-misal-skeleton-button" />
+      <div className="weekly-misal-skeleton-button" />
     </article>
   );
 }

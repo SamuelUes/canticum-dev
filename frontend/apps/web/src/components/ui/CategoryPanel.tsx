@@ -1,6 +1,8 @@
 'use client';
 
-import Skeleton from 'react-loading-skeleton';
+import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { SkeletonList } from './skeleton';
 
 interface CategoryPanelProps {
   selectedCategory: string;
@@ -32,6 +34,45 @@ export function CategoryPanel({
   onSelectCategory,
   onClose
 }: CategoryPanelProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
+  const dragStartRef = useRef<number | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setIsOpen(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [onClose]);
+
+  const handleDragStart = useCallback((clientY: number) => {
+    dragStartRef.current = clientY;
+  }, []);
+
+  const handleDragMove = useCallback((clientY: number) => {
+    if (dragStartRef.current === null) return;
+    const delta = clientY - dragStartRef.current;
+    setDragOffset(delta > 0 ? delta : 0);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    if (dragStartRef.current === null) return;
+    dragStartRef.current = null;
+    setDragOffset((current) => {
+      if (current > 110) {
+        onClose();
+      }
+      return 0;
+    });
+  }, [onClose]);
+
   const normalized = categoryOptions
     .map((value) => value.trim().toLowerCase())
     .filter((value) => value.length > 0 && value !== 'todos');
@@ -47,10 +88,29 @@ export function CategoryPanel({
     return value.includes(searchTerm.trim().toLowerCase());
   });
 
+  const panelStyle = mobile && dragOffset > 0
+    ? { transform: `translateY(${dragOffset}px)` }
+    : undefined;
+
   const panel = (
-    <div className={`header-categories-panel${mobile ? ' is-mobile' : ''}`} role="dialog" aria-label="Más categorías">
+    <div
+      ref={panelRef}
+      className={`header-categories-panel${mobile ? ' is-mobile' : ''}${isOpen ? ' is-open' : ''}${dragOffset > 0 ? ' is-dragging' : ''}`}
+      role="dialog"
+      aria-label="Más categorías"
+      style={panelStyle}
+    >
       {mobile ? (
-        <div className="header-categories-panel-top">
+        <div
+          className="header-categories-panel-top"
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            handleDragStart(event.clientY);
+          }}
+          onPointerMove={(event) => handleDragMove(event.clientY)}
+          onPointerUp={handleDragEnd}
+          onPointerCancel={handleDragEnd}
+        >
           <span className="header-categories-grabber" aria-hidden />
           <h4 className="header-categories-title">Más</h4>
         </div>
@@ -67,9 +127,7 @@ export function CategoryPanel({
 
       <div className="header-categories-list" role="listbox" aria-label="Listado de categorías">
         {loading ? (
-          Array.from({ length: 7 }).map((_, index) => (
-            <Skeleton key={`category-list-skeleton-${index}`} height={30} borderRadius={10} className="header-categories-list-skeleton" />
-          ))
+          <SkeletonList count={7} className="header-categories-list-skeleton" />
         ) : filtered.length > 0 ? (
           filtered.map((category) => (
             <button
@@ -91,12 +149,22 @@ export function CategoryPanel({
     </div>
   );
 
-  return mobile ? (
-    <>
-      <button type="button" className="header-categories-backdrop" onClick={onClose} aria-label="Cerrar panel de categorías" />
-      {panel}
-    </>
-  ) : (
+  if (mobile) {
+    const mobilePanel = (
+      <>
+        <button type="button" className={`header-categories-backdrop${isOpen ? ' is-open' : ''}`} onClick={onClose} aria-label="Cerrar panel de categorías" />
+        {panel}
+      </>
+    );
+
+    if (typeof document !== 'undefined') {
+      return createPortal(mobilePanel, document.body);
+    }
+
+    return mobilePanel;
+  }
+
+  return (
     <div className="header-categories-more is-open">{panel}</div>
   );
 }

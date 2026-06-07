@@ -4,10 +4,13 @@ import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import {
   addVersionsToExistingSong,
+  bulkDeleteSongsByIds,
   createSongDraftInCloudSql,
   deleteSongByIdInCloudSql,
   deleteVersionsByIdsInCloudSql,
   incrementSongViewInCloudSql,
+  listSongIdsCreatedBefore,
+  type InstrumentationInput,
   type VersionInput,
   updateSongMetadataInCloudSql,
   type UpdateSongMetadataInput,
@@ -116,6 +119,39 @@ function normalizeStringArray(value: unknown): string[] {
 /*------*/
 const SONG_STATE_VALUES = ['DRAFT', 'UPLOADED', 'IN_REVIEW', 'APPROVED', 'REJECTED', 'PUBLISHED', 'ARCHIVED'] as const;
 
+function setInstrumentationDocs(
+  batch: FirebaseFirestore.WriteBatch,
+  versionRef: FirebaseFirestore.DocumentReference,
+  instrumentations: InstrumentationInput[] | undefined
+): string[] {
+  if (!Array.isArray(instrumentations) || instrumentations.length === 0) {
+    return [];
+  }
+
+  const ids: string[] = [];
+  const collectionRef = versionRef.collection('instrumentations');
+  instrumentations.forEach((inst) => {
+    const requestedId = typeof inst.instrumentationId === 'string' && inst.instrumentationId.trim()
+      ? inst.instrumentationId.trim()
+      : '';
+    const instRef = requestedId ? collectionRef.doc(requestedId) : collectionRef.doc();
+    ids.push(instRef.id);
+    batch.set(instRef, {
+      instrumentationId: instRef.id,
+      instrumentName: inst.instrumentName,
+      lyrics: inst.lyrics ?? null,
+      lyricsFileUrl: inst.lyricsFileUrl ?? null,
+      sheetFileUrl: inst.sheetFileUrl ?? null,
+      audioReferenceUrl: inst.audioReferenceUrl ?? null,
+      tone: inst.tone ?? null,
+      notationType: inst.notationType ?? null,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+  });
+  return ids;
+}
+
 function normalizeSongState(raw: unknown): string {
   const value = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
   return SONG_STATE_VALUES.includes(value as typeof SONG_STATE_VALUES[number]) ? value : 'DRAFT';
@@ -138,6 +174,54 @@ function readNullableTrimmedString(value: unknown): string | null | undefined {
 
   const normalized = readOptionalTrimmedString(value);
   return normalized === undefined ? undefined : normalized;
+}
+
+function normalizeAudioMode(value: unknown): 'shared' | 'per_instrumentation' | 'legacy' {
+  if (value === 'shared' || value === 'per_instrumentation' || value === 'legacy') {
+    return value;
+  }
+
+  return 'legacy';
+}
+
+function normalizeInstrumentationInputs(
+  value: unknown,
+  fallbackInstrumentName: string,
+  versionRef: FirebaseFirestore.DocumentReference,
+  audioMode: 'shared' | 'per_instrumentation' | 'legacy'
+): InstrumentationInput[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const instrumentations: InstrumentationInput[] = [];
+
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const raw = entry as Record<string, unknown>;
+    const instrumentationId = readOptionalTrimmedString(raw.instrumentationId)
+      ?? readOptionalTrimmedString(raw.id)
+      ?? versionRef.collection('instrumentations').doc().id;
+    const instrumentName = readOptionalTrimmedString(raw.instrumentName) ?? fallbackInstrumentName;
+
+    instrumentations.push({
+      instrumentationId,
+      instrumentName,
+      lyrics: typeof raw.lyrics === 'string' ? raw.lyrics : null,
+      lyricsFileUrl: readNullableTrimmedString(raw.lyricsFileUrl) ?? null,
+      sheetFileUrl: readNullableTrimmedString(raw.sheetFileUrl) ?? null,
+      audioReferenceUrl: audioMode === 'per_instrumentation'
+        ? (readNullableTrimmedString(raw.audioReferenceUrl) ?? null)
+        : null,
+      tone: readNullableTrimmedString(raw.tone) ?? null,
+      notationType: readNullableTrimmedString(raw.notationType) ?? null
+    });
+  }
+
+  return instrumentations;
 }
 /*------*/
 
@@ -240,18 +324,39 @@ export const songs = functions.https.onRequest(async (req, res) => {
       defaultArtistName: string | null
     ): Promise<VersionInput[]> => {
       const out: VersionInput[] = [];
+
+      // Collect unique artist IDs that need lookup
+      const artistIdsToLookup = new Set<number>();
+      for (const rv of rawVersions) {
+        if (typeof rv.artistId === 'number' && rv.artistId > 0) {
+          artistIdsToLookup.add(rv.artistId);
+        }
+      }
+
+      // Batch lookup all artists in parallel
+      const artistMap = new Map<number, string>();
+      if (artistIdsToLookup.size > 0) {
+        const artistPromises = Array.from(artistIdsToLookup).map(async (id) => {
+          try {
+            const a = await getArtistById(id);
+            if (a) return { id, name: a.name };
+          } catch { /* ignore */ }
+          return null;
+        });
+        const results = await Promise.all(artistPromises);
+        for (const result of results) {
+          if (result) artistMap.set(result.id, result.name);
+        }
+      }
+
       for (const rv of rawVersions) {
         const vName = typeof rv.versionName === 'string' && rv.versionName.trim() ? rv.versionName.trim() : 'Versión 1';
-        const instrName = typeof rv.instrumentName === 'string' && rv.instrumentName.trim() ? rv.instrumentName.trim() : 'Letra';
         let vArtistId: number | null = null;
         let vArtistName: string | null = null;
 
         if (typeof rv.artistId === 'number' && rv.artistId > 0) {
           vArtistId = rv.artistId;
-          try {
-            const a = await getArtistById(vArtistId);
-            if (a) vArtistName = a.name;
-          } catch { /* keep null */ }
+          vArtistName = artistMap.get(rv.artistId) ?? null;
         } else if (rv.isOwnVersion === true) {
           vArtistId = defaultArtistId;
           vArtistName = defaultArtistName ?? uid;
@@ -265,15 +370,70 @@ export const songs = functions.https.onRequest(async (req, res) => {
           }
         }
 
-        out.push({
-          versionName: vName,
-          instrumentName: instrName,
-          artistId: vArtistId,
-          artistName: vArtistName,
-          tone: typeof rv.tone === 'string' ? rv.tone.trim() || null : null,
-          notationType: typeof rv.notationType === 'string' ? rv.notationType.trim() || null : null,
-          audioReferenceUrl: typeof rv.audioReferenceUrl === 'string' ? rv.audioReferenceUrl.trim() || null : null
-        });
+        // Check if this is a new format version (has audioMode and instrumentations)
+        const isNewFormat = 'audioMode' in rv && Array.isArray(rv.instrumentations);
+
+        if (isNewFormat) {
+          // New format: build with audioMode and instrumentations
+          const audioMode = (typeof rv.audioMode === 'string' && (rv.audioMode === 'shared' || rv.audioMode === 'per_instrumentation'))
+            ? rv.audioMode as 'shared' | 'per_instrumentation'
+            : 'shared';
+
+          const instrumentations: InstrumentationInput[] = [];
+          if (Array.isArray(rv.instrumentations)) {
+            for (const inst of rv.instrumentations) {
+              if (inst && typeof inst === 'object') {
+                instrumentations.push({
+                  instrumentName: typeof inst.instrumentName === 'string' && inst.instrumentName.trim() ? inst.instrumentName.trim() : 'Letra',
+                  lyrics: typeof inst.lyrics === 'string' ? inst.lyrics.trim() || null : null,
+                  lyricsFileUrl: typeof inst.lyricsFileUrl === 'string' ? inst.lyricsFileUrl.trim() || null : null,
+                  sheetFileUrl: typeof inst.sheetFileUrl === 'string' ? inst.sheetFileUrl.trim() || null : null,
+                  audioReferenceUrl: typeof inst.audioReferenceUrl === 'string' ? inst.audioReferenceUrl.trim() || null : null,
+                  tone: typeof inst.tone === 'string' ? inst.tone.trim() || null : null,
+                  notationType: typeof inst.notationType === 'string' ? inst.notationType.trim() || null : null
+                });
+              }
+            }
+          }
+
+          // Ensure at least one instrumentation
+          if (instrumentations.length === 0) {
+            instrumentations.push({ instrumentName: 'Letra' });
+          }
+
+          out.push({
+            versionName: vName,
+            artistId: vArtistId,
+            artistName: vArtistName,
+            audioMode,
+            audioReferenceUrl: audioMode === 'shared' ? (typeof rv.audioReferenceUrl === 'string' ? rv.audioReferenceUrl.trim() || null : null) : null,
+            instrumentations
+          });
+        } else {
+          // Legacy format: build with instrumentName directly
+          const instrName = typeof rv.instrumentName === 'string' && rv.instrumentName.trim() ? rv.instrumentName.trim() : 'Letra';
+
+          out.push({
+            versionName: vName,
+            artistId: vArtistId,
+            artistName: vArtistName,
+            audioMode: 'shared',
+            audioReferenceUrl: typeof rv.audioReferenceUrl === 'string' ? rv.audioReferenceUrl.trim() || null : null,
+            instrumentations: [{
+              instrumentName: instrName,
+              lyrics: typeof rv.lyrics === 'string' ? rv.lyrics.trim() || null : null,
+              lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' ? rv.lyricsFileUrl.trim() || null : null,
+              sheetFileUrl: typeof rv.sheetFileUrl === 'string' ? rv.sheetFileUrl.trim() || null : null,
+              audioReferenceUrl: null,
+              tone: typeof rv.tone === 'string' ? rv.tone.trim() || null : null,
+              notationType: typeof rv.notationType === 'string' ? rv.notationType.trim() || null : null
+            }],
+            // Legacy fields for backward compatibility with Cloud SQL
+            instrumentName: instrName,
+            tone: typeof rv.tone === 'string' ? rv.tone.trim() || null : null,
+            notationType: typeof rv.notationType === 'string' ? rv.notationType.trim() || null : null
+          });
+        }
       }
       return out;
     };
@@ -349,6 +509,8 @@ export const songs = functions.https.onRequest(async (req, res) => {
             : versionsCollection.doc();
           const versionLabel = sv.instrumentName ? `${sv.versionName} · ${sv.instrumentName}` : sv.versionName;
           createdVersionIds.push(ref.id);
+          const isNewFormat = Array.isArray(vi.instrumentations);
+          const instrumentationIds = isNewFormat ? setInstrumentationDocs(batch, ref, vi.instrumentations) : [];
 
           batch.set(ref, {
             songId: songRef.id,
@@ -359,13 +521,15 @@ export const songs = functions.https.onRequest(async (req, res) => {
             artistId: sv.artistId ? String(sv.artistId) : null,
             instrumentId: sv.instrumentId ? String(sv.instrumentId) : null,
             instrumentName: sv.instrumentName ?? vi.instrumentName ?? null,
-            tone: vi.tone ?? null,
-            notationType: vi.notationType ?? null,
+            tone: isNewFormat ? null : (vi.tone ?? null),
+            notationType: isNewFormat ? null : (vi.notationType ?? null),
             audioReferenceUrl: sv.audioReferenceUrl ?? vi.audioReferenceUrl ?? null,
             coverImageUrl: typeof rv?.coverImageUrl === 'string' && rv.coverImageUrl.trim() ? rv.coverImageUrl.trim() : null,
-            lyrics: typeof rv.lyrics === 'string' ? rv.lyrics : '',
-            lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null,
-            sheetFileUrl: typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null,
+            lyrics: isNewFormat ? '' : (typeof rv.lyrics === 'string' ? rv.lyrics : ''),
+            lyricsFileUrl: isNewFormat ? null : (typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null),
+            sheetFileUrl: isNewFormat ? null : (typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null),
+            audioMode: vi.audioMode,
+            instrumentationIds,
             isPremium: false,
             label: versionLabel,
             createdBy: uid,
@@ -467,12 +631,23 @@ export const songs = functions.https.onRequest(async (req, res) => {
       for (const instrName of normalizedInstruments) {
         versionInputs.push({
           versionName: fallbackVersionName,
-          instrumentName: instrName,
           artistId: songArtistId,
           artistName: resolvedArtistName || null,
+          audioMode: 'shared',
+          audioReferenceUrl: songAudioReferenceUrl,
+          instrumentations: [{
+            instrumentName: instrName,
+            lyrics: null,
+            lyricsFileUrl: null,
+            sheetFileUrl: null,
+            audioReferenceUrl: null,
+            tone: songTone,
+            notationType: songNotationType
+          }],
+          // Legacy fields for backward compatibility
+          instrumentName: instrName,
           tone: songTone,
-          notationType: songNotationType,
-          audioReferenceUrl: songAudioReferenceUrl
+          notationType: songNotationType
         });
       }
     }
@@ -553,6 +728,8 @@ export const songs = functions.https.onRequest(async (req, res) => {
         const versionLabel = sv?.instrumentName
           ? `${sv.versionName} · ${sv.instrumentName}`
           : sv?.versionName ?? 'Versión 1';
+        const isNewFormat = Boolean(vi && Array.isArray(vi.instrumentations));
+        const instrumentationIds = isNewFormat ? setInstrumentationDocs(batch, versionRef, vi.instrumentations) : [];
 
         batch.set(versionRef, {
           songId: songRef.id,
@@ -563,13 +740,15 @@ export const songs = functions.https.onRequest(async (req, res) => {
           artistId: sv?.artistId ? String(sv.artistId) : null,
           instrumentId: sv?.instrumentId ? String(sv.instrumentId) : null,
           instrumentName: sv?.instrumentName ?? vi?.instrumentName ?? null,
-          tone: vi?.tone ?? null,
-          notationType: vi?.notationType ?? null,
+          tone: isNewFormat ? null : (vi?.tone ?? null),
+          notationType: isNewFormat ? null : (vi?.notationType ?? null),
           audioReferenceUrl: sv?.audioReferenceUrl ?? vi?.audioReferenceUrl ?? null,
           coverImageUrl: typeof rv.coverImageUrl === 'string' && rv.coverImageUrl.trim() ? rv.coverImageUrl.trim() : null,
-          lyrics: typeof rv.lyrics === 'string' ? rv.lyrics : (typeof body.lyrics === 'string' ? body.lyrics : ''),
-          lyricsFileUrl: typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null,
-          sheetFileUrl: typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null,
+          lyrics: isNewFormat ? '' : (typeof rv.lyrics === 'string' ? rv.lyrics : (typeof body.lyrics === 'string' ? body.lyrics : '')),
+          lyricsFileUrl: isNewFormat ? null : (typeof rv.lyricsFileUrl === 'string' && rv.lyricsFileUrl.trim() ? rv.lyricsFileUrl.trim() : null),
+          sheetFileUrl: isNewFormat ? null : (typeof rv.sheetFileUrl === 'string' && rv.sheetFileUrl.trim() ? rv.sheetFileUrl.trim() : null),
+          audioMode: vi?.audioMode ?? 'shared',
+          instrumentationIds,
           isPremium: false,
           label: versionLabel,
           createdBy: uid,
@@ -646,10 +825,22 @@ export const songs = functions.https.onRequest(async (req, res) => {
 
     const hasSongUnlock = Boolean(songUnlockSnap?.exists);
 
-    const rawVersions: Array<Record<string, unknown> & { id: string }> = versionsSnap.docs.map((doc) => ({
-      id: doc.id,
-      ...(doc.data() as Record<string, unknown>)
-    }));
+    const rawVersions: Array<Record<string, unknown> & { id: string; instrumentations?: Array<Record<string, unknown> & { id: string }> }> = await Promise.all(
+      versionsSnap.docs.map(async (doc) => {
+        const versionData = doc.data() as Record<string, unknown>;
+        const instrumentationsSnap = await doc.ref.collection('instrumentations').get();
+        const instrumentations = instrumentationsSnap.docs.map((instDoc) => ({
+          id: instDoc.id,
+          ...(instDoc.data() as Record<string, unknown>)
+        }));
+
+        return {
+          id: doc.id,
+          ...versionData,
+          instrumentations
+        };
+      })
+    );
     const visibleVersions = rawVersions.filter((version) => {
       if (!isPremiumVersion(version)) {
         return true;
@@ -665,26 +856,56 @@ export const songs = functions.https.onRequest(async (req, res) => {
       return bMs - aMs;
     });
 
-    const versions = visibleVersions.map((version) => ({
-      id: String(version.id),
-      songId: String(version.songId ?? songId),
-      versionId: String(version.versionId ?? version.id),
-      sqlSongVersionId: Number.isFinite(Number(version.sqlSongVersionId)) ? String(version.sqlSongVersionId) : undefined,
-      versionName: String(version.versionName ?? version.label ?? 'Versión'),
-      artistId: typeof version.artistId === 'string' ? version.artistId : undefined,
-      instrumentId: typeof version.instrumentId === 'string' ? version.instrumentId : undefined,
-      tone: typeof version.tone === 'string' ? version.tone : undefined,
-      notationType: typeof version.notationType === 'string' ? version.notationType : undefined,
-      audioReferenceUrl: typeof version.audioReferenceUrl === 'string' ? version.audioReferenceUrl : undefined,
-      coverImageUrl: typeof version.coverImageUrl === 'string' ? version.coverImageUrl : undefined,
-      artistName: String(version.artistName ?? songData.artistName ?? ''),
-      instrumentName: typeof version.instrumentName === 'string' ? version.instrumentName : undefined,
-      label: String(version.label ?? version.versionName ?? 'Versión'),
-      isPremium: Boolean(version.isPremium),
-      lyrics: typeof version.lyrics === 'string' ? version.lyrics : undefined,
-      lyricsFileUrl: typeof version.lyricsFileUrl === 'string' ? version.lyricsFileUrl : undefined,
-      sheetFileUrl: typeof version.sheetFileUrl === 'string' ? version.sheetFileUrl : undefined
-    }));
+    const versions = visibleVersions.map((version) => {
+      const versionInstrumentations = Array.isArray(version.instrumentations)
+        ? version.instrumentations.map((inst) => {
+            const instrumentationId = String(inst.instrumentationId ?? inst.id ?? '');
+            const instrumentName = String(inst.instrumentName ?? inst.instrumentationId ?? inst.id ?? 'Letra');
+
+            return {
+              id: String(inst.id ?? instrumentationId),
+              instrumentationId,
+              versionId: String(inst.versionId ?? version.id),
+              instrumentName,
+              instrumentId: typeof inst.instrumentId === 'string' ? inst.instrumentId : undefined,
+              lyrics: typeof inst.lyrics === 'string' ? inst.lyrics : undefined,
+              lyricsFileUrl: typeof inst.lyricsFileUrl === 'string' ? inst.lyricsFileUrl : undefined,
+              sheetFileUrl: typeof inst.sheetFileUrl === 'string' ? inst.sheetFileUrl : undefined,
+              audioReferenceUrl: typeof inst.audioReferenceUrl === 'string' ? inst.audioReferenceUrl : undefined,
+              tone: typeof inst.tone === 'string' ? inst.tone : undefined,
+              notationType: typeof inst.notationType === 'string' ? inst.notationType : undefined
+            };
+          })
+        : [];
+
+      const fallbackInstrumentId = versionInstrumentations[0]?.instrumentationId;
+
+      return {
+        id: String(version.id),
+        songId: String(version.songId ?? songId),
+        versionId: String(version.versionId ?? version.id),
+        sqlSongVersionId: Number.isFinite(Number(version.sqlSongVersionId)) ? String(version.sqlSongVersionId) : undefined,
+        versionName: String(version.versionName ?? version.label ?? 'Versión'),
+        artistId: typeof version.artistId === 'string' ? version.artistId : undefined,
+        instrumentId: typeof version.instrumentId === 'string'
+          ? version.instrumentId
+          : fallbackInstrumentId,
+        tone: typeof version.tone === 'string' ? version.tone : undefined,
+        notationType: typeof version.notationType === 'string' ? version.notationType : undefined,
+        audioReferenceUrl: typeof version.audioReferenceUrl === 'string' ? version.audioReferenceUrl : undefined,
+        coverImageUrl: typeof version.coverImageUrl === 'string' ? version.coverImageUrl : undefined,
+        artistName: String(version.artistName ?? songData.artistName ?? ''),
+        instrumentName: typeof version.instrumentName === 'string'
+          ? version.instrumentName
+          : versionInstrumentations[0]?.instrumentName,
+        label: String(version.label ?? version.versionName ?? 'Versión'),
+        isPremium: Boolean(version.isPremium),
+        lyrics: typeof version.lyrics === 'string' ? version.lyrics : undefined,
+        lyricsFileUrl: typeof version.lyricsFileUrl === 'string' ? version.lyricsFileUrl : undefined,
+        sheetFileUrl: typeof version.sheetFileUrl === 'string' ? version.sheetFileUrl : undefined,
+        instrumentations: versionInstrumentations
+      };
+    });
 
     // Resolve active version: ?versionId query → exact match; else most recent visible.
     const requestedVersionId = typeof req.query.versionId === 'string' ? req.query.versionId.trim() : '';
@@ -695,7 +916,20 @@ export const songs = functions.https.onRequest(async (req, res) => {
     const instrumentMap = new Map<string, { id: string; name: string }>();
 
     versions.forEach((version) => {
-      if (version.instrumentId) {
+      const versionInstrumentations = Array.isArray(version.instrumentations) ? version.instrumentations : [];
+      versionInstrumentations.forEach((instrumentation) => {
+        const instrumentationId = String(instrumentation.instrumentationId ?? instrumentation.id ?? '');
+        if (!instrumentationId) {
+          return;
+        }
+
+        instrumentMap.set(instrumentationId, {
+          id: instrumentationId,
+          name: instrumentation.instrumentName ?? instrumentationId
+        });
+      });
+
+      if (version.instrumentId && !instrumentMap.has(version.instrumentId)) {
         instrumentMap.set(version.instrumentId, {
           id: version.instrumentId,
           name: version.instrumentName ?? version.instrumentId
@@ -707,9 +941,30 @@ export const songs = functions.https.onRequest(async (req, res) => {
     const activeVersionId = activeVersionRaw ? String(activeVersionRaw.id) : '';
     const currentVersionId = activeVersionId
       || String(songData.currentVersionId ?? versions[0]?.id ?? '');
-    const currentInstrumentId = activeVersionRaw && typeof activeVersionRaw.instrumentId === 'string'
-      ? String(activeVersionRaw.instrumentId)
-      : String(songData.currentInstrumentId ?? instrumentMap.values().next().value?.id ?? '');
+    const activeVersionInstrumentations = Array.isArray(activeVersionRaw?.instrumentations)
+      ? activeVersionRaw.instrumentations
+      : [];
+    const requestedCurrentInstrumentId = typeof songData.currentInstrumentId === 'string' ? songData.currentInstrumentId : '';
+    const currentInstrumentId = (() => {
+      if (requestedCurrentInstrumentId && instrumentMap.has(requestedCurrentInstrumentId)) {
+        return requestedCurrentInstrumentId;
+      }
+
+      const activeVersionMatch = activeVersionInstrumentations.find((instrumentation) => {
+        const instrumentationId = String(instrumentation.instrumentationId ?? instrumentation.id ?? '');
+        return instrumentationId === requestedCurrentInstrumentId;
+      });
+      if (activeVersionMatch) {
+        return String(activeVersionMatch.instrumentationId ?? activeVersionMatch.id ?? '');
+      }
+
+      const activeVersionFirst = activeVersionInstrumentations[0];
+      if (activeVersionFirst) {
+        return String(activeVersionFirst.instrumentationId ?? activeVersionFirst.id ?? '');
+      }
+
+      return instrumentMap.values().next().value?.id ?? requestedCurrentInstrumentId;
+    })();
 
     // ---- Spotify-aligned fields ----
     const title = String(songData.title ?? '');
@@ -909,6 +1164,8 @@ export const songs = functions.https.onRequest(async (req, res) => {
       = [];
     const pendingNewVersions: Array<{ docRef: FirebaseFirestore.DocumentReference; data: Record<string, unknown>; input: VersionInput }>
       = [];
+    const instrumentationSyncOps: Array<{ versionRef: FirebaseFirestore.DocumentReference; instrumentations: InstrumentationInput[] }>
+      = [];
     const sqlVersionUpdates: UpdateSongVersionInput[] = [];
     const deletedDocIds = new Set<string>();
     const updatedDocIds: string[] = [];
@@ -936,6 +1193,29 @@ export const songs = functions.https.onRequest(async (req, res) => {
       const normalizedCoverUrl = readNullableTrimmedString(rawVersion.coverImageUrl);
       const normalizedArtistName = readOptionalTrimmedString(rawVersion.artistName) ?? defaultArtistName ?? authContext.uid ?? '';
       const docRef = docId ? versionsCollection.doc(docId) : versionsCollection.doc();
+      const normalizedAudioMode = normalizeAudioMode(rawVersion.audioMode);
+      const hasExplicitInstrumentations = Array.isArray(rawVersion.instrumentations);
+      const normalizedInstrumentations = normalizeInstrumentationInputs(
+        rawVersion.instrumentations,
+        normalizedInstrumentName,
+        docRef,
+        normalizedAudioMode
+      );
+      const effectiveInstrumentations = hasExplicitInstrumentations
+        ? (normalizedInstrumentations.length > 0
+            ? normalizedInstrumentations
+            : [{
+                instrumentationId: docRef.collection('instrumentations').doc().id,
+                instrumentName: normalizedInstrumentName,
+                lyrics: null,
+                lyricsFileUrl: null,
+                sheetFileUrl: null,
+                audioReferenceUrl: null,
+                tone: normalizedTone ?? null,
+                notationType: normalizedNotation ?? null
+              }])
+        : [];
+      const primaryInstrumentation = effectiveInstrumentations[0];
       const numericSqlVersionId = Number(rawVersion.sqlSongVersionId ?? rawVersion.sqlVersionId ?? rawVersion.sqlId);
       const sqlVersionId = Number.isFinite(numericSqlVersionId) && numericSqlVersionId > 0
         ? Math.floor(numericSqlVersionId)
@@ -957,14 +1237,22 @@ export const songs = functions.https.onRequest(async (req, res) => {
         versionName: normalizedVersionName,
         label: readOptionalTrimmedString(rawVersion.label) ?? normalizedVersionName,
         artistName: normalizedArtistName,
-        instrumentName: normalizedInstrumentName,
+        instrumentName: primaryInstrumentation?.instrumentName ?? normalizedInstrumentName,
         lyrics: typeof rawVersion.lyrics === 'string'
           ? rawVersion.lyrics
           : (existingDoc?.data().lyrics as string | undefined) ?? '',
-        audioReferenceUrl: normalizedAudio ?? (existingDoc?.data().audioReferenceUrl as string | null | undefined ?? null),
-        notationType: normalizedNotation ?? (existingDoc?.data().notationType as string | null | undefined ?? null),
-        tone: normalizedTone ?? (existingDoc?.data().tone as string | null | undefined ?? null),
+        audioReferenceUrl: normalizedAudioMode === 'per_instrumentation'
+          ? null
+          : (normalizedAudio ?? (existingDoc?.data().audioReferenceUrl as string | null | undefined ?? null)),
+        notationType: normalizedNotation ?? primaryInstrumentation?.notationType ?? (existingDoc?.data().notationType as string | null | undefined ?? null),
+        tone: normalizedTone ?? primaryInstrumentation?.tone ?? (existingDoc?.data().tone as string | null | undefined ?? null),
         coverImageUrl: normalizedCoverUrl ?? (existingDoc?.data().coverImageUrl as string | null | undefined ?? null),
+        audioMode: normalizedAudioMode,
+        instrumentationIds: hasExplicitInstrumentations
+          ? effectiveInstrumentations
+              .map((inst) => (typeof inst.instrumentationId === 'string' ? inst.instrumentationId : ''))
+              .filter((id) => id.length > 0)
+          : (existingDoc?.data().instrumentationIds as string[] | undefined ?? []),
         updatedAt: FieldValue.serverTimestamp()
       };
 
@@ -972,13 +1260,22 @@ export const songs = functions.https.onRequest(async (req, res) => {
         versionSetOps.push({ docRef: existingDoc.ref, data: versionData, merge: true });
         updatedDocIds.push(existingDoc.id);
 
+        if (hasExplicitInstrumentations && normalizedAudioMode !== 'legacy') {
+          instrumentationSyncOps.push({
+            versionRef: existingDoc.ref,
+            instrumentations: effectiveInstrumentations
+          });
+        }
+
         const existingData = existingDoc.data() as Record<string, unknown>;
         const fallbackSqlId = Number(existingData.sqlSongVersionId);
         const resolvedSqlId = sqlVersionId ?? (Number.isFinite(fallbackSqlId) ? Math.floor(fallbackSqlId) : undefined);
         if (resolvedSqlId) {
           const sqlPatch: UpdateSongVersionInput = { sqlSongVersionId: resolvedSqlId };
           if (readOptionalTrimmedString(rawVersion.versionName)) sqlPatch.versionName = normalizedVersionName;
-          if (rawVersion.instrumentName !== undefined) sqlPatch.instrumentName = normalizedInstrumentName;
+          if (rawVersion.instrumentName !== undefined || (hasExplicitInstrumentations && primaryInstrumentation)) {
+            sqlPatch.instrumentName = primaryInstrumentation?.instrumentName ?? normalizedInstrumentName;
+          }
           if (normalizedTone !== undefined) sqlPatch.tone = normalizedTone;
           if (normalizedNotation !== undefined) sqlPatch.notationType = normalizedNotation;
           if (normalizedAudio !== undefined) sqlPatch.audioReferenceUrl = normalizedAudio;
@@ -987,18 +1284,39 @@ export const songs = functions.https.onRequest(async (req, res) => {
           }
         }
       } else {
+        const newVersionAudioMode = normalizedAudioMode === 'legacy' ? 'shared' : normalizedAudioMode;
+        const newVersionInstrumentations = effectiveInstrumentations.length > 0
+          ? effectiveInstrumentations
+          : [{
+              instrumentationId: docRef.collection('instrumentations').doc().id,
+              instrumentName: normalizedInstrumentName || 'Letra',
+              lyrics: null,
+              lyricsFileUrl: null,
+              sheetFileUrl: null,
+              audioReferenceUrl: null,
+              tone: normalizedTone ?? null,
+              notationType: normalizedNotation ?? null
+            }];
+
         const newVersionInput: VersionInput = {
           versionName: normalizedVersionName,
-          instrumentName: normalizedInstrumentName || 'Letra',
-          tone: normalizedTone ?? null,
-          notationType: normalizedNotation ?? null,
-          audioReferenceUrl: normalizedAudio ?? null,
           artistId: defaultArtistId,
-          artistName: normalizedArtistName
+          artistName: normalizedArtistName,
+          audioMode: newVersionAudioMode,
+          audioReferenceUrl: newVersionAudioMode === 'per_instrumentation' ? null : (normalizedAudio ?? null),
+          instrumentations: newVersionInstrumentations,
+          // Legacy fields for backward compatibility
+          instrumentName: (newVersionInstrumentations[0]?.instrumentName ?? normalizedInstrumentName) || 'Letra',
+          tone: normalizedTone ?? null,
+          notationType: normalizedNotation ?? null
         };
 
         const newData: Record<string, unknown> = {
           ...versionData,
+          audioMode: newVersionAudioMode,
+          instrumentationIds: newVersionInstrumentations
+            .map((inst) => (typeof inst.instrumentationId === 'string' ? inst.instrumentationId : ''))
+            .filter((id) => id.length > 0),
           sqlSongVersionId: null,
           createdBy: createdByFallback,
           createdAt: FieldValue.serverTimestamp(),
@@ -1038,6 +1356,12 @@ export const songs = functions.https.onRequest(async (req, res) => {
           entry.data.instrumentId = sqlVersion.instrumentId ? String(sqlVersion.instrumentId) : null;
           entry.data.artistId = sqlVersion.artistId ? String(sqlVersion.artistId) : null;
           versionSetOps.push({ docRef: entry.docRef, data: entry.data, merge: true });
+          if (Array.isArray(entry.input.instrumentations) && entry.input.instrumentations.length > 0) {
+            instrumentationSyncOps.push({
+              versionRef: entry.docRef,
+              instrumentations: entry.input.instrumentations
+            });
+          }
           if (entry.docRef.id) {
             createdVersionDocIds.push(entry.docRef.id);
           }
@@ -1052,6 +1376,12 @@ export const songs = functions.https.onRequest(async (req, res) => {
     const batch = db.batch();
     versionDeletes.forEach(({ docRef }) => batch.delete(docRef));
     versionSetOps.forEach(({ docRef, data, merge }) => batch.set(docRef, data, { merge }));
+
+    for (const op of instrumentationSyncOps) {
+      const existingInstrumentations = await op.versionRef.collection('instrumentations').get();
+      existingInstrumentations.docs.forEach((doc) => batch.delete(doc.ref));
+      setInstrumentationDocs(batch, op.versionRef, op.instrumentations);
+    }
 
     const survivingVersionIds = existingVersionsSnap
       ? new Set(existingVersionsSnap.docs.map((doc) => doc.id))
@@ -1449,18 +1779,77 @@ export const songs = functions.https.onRequest(async (req, res) => {
       return;
     }
 
-    const songSnap = await db.collection('songs').doc(songId).get();
-    if (!songSnap.exists) {
-      sendError(res, 404, 'not_found', 'Song not found.');
-      return;
-    }
-
     sendJson(res, 200, {
       ok: true,
       songId,
       downloadReady: true,
       message: 'Download authorized for Premium user.'
     });
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Admin bulk delete: DELETE /songs/admin/bulk-delete-before-date
+  // ═══════════════════════════════════════════════════════════════
+  if (segments.length === 3 && segments[1] === 'admin' && segments[2] === 'bulk-delete-before-date' && req.method === 'DELETE') {
+    const role = authContext?.token.role as string | undefined;
+    if (role !== 'admin') {
+      sendError(res, 403, 'forbidden', 'Admin role required.');
+      return;
+    }
+
+    const dateThreshold = new Date('2026-08-10T00:00:00Z');
+
+    try {
+      // Get song IDs from Cloud SQL
+      const songIds = await listSongIdsCreatedBefore(dateThreshold);
+
+      if (songIds.length === 0) {
+        sendJson(res, 200, { deletedCount: 0, message: 'No songs found before the specified date.' });
+        return;
+      }
+
+      // Delete from Cloud SQL (cascade handles versions and instrumentations)
+      const sqlResult = await bulkDeleteSongsByIds(songIds);
+
+      // Delete from Firestore
+      const db = getAppFirestore();
+      const firestoreErrors: string[] = [];
+      let firestoreDeletedCount = 0;
+
+      for (const sqlSongId of songIds) {
+        try {
+          // Find Firestore song by sqlSongId
+          const songsQuery = await db.collection('songs').where('sqlSongId', '==', sqlSongId).limit(1).get();
+          if (!songsQuery.empty) {
+            const songDoc = songsQuery.docs[0];
+            await songDoc.ref.delete();
+            firestoreDeletedCount++;
+          }
+        } catch (error) {
+          firestoreErrors.push(`Failed to delete Firestore song for SQL ID ${sqlSongId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Note: Storage cleanup would require tracking all storage paths for each song
+      // This is a simplified version that focuses on SQL and Firestore deletion
+
+      sendJson(res, 200, {
+        deletedCount: sqlResult.deletedCount,
+        firestoreDeletedCount,
+        sqlErrors: sqlResult.errors,
+        firestoreErrors,
+        message: `Deleted ${sqlResult.deletedCount} songs from Cloud SQL and ${firestoreDeletedCount} from Firestore.`
+      });
+    } catch (error) {
+      sendError(res, 500, 'internal', `Bulk delete failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return;
+  }
+
+  const songSnap = await db.collection('songs').doc(songId).get();
+  if (!songSnap.exists) {
+    sendError(res, 404, 'not_found', 'Song not found.');
     return;
   }
 

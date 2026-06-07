@@ -54,42 +54,40 @@ export async function createAlbumInCloudSql(input: CreateAlbumInput): Promise<Cr
 
     const albumId = albumResult.rows[0].id;
 
-    // Insert album_songs
+    // OPTIMIZATION: Batch fetch all songs first to avoid N+1 queries
     console.log(`[albums] Processing ${input.tracks.length} tracks for album ${albumId}`);
-    for (const track of input.tracks) {
-      console.log(`[albums] Looking for song with canticum ID: ${track.songId}`);
-      
-      let sqlSongId: number | null = null;
+    
+    const canticumIds = input.tracks.map(t => t.songId);
+    const songResults = await client.query<{ id: number; canticum_id: string }>(
+      `SELECT id, external_urls_json->>'canticum' as canticum_id 
+       FROM songs 
+       WHERE external_urls_json->>'canticum' = ANY($1)`,
+      [canticumIds]
+    );
+    
+    const songMap = new Map(songResults.rows.map(r => [r.canticum_id, r.id]));
+    console.log(`[albums] Found ${songMap.size} songs via canticum IDs`);
 
-      // First try to find by external_urls_json->>'canticum'
-      const songResult = await client.query<{ id: number }>(
-        "SELECT id FROM songs WHERE external_urls_json->>'canticum' = $1 LIMIT 1",
-        [track.songId]
+    // For tracks not found by canticum ID, prepare fallback batch query
+    const tracksNeedingFallback = input.tracks.filter(t => !songMap.has(t.songId) && t.songTitle);
+    let fallbackSongMap = new Map<string, number>();
+    
+    if (tracksNeedingFallback.length > 0) {
+      const songTitles = tracksNeedingFallback.map(t => t.songTitle);
+      const fallbackResults = await client.query<{ id: number; title: string }>(
+        `SELECT id, title FROM songs WHERE title = ANY($1) AND artist_id = $2`,
+        [songTitles, input.artistId]
       );
+      fallbackSongMap = new Map(fallbackResults.rows.map(r => [r.title, r.id]));
+      console.log(`[albums] Found ${fallbackSongMap.size} songs via title/artist fallback`);
+    }
 
-      console.log(`[albums] Query result for song ${track.songId}: ${songResult.rows.length} rows found`);
-
-      if (songResult.rows.length > 0) {
-        sqlSongId = songResult.rows[0].id;
-        console.log(`[albums] Found SQL song ID via canticum ID: ${sqlSongId}`);
-      } else {
-        // Fallback: try to find by title and artist if songTitle is provided
-        if (track.songTitle) {
-          console.log(`[albums] Trying fallback search by title and artist for: ${track.songTitle}`);
-          const fallbackResult = await client.query<{ id: number }>(
-            'SELECT id FROM songs WHERE title = $1 AND artist_id = $2 LIMIT 1',
-            [track.songTitle, input.artistId]
-          );
-          
-          if (fallbackResult.rows.length > 0) {
-            sqlSongId = fallbackResult.rows[0].id;
-            console.log(`[albums] Found SQL song ID via title/artist fallback: ${sqlSongId}`);
-          } else {
-            console.warn(`[albums] Song not found via fallback: ${track.songTitle}`);
-          }
-        } else {
-          console.warn(`[albums] No songTitle provided for fallback search`);
-        }
+    // Insert album_songs using the pre-fetched maps
+    for (const track of input.tracks) {
+      let sqlSongId: number | null = songMap.get(track.songId) ?? null;
+      
+      if (!sqlSongId && track.songTitle) {
+        sqlSongId = fallbackSongMap.get(track.songTitle) ?? null;
       }
 
       if (sqlSongId) {

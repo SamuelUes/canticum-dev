@@ -475,7 +475,8 @@ export const search = functions.https.onRequest(async (req, res) => {
 
   const emptySnap = { docs: [] as FirebaseFirestore.QueryDocumentSnapshot[] };
 
-  const [publicSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, adminSongsSnap, albumsSnap, repertoiresSnap, artistsSnap] = await Promise.all([
+  // PARALLELIZE ALL INDEPENDENT QUERIES - Critical optimization
+  const [publicSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, adminSongsSnap, albumsSnap, repertoiresSnap, artistsSnap, sqlTopSongs, sqlCategorySlugs, sqlArtists] = await Promise.all([
     wants('song')
       ? db.collection('songs')
         .where('status', 'in', ['APPROVED', 'PUBLISHED'])
@@ -501,7 +502,10 @@ export const search = functions.https.onRequest(async (req, res) => {
       : Promise.resolve(emptySnap),
     wants('artist')
       ? db.collection('artists').limit(firestoreScanLimit).get()
-      : Promise.resolve(emptySnap)
+      : Promise.resolve(emptySnap),
+    sqlTopSongsPromise,
+    sqlCategorySlugsPromise,
+    sqlArtistsPromise
   ]);
 
   const songs: SearchItem[] = [];
@@ -558,7 +562,6 @@ export const search = functions.https.onRequest(async (req, res) => {
     }
   });
 
-  const sqlTopSongs = await sqlTopSongsPromise;
   if (sqlTopSongs) {
     sqlTopSongs.forEach((row) => {
       if (seenSqlSongIds.has(row.sqlSongId)) {
@@ -679,7 +682,6 @@ export const search = functions.https.onRequest(async (req, res) => {
     if (matchesQuery(item, query)) artists.push(item);
   });
 
-  const sqlArtists = await sqlArtistsPromise;
   if (sqlArtists) {
     const artistIndexById = new Map<string, number>();
     artists.forEach((item, index) => {
@@ -726,7 +728,6 @@ export const search = functions.https.onRequest(async (req, res) => {
     });
   }
 
-  const sqlCategorySlugs = await sqlCategorySlugsPromise;
   const orderedCategories: string[] = [];
   const seenOrderedCategories = new Set<string>();
 

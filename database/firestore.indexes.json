@@ -109,6 +109,22 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "bookmarks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "instrumentations",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "versionId", "order": "ASCENDING" },
+        { "fieldPath": "instrumentName", "order": "ASCENDING" }
+      ]
     }
   ]
 }

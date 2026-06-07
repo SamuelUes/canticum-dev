@@ -9,7 +9,11 @@ interface SkeletonThemeProviderProps {
 
 export function AppSkeletonThemeProvider({ children }: SkeletonThemeProviderProps) {
   return (
-    <SkeletonTheme baseColor="#eceff2" highlightColor="#f7f9fb" duration={1.2}>
+    <SkeletonTheme 
+      baseColor="var(--surface-container-low)" 
+      highlightColor="var(--surface-container)" 
+      duration={1.5}
+    >
       {children}
     </SkeletonTheme>
   );

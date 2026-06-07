@@ -79,6 +79,8 @@ export function AccountWorkspace() {
   const [bootstrapLoading, setBootstrapLoading] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapSuccess, setBootstrapSuccess] = useState<string | null>(null);
+  const [isDeletingOldSongs, setIsDeletingOldSongs] = useState(false);
+  const [deleteResult, setDeleteResult] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -273,6 +275,37 @@ export function AccountWorkspace() {
     setBootstrapLoading(false);
   };
 
+  const handleBulkDeleteOldSongs = async () => {
+    const confirm = window.confirm(
+      '¿Estás seguro? Esta acción eliminará TODAS las canciones creadas antes del 10 de agosto de 2026. ' +
+      'Esta acción no se puede deshacer.'
+    );
+    if (!confirm) return;
+
+    setIsDeletingOldSongs(true);
+    setDeleteResult(null);
+
+    try {
+      const response = await fetch('/api/songs/admin/bulk-delete-before-date', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      if (response.ok) {
+        setDeleteResult(`Eliminadas ${result.deletedCount} canciones de Cloud SQL y ${result.firestoreDeletedCount} de Firestore.`);
+        await invalidateAccountSummaryCache();
+        const updated = await fetchAccountSummary();
+        setSummary(updated);
+      } else {
+        setDeleteResult(`Error: ${result.error || 'No se pudo completar la eliminación.'}`);
+      }
+    } catch (error) {
+      setDeleteResult(`Error al eliminar canciones: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+    } finally {
+      setIsDeletingOldSongs(false);
+    }
+  };
+
   return (
     <section className="account-page-layout layout-h-margin">
       <header className="account-page-head">
@@ -319,6 +352,24 @@ export function AccountWorkspace() {
             </button>
             {bootstrapError ? <p className="create-form-error">{bootstrapError}</p> : null}
             {bootstrapSuccess ? <p className="create-form-success">{bootstrapSuccess}</p> : null}
+
+            {user?.role === 'admin' && (
+              <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb' }}>
+                <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+                  Acciones de administrador
+                </p>
+                <button
+                  type="button"
+                  className="create-form-submit"
+                  style={{ backgroundColor: '#dc2626', color: 'white' }}
+                  onClick={() => void handleBulkDeleteOldSongs()}
+                  disabled={isDeletingOldSongs}
+                >
+                  {isDeletingOldSongs ? 'Eliminando...' : 'Eliminar canciones antes del 10 de agosto de 2026'}
+                </button>
+                {deleteResult ? <p className={deleteResult.startsWith('Error') ? 'create-form-error' : 'create-form-success'} style={{ marginTop: '0.5rem' }}>{deleteResult}</p> : null}
+              </div>
+            )}
           </div>
         ) : null}
       </article>

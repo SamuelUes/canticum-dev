@@ -1,14 +1,28 @@
 import { type Pool } from 'pg';
 import { getSharedPool } from './pool';
 
-export interface VersionInput {
-  versionName: string;
+export interface InstrumentationInput {
+  instrumentationId?: string | null;
   instrumentName: string;
-  artistId?: number | null;
-  artistName?: string | null;
+  lyrics?: string | null;
+  lyricsFileUrl?: string | null;
+  sheetFileUrl?: string | null;
+  audioReferenceUrl?: string | null;
   tone?: string | null;
   notationType?: string | null;
+}
+
+export interface VersionInput {
+  versionName: string;
+  artistId?: number | null;
+  artistName?: string | null;
+  audioMode: 'shared' | 'per_instrumentation';
   audioReferenceUrl?: string | null;
+  instrumentations: InstrumentationInput[];
+  // Legacy fields for backward compatibility
+  instrumentName?: string;
+  tone?: string | null;
+  notationType?: string | null;
 }
 /*------*/
 export interface UpdateSongMetadataInput {
@@ -184,6 +198,7 @@ export interface CloudSqlSongVersionRow {
   artistId: number | null;
   artistName: string | null;
   audioReferenceUrl: string | null;
+  audioMode?: string | null;
 }
 
 interface CloudSqlSongDraftRow {
@@ -250,7 +265,7 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
   const client = await getPool().connect();
   const versionInputs = input.versions.length > 0
     ? input.versions
-    : [{ versionName: 'Versión 1', instrumentName: 'Letra' }];
+    : [{ versionName: 'Versión 1', audioMode: 'shared' as const, instrumentations: [{ instrumentName: 'Letra' }] }];
   const normalizedCoverUrl = typeof input.coverImageUrl === 'string' && input.coverImageUrl.trim().length > 0
     ? input.coverImageUrl.trim()
     : null;
@@ -299,59 +314,155 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
     const versions: CloudSqlSongVersionRow[] = [];
 
     for (const vi of versionInputs) {
-      const instrumentName = (vi.instrumentName ?? 'Letra').trim() || 'Letra';
-      const instrumentResult = await client.query<{ id: number; name: string }>(
-        `
-          INSERT INTO instruments (name)
-          VALUES ($1)
-          ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
-          RETURNING id, name;
-        `,
-        [instrumentName]
-      );
+      // Check if this is a legacy version (has instrumentName directly)
+      const isLegacy = 'instrumentName' in vi && typeof vi.instrumentName === 'string';
 
-      if (!instrumentResult.rows.length) {
-        throw new Error(`Cloud SQL instrument upsert returned no rows for instrument '${instrumentName}'.`);
+      if (isLegacy) {
+        // Legacy mode: create version with direct instrument reference
+        const legacyVi = vi as { versionName: string; instrumentName: string; artistId?: number | null; artistName?: string | null; tone?: string | null; notationType?: string | null; audioReferenceUrl?: string | null };
+        const instrumentName = (legacyVi.instrumentName ?? 'Letra').trim() || 'Letra';
+
+        const instrumentResult = await client.query<{ id: number; name: string }>(
+          `
+            INSERT INTO instruments (name)
+            VALUES ($1)
+            ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
+            RETURNING id, name;
+          `,
+          [instrumentName]
+        );
+
+        if (!instrumentResult.rows.length) {
+          throw new Error(`Cloud SQL instrument upsert returned no rows for instrument '${instrumentName}'.`);
+        }
+
+        const instrumentId = instrumentResult.rows[0].id;
+        const versionArtistId = legacyVi.artistId ?? null;
+
+        const versionResult = await client.query<{ id: number; versionName: string; instrumentId: number | null; artistId: number | null; audioReferenceUrl: string | null }>(
+          `
+            INSERT INTO song_versions (
+              song_id,
+              artist_id,
+              instrument_id,
+              version_name,
+              tone,
+              notation_type,
+              audio_reference_url,
+              is_premium
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+            RETURNING id, version_name AS "versionName", instrument_id AS "instrumentId", artist_id AS "artistId", audio_reference_url AS "audioReferenceUrl";
+          `,
+          [
+            songRow.id,
+            versionArtistId,
+            instrumentId,
+            (legacyVi.versionName ?? 'Versión 1').trim() || 'Versión 1',
+            legacyVi.tone ?? null,
+            legacyVi.notationType ?? null,
+            legacyVi.audioReferenceUrl ?? null
+          ]
+        );
+
+        if (!versionResult.rows.length) {
+          throw new Error('Cloud SQL song version insert returned no rows.');
+        }
+
+        versions.push({
+          ...versionResult.rows[0],
+          instrumentName,
+          artistName: legacyVi.artistName ?? null
+        });
+      } else {
+        // New mode: create version with audio_mode and instrumentations
+        const newVi = vi as VersionInput;
+        const versionArtistId = newVi.artistId ?? null;
+        const audioMode = newVi.audioMode ?? 'shared';
+
+        const versionResult = await client.query<{ id: number; versionName: string; instrumentId: number | null; artistId: number | null; audioReferenceUrl: string | null }>(
+          `
+            INSERT INTO song_versions (
+              song_id,
+              artist_id,
+              version_name,
+              audio_mode,
+              audio_reference_url,
+              is_premium
+            )
+            VALUES ($1, $2, $3, $4, $5, FALSE)
+            RETURNING id, version_name AS "versionName", NULL::INT AS "instrumentId", artist_id AS "artistId", audio_reference_url AS "audioReferenceUrl";
+          `,
+          [
+            songRow.id,
+            versionArtistId,
+            (newVi.versionName ?? 'Versión 1').trim() || 'Versión 1',
+            audioMode,
+            audioMode === 'shared' ? (newVi.audioReferenceUrl ?? null) : null
+          ]
+        );
+
+        if (!versionResult.rows.length) {
+          throw new Error('Cloud SQL song version insert returned no rows.');
+        }
+
+        const versionId = versionResult.rows[0].id;
+
+        // Insert instrumentations
+        for (const inst of newVi.instrumentations) {
+          const instName = (inst.instrumentName ?? 'Letra').trim() || 'Letra';
+
+          const instrumentResult = await client.query<{ id: number; name: string }>(
+            `
+              INSERT INTO instruments (name)
+              VALUES ($1)
+              ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
+              RETURNING id, name;
+            `,
+            [instName]
+          );
+
+          if (!instrumentResult.rows.length) {
+            throw new Error(`Cloud SQL instrument upsert returned no rows for instrument '${instName}'.`);
+          }
+
+          const instrumentId = instrumentResult.rows[0].id;
+
+          await client.query(
+            `
+              INSERT INTO song_version_instrumentations (
+                song_version_id,
+                instrument_id,
+                instrument_name,
+                lyrics,
+                lyrics_file_url,
+                sheet_file_url,
+                audio_reference_url,
+                tone,
+                notation_type
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+            `,
+            [
+              versionId,
+              instrumentId,
+              instName,
+              inst.lyrics ?? null,
+              inst.lyricsFileUrl ?? null,
+              inst.sheetFileUrl ?? null,
+              audioMode === 'per_instrumentation' ? (inst.audioReferenceUrl ?? null) : null,
+              inst.tone ?? null,
+              inst.notationType ?? null
+            ]
+          );
+        }
+
+        versions.push({
+          ...versionResult.rows[0],
+          instrumentName: null,
+          artistName: newVi.artistName ?? null
+        });
       }
-
-      const instrumentRow = instrumentResult.rows[0];
-      const versionArtistId = vi.artistId ?? null;
-
-      const versionResult = await client.query<{ id: number; versionName: string; instrumentId: number | null; artistId: number | null; audioReferenceUrl: string | null }>(
-        `
-          INSERT INTO song_versions (
-            song_id,
-            artist_id,
-            instrument_id,
-            version_name,
-            tone,
-            notation_type,
-            audio_reference_url,
-            is_premium
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
-          RETURNING id, version_name AS "versionName", instrument_id AS "instrumentId", artist_id AS "artistId", audio_reference_url AS "audioReferenceUrl";
-        `,
-        [
-          songRow.id,
-          versionArtistId,
-          instrumentRow.id,
-          (vi.versionName ?? 'Versión 1').trim() || 'Versión 1',
-          vi.tone ?? null,
-          vi.notationType ?? null,
-          vi.audioReferenceUrl ?? null
-        ]
-      );
-
-      if (!versionResult.rows.length) {
-        throw new Error('Cloud SQL song version insert returned no rows.');
-      }
-
-      versions.push({
-        ...versionResult.rows[0],
-        instrumentName: instrumentRow.name,
-        artistName: vi.artistName ?? null
-      });
     }
 
     await client.query('COMMIT');
@@ -370,6 +481,48 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
 
 export async function deleteSongByIdInCloudSql(songId: number): Promise<void> {
   await getPool().query('DELETE FROM songs WHERE id = $1;', [songId]);
+}
+
+export async function listSongIdsCreatedBefore(date: Date): Promise<number[]> {
+  const result = await getPool().query<{ id: number }>(
+    `
+      SELECT id
+      FROM songs
+      WHERE created_at < $1
+      ORDER BY created_at ASC;
+    `,
+    [date]
+  );
+  return result.rows.map((row) => row.id);
+}
+
+export async function bulkDeleteSongsByIds(songIds: number[]): Promise<{ deletedCount: number; errors: string[] }> {
+  const client = await getPool().connect();
+  const errors: string[] = [];
+  let deletedCount = 0;
+
+  try {
+    await client.query('BEGIN');
+
+    for (const songId of songIds) {
+      try {
+        const result = await client.query('DELETE FROM songs WHERE id = $1 RETURNING id;', [songId]);
+        if (result.rowCount && result.rowCount > 0) {
+          deletedCount++;
+        }
+      } catch (error) {
+        errors.push(`Failed to delete song ${songId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    await client.query('COMMIT');
+    return { deletedCount, errors };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export interface ArtistSongRow {
@@ -530,6 +683,9 @@ export async function listFeaturedSongsSnapshot(limit: number = 50, snapshotWeek
 
   const result = await getPool().query<FeaturedSongSnapshotRow>(
     `
+      WITH latest_week AS (
+        SELECT MAX(snapshot_week) AS max_week FROM featured_songs
+      )
       SELECT
         fs.snapshot_week::TEXT AS "snapshotWeek",
         fs.rank_position AS "rankPosition",
@@ -544,7 +700,8 @@ export async function listFeaturedSongsSnapshot(limit: number = 50, snapshotWeek
       FROM featured_songs fs
       INNER JOIN songs s ON s.id = fs.song_id
       LEFT JOIN artists a ON a.id = s.artist_id
-      WHERE fs.snapshot_week = COALESCE($2::DATE, (SELECT MAX(snapshot_week) FROM featured_songs))
+      CROSS JOIN latest_week lw
+      WHERE fs.snapshot_week = COALESCE($2::DATE, lw.max_week)
       ORDER BY fs.rank_position ASC
       LIMIT $1;
     `,
@@ -642,36 +799,37 @@ async function syncArtistMetricsById(
   artistId: number,
   client: { query: Pool['query'] }
 ): Promise<void> {
-  const aggregate = await client.query<{ totalViews: number }>(
-    `
-      SELECT
-        COALESCE(SUM(song_metrics.total_views), 0)::INT AS "totalViews"
-      FROM (
-        SELECT DISTINCT
-          s.id,
-          COALESCE(s.total_views, 0)::INT AS total_views
-        FROM songs s
-        LEFT JOIN song_versions sv ON sv.song_id = s.id
-        WHERE s.artist_id = $1
-          OR sv.artist_id = $1
-      ) AS song_metrics;
-    `,
-    [artistId]
-  );
+  const [aggregate, currentArtist] = await Promise.all([
+    client.query<{ totalViews: number }>(
+      `
+        SELECT
+          COALESCE(SUM(song_metrics.total_views), 0)::INT AS "totalViews"
+        FROM (
+          SELECT DISTINCT
+            s.id,
+            COALESCE(s.total_views, 0)::INT AS total_views
+          FROM songs s
+          LEFT JOIN song_versions sv ON sv.song_id = s.id
+          WHERE s.artist_id = $1
+            OR sv.artist_id = $1
+        ) AS song_metrics;
+      `,
+      [artistId]
+    ),
+    client.query<{ totalViews: number; likeCount: number }>(
+      `
+        SELECT
+          COALESCE(total_views, 0)::INT AS "totalViews",
+          COALESCE(like_count, 0)::INT AS "likeCount"
+        FROM artists
+        WHERE id = $1
+        LIMIT 1;
+      `,
+      [artistId]
+    )
+  ]);
 
   const aggregateViews = Number(aggregate.rows[0]?.totalViews ?? 0);
-  const currentArtist = await client.query<{ totalViews: number; likeCount: number }>(
-    `
-      SELECT
-        COALESCE(total_views, 0)::INT AS "totalViews",
-        COALESCE(like_count, 0)::INT AS "likeCount"
-      FROM artists
-      WHERE id = $1
-      LIMIT 1;
-    `,
-    [artistId]
-  );
-
   const currentViews = Number(currentArtist.rows[0]?.totalViews ?? 0);
   const currentLikes = Number(currentArtist.rows[0]?.likeCount ?? 0);
   const resolvedViews = Math.max(aggregateViews, currentViews, 0);
@@ -899,22 +1057,6 @@ export async function setSongFavoriteInCloudSql(firebaseUid: string, sqlSongId: 
       return null;
     }
 
-    if (isFavorite) {
-      await client.query(
-        `
-          INSERT INTO favorites (user_id, song_id)
-          VALUES ($1, $2)
-          ON CONFLICT (user_id, song_id) DO NOTHING;
-        `,
-        [userId, sqlSongId]
-      );
-    } else {
-      await client.query(
-        'DELETE FROM favorites WHERE user_id = $1 AND song_id = $2;',
-        [userId, sqlSongId]
-      );
-    }
-
     const aggregateResult = await client.query<{
       id: number;
       totalViews: number;
@@ -922,20 +1064,36 @@ export async function setSongFavoriteInCloudSql(firebaseUid: string, sqlSongId: 
       artistId: number | null;
     }>(
       `
-        UPDATE songs s
-        SET like_count = (
-          SELECT COUNT(*)::INT
-          FROM favorites f
-          WHERE f.song_id = s.id
+        WITH song_update AS (
+          UPDATE songs s
+          SET 
+            like_count = (
+              SELECT COUNT(*)::INT
+              FROM favorites f
+              WHERE f.song_id = s.id
+            ),
+            popularity = compute_song_popularity(
+              COALESCE(s.total_views, 0),
+              (
+                SELECT COUNT(*)::INT
+                FROM favorites f
+                WHERE f.song_id = s.id
+              )
+            )
+          WHERE s.id = $1
+          RETURNING
+            s.id,
+            COALESCE(s.total_views, 0)::INT AS "totalViews",
+            COALESCE(s.like_count, 0)::INT AS "likeCount",
+            s.artist_id AS "artistId"
         )
-        WHERE s.id = $1
-        RETURNING
-          s.id,
-          COALESCE(s.total_views, 0)::INT AS "totalViews",
-          COALESCE(s.like_count, 0)::INT AS "likeCount",
-          s.artist_id AS "artistId";
+        ${isFavorite 
+          ? `INSERT INTO favorites (user_id, song_id) VALUES ($2, $1) ON CONFLICT (user_id, song_id) DO NOTHING`
+          : `DELETE FROM favorites WHERE user_id = $2 AND song_id = $1`
+        };
+        SELECT * FROM song_update;
       `,
-      [sqlSongId]
+      [sqlSongId, userId]
     );
 
     if (!aggregateResult.rows.length) {
@@ -944,9 +1102,6 @@ export async function setSongFavoriteInCloudSql(firebaseUid: string, sqlSongId: 
     }
 
     const updated = aggregateResult.rows[0];
-    const popularity = computeSongPopularity(updated.totalViews, updated.likeCount);
-
-    await client.query('UPDATE songs SET popularity = $2 WHERE id = $1;', [sqlSongId, popularity]);
 
     if (updated.artistId && Number.isFinite(updated.artistId)) {
       await syncArtistMetricsById(updated.artistId, client);
@@ -958,7 +1113,7 @@ export async function setSongFavoriteInCloudSql(firebaseUid: string, sqlSongId: 
       sqlSongId,
       totalViews: updated.totalViews,
       likeCount: updated.likeCount,
-      popularity,
+      popularity: computeSongPopularity(updated.totalViews, updated.likeCount),
       artistId: updated.artistId
     };
   } catch (error) {
@@ -1057,22 +1212,79 @@ export async function addVersionsToExistingSong(sqlSongId: number, versions: Ver
     }
 
     for (const vi of versions) {
-      const instrumentName = (vi.instrumentName ?? 'Letra').trim() || 'Letra';
-      const instrumentResult = await client.query<{ id: number; name: string }>(
-        `
-          INSERT INTO instruments (name)
-          VALUES ($1)
-          ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
-          RETURNING id, name;
-        `,
-        [instrumentName]
-      );
+      const isLegacy = 'instrumentName' in vi && typeof vi.instrumentName === 'string';
 
-      if (!instrumentResult.rows.length) {
-        throw new Error(`Cloud SQL instrument upsert returned no rows for instrument '${instrumentName}'.`);
+      if (isLegacy) {
+        const instrumentName = (vi.instrumentName ?? 'Letra').trim() || 'Letra';
+        const instrumentResult = await client.query<{ id: number; name: string }>(
+          `
+            INSERT INTO instruments (name)
+            VALUES ($1)
+            ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
+            RETURNING id, name;
+          `,
+          [instrumentName]
+        );
+
+        if (!instrumentResult.rows.length) {
+          throw new Error(`Cloud SQL instrument upsert returned no rows for instrument '${instrumentName}'.`);
+        }
+
+        const instrumentRow = instrumentResult.rows[0];
+        const versionResult = await client.query<{
+          id: number;
+          versionName: string;
+          instrumentId: number | null;
+          artistId: number | null;
+          audioReferenceUrl: string | null;
+        }>(
+          `
+            INSERT INTO song_versions (
+              song_id,
+              artist_id,
+              instrument_id,
+              version_name,
+              tone,
+              notation_type,
+              audio_reference_url,
+              is_premium
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+            RETURNING
+              id,
+              version_name AS "versionName",
+              instrument_id AS "instrumentId",
+              artist_id AS "artistId",
+              audio_reference_url AS "audioReferenceUrl";
+          `,
+          [
+            sqlSongId,
+            vi.artistId ?? null,
+            instrumentRow.id,
+            (vi.versionName ?? 'Versión 1').trim() || 'Versión 1',
+            vi.tone ?? null,
+            vi.notationType ?? null,
+            vi.audioReferenceUrl ?? null
+          ]
+        );
+
+        if (!versionResult.rows.length) {
+          throw new Error('Cloud SQL song version insert returned no rows.');
+        }
+
+        inserted.push({
+          ...versionResult.rows[0],
+          instrumentName: instrumentRow.name,
+          artistName: vi.artistName ?? null
+        });
+        continue;
       }
 
-      const instrumentRow = instrumentResult.rows[0];
+      const audioMode = vi.audioMode ?? 'shared';
+      const normalizedInstrumentations = Array.isArray(vi.instrumentations) && vi.instrumentations.length > 0
+        ? vi.instrumentations
+        : [{ instrumentName: vi.instrumentName ?? 'Letra' }];
+
       const versionResult = await client.query<{
         id: number;
         versionName: string;
@@ -1084,29 +1296,25 @@ export async function addVersionsToExistingSong(sqlSongId: number, versions: Ver
           INSERT INTO song_versions (
             song_id,
             artist_id,
-            instrument_id,
             version_name,
-            tone,
-            notation_type,
+            audio_mode,
             audio_reference_url,
             is_premium
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+          VALUES ($1, $2, $3, $4, $5, FALSE)
           RETURNING
             id,
             version_name AS "versionName",
-            instrument_id AS "instrumentId",
+            NULL::INT AS "instrumentId",
             artist_id AS "artistId",
             audio_reference_url AS "audioReferenceUrl";
         `,
         [
           sqlSongId,
           vi.artistId ?? null,
-          instrumentRow.id,
           (vi.versionName ?? 'Versión 1').trim() || 'Versión 1',
-          vi.tone ?? null,
-          vi.notationType ?? null,
-          vi.audioReferenceUrl ?? null
+          audioMode,
+          audioMode === 'shared' ? (vi.audioReferenceUrl ?? null) : null
         ]
       );
 
@@ -1114,10 +1322,60 @@ export async function addVersionsToExistingSong(sqlSongId: number, versions: Ver
         throw new Error('Cloud SQL song version insert returned no rows.');
       }
 
+      const versionId = versionResult.rows[0].id;
+
+      for (const inst of normalizedInstrumentations) {
+        const instName = (inst.instrumentName ?? 'Letra').trim() || 'Letra';
+        const instrumentResult = await client.query<{ id: number; name: string }>(
+          `
+            INSERT INTO instruments (name)
+            VALUES ($1)
+            ON CONFLICT ((lower(name))) DO UPDATE SET name = instruments.name
+            RETURNING id, name;
+          `,
+          [instName]
+        );
+
+        if (!instrumentResult.rows.length) {
+          throw new Error(`Cloud SQL instrument upsert returned no rows for instrument '${instName}'.`);
+        }
+
+        const instrumentId = instrumentResult.rows[0].id;
+
+        await client.query(
+          `
+            INSERT INTO song_version_instrumentations (
+              song_version_id,
+              instrument_id,
+              instrument_name,
+              lyrics,
+              lyrics_file_url,
+              sheet_file_url,
+              audio_reference_url,
+              tone,
+              notation_type
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+          `,
+          [
+            versionId,
+            instrumentId,
+            instName,
+            inst.lyrics ?? null,
+            inst.lyricsFileUrl ?? null,
+            inst.sheetFileUrl ?? null,
+            audioMode === 'per_instrumentation' ? (inst.audioReferenceUrl ?? null) : null,
+            inst.tone ?? null,
+            inst.notationType ?? null
+          ]
+        );
+      }
+
       inserted.push({
         ...versionResult.rows[0],
-        instrumentName: instrumentRow.name,
-        artistName: vi.artistName ?? null
+        instrumentName: null,
+        artistName: vi.artistName ?? null,
+        audioMode
       });
     }
 

@@ -487,3 +487,160 @@ export async function requestCreaterepertoire(payload: CreaterepertoirePayload):
     return { ok: false, reason: 'network' };
   }
 }
+
+// Bookmark functionality for repertoires
+const BOOKMARK_CACHE_PREFIX = 'canticum:bookmarks:v1:';
+const REMOTE_SYNC_DEBOUNCE_MS = 500;
+const bookmarkCache = new Map<string, boolean>();
+const pendingBookmarkLoads = new Map<string, Promise<boolean | null>>();
+const pendingBookmarkSyncTimeout = new Map<string, number>();
+const lastSyncedBookmark = new Map<string, boolean>();
+
+function getBookmarkLocalStorageKey(repertoireId: string): string {
+  return `${BOOKMARK_CACHE_PREFIX}${repertoireId}`;
+}
+
+function readLocalBookmark(repertoireId: string): boolean | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getBookmarkLocalStorageKey(repertoireId));
+    if (raw === null) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'boolean' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalBookmark(repertoireId: string, isBookmarked: boolean): boolean {
+  if (typeof window === 'undefined') {
+    return isBookmarked;
+  }
+
+  try {
+    window.localStorage.setItem(getBookmarkLocalStorageKey(repertoireId), JSON.stringify(isBookmarked));
+    bookmarkCache.set(repertoireId, isBookmarked);
+    return isBookmarked;
+  } catch {
+    return isBookmarked;
+  }
+}
+
+export async function loadRepertoireBookmark(repertoireId: string): Promise<boolean | null> {
+  const cached = bookmarkCache.get(repertoireId);
+  if (typeof cached === 'boolean') {
+    return cached;
+  }
+
+  const inflight = pendingBookmarkLoads.get(repertoireId);
+  if (inflight) {
+    return inflight;
+  }
+
+  const local = readLocalBookmark(repertoireId);
+  if (typeof local === 'boolean') {
+    bookmarkCache.set(repertoireId, local);
+  }
+
+  if (!functionsBaseUrl) {
+    return local;
+  }
+
+  const task = (async () => {
+    try {
+      const userId = await getCurrentUserId();
+      if (userId === 'anonymous') {
+        return local;
+      }
+
+      const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
+      const response = await fetch(`${functionsBaseUrl}/users/${encodeURIComponent(userId)}/bookmarks/${encodeURIComponent(repertoireId)}`, {
+        method: 'GET',
+        headers
+      });
+
+      if (response.status === 404) {
+        return saveLocalBookmark(repertoireId, false);
+      }
+
+      if (!response.ok) {
+        return local;
+      }
+
+      const payload = (await response.json()) as { isBookmarked?: boolean };
+      const remoteBookmarked = payload.isBookmarked;
+
+      if (typeof remoteBookmarked !== 'boolean') {
+        return local;
+      }
+
+      return saveLocalBookmark(repertoireId, remoteBookmarked);
+    } catch {
+      return local;
+    } finally {
+      pendingBookmarkLoads.delete(repertoireId);
+    }
+  })();
+
+  pendingBookmarkLoads.set(repertoireId, task);
+  return task;
+}
+
+export async function saveRepertoireBookmark(repertoireId: string, isBookmarked: boolean): Promise<void> {
+  const cached = bookmarkCache.get(repertoireId);
+  const merged = saveLocalBookmark(repertoireId, isBookmarked);
+
+  if (cached === merged) {
+    return;
+  }
+
+  if (!functionsBaseUrl) {
+    return;
+  }
+
+  const existingTimeout = pendingBookmarkSyncTimeout.get(repertoireId);
+  if (typeof existingTimeout === 'number') {
+    window.clearTimeout(existingTimeout);
+  }
+
+  const timeoutId = window.setTimeout(async () => {
+    pendingBookmarkSyncTimeout.delete(repertoireId);
+
+    try {
+      const userId = await getCurrentUserId();
+      if (userId === 'anonymous') {
+        return;
+      }
+
+      if (lastSyncedBookmark.get(repertoireId) === merged) {
+        return;
+      }
+
+      const headers = await buildFunctionsHeaders({
+        'Content-Type': 'application/json'
+      });
+
+      const response = await fetch(
+        `${functionsBaseUrl}/users/${encodeURIComponent(userId)}/bookmarks/${encodeURIComponent(repertoireId)}`,
+        {
+          method: merged ? 'PUT' : 'DELETE',
+          headers
+        }
+      );
+
+      if (response.ok) {
+        lastSyncedBookmark.set(repertoireId, merged);
+      }
+    } catch {
+      return;
+    }
+  }, REMOTE_SYNC_DEBOUNCE_MS);
+
+  pendingBookmarkSyncTimeout.set(repertoireId, timeoutId);
+}

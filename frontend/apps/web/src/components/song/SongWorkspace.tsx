@@ -5,8 +5,10 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AudioPlayer } from './AudioPlayer';
+import { SheetRenderer } from './SheetRenderer';
 import { getArtistProfileHref } from '../../features/artist/routing';
 import { useAuth } from '../../context/AuthContext';
+import { useAudio } from '../../context/AudioContext';
 import { usePremiumNavigation } from '../../hooks/usePremiumNavigation';
 import {
   loadSongFavorite,
@@ -16,7 +18,7 @@ import {
   saveSongUserPreferences
 } from '../../features/song/clientPersistence';
 import { requestUpdateSongStatus } from '../../features/song/repository';
-import type { SongDetail } from '../../types/song';
+import type { SongDetail, SongVersion } from '../../types/song';
 
 type SongEditorialStatus = 'IN_REVIEW' | 'REJECTED' | 'APPROVED' | 'PUBLISHED';
 
@@ -38,24 +40,103 @@ function isSongEditorialStatus(value: string): value is SongEditorialStatus {
   return value === 'IN_REVIEW' || value === 'REJECTED' || value === 'APPROVED' || value === 'PUBLISHED';
 }
 
-
-function getSheetFileExtension(url: string): string {
-  if (!url) {
-    return '';
+function resolveSelectedInstrumentId(
+  song: Pick<SongDetail, 'currentInstrumentId' | 'instruments'>,
+  version?: Pick<SongVersion, 'instrumentId'> | null
+): string {
+  const versionInstrumentId = typeof version?.instrumentId === 'string' ? version.instrumentId.trim() : '';
+  if (versionInstrumentId && song.instruments.some((instrument) => instrument.id === versionInstrumentId)) {
+    return versionInstrumentId;
   }
 
-  const cleaned = url.split('?')[0]?.split('#')[0] ?? '';
-  const dot = cleaned.lastIndexOf('.');
-  if (dot < 0) {
-    return '';
+  const currentInstrumentId = typeof song.currentInstrumentId === 'string' ? song.currentInstrumentId.trim() : '';
+  if (currentInstrumentId && song.instruments.some((instrument) => instrument.id === currentInstrumentId)) {
+    return currentInstrumentId;
   }
 
-  return cleaned.slice(dot + 1).toLowerCase();
+  return song.instruments[0]?.id ?? '';
 }
 
-function isMusicXmlSheet(url: string): boolean {
-  const extension = getSheetFileExtension(url);
-  return extension === 'xml' || extension === 'musicxml' || extension === 'mxl';
+function resolveVersionInstrumentationId(
+  version?: Pick<SongVersion, 'instrumentations'> | null,
+  preferredId?: string
+): string {
+  const instrumentations = Array.isArray(version?.instrumentations) ? version?.instrumentations : [];
+  if (instrumentations.length === 0) {
+    return '';
+  }
+
+  const preferred = typeof preferredId === 'string' ? preferredId.trim() : '';
+  if (preferred) {
+    const preferredMatch = instrumentations.find((instrumentation) => {
+      const instrumentationId = typeof instrumentation.instrumentationId === 'string'
+        ? instrumentation.instrumentationId.trim()
+        : typeof instrumentation.id === 'string'
+          ? instrumentation.id.trim()
+          : '';
+      return instrumentationId === preferred;
+    });
+
+    if (preferredMatch) {
+      return typeof preferredMatch.instrumentationId === 'string' && preferredMatch.instrumentationId.trim().length > 0
+        ? preferredMatch.instrumentationId.trim()
+        : preferredMatch.id;
+    }
+  }
+
+  const firstInstrumentation = instrumentations[0];
+  if (!firstInstrumentation) {
+    return '';
+  }
+
+  return typeof firstInstrumentation.instrumentationId === 'string' && firstInstrumentation.instrumentationId.trim().length > 0
+    ? firstInstrumentation.instrumentationId.trim()
+    : firstInstrumentation.id;
+}
+
+type SongWorkspaceInstrumentationOption = {
+  id: string;
+  name: string;
+  lyrics?: string;
+  sheetFileUrl?: string;
+};
+
+function getInstrumentationOptions(song: SongDetail, version?: SongVersion | null): SongWorkspaceInstrumentationOption[] {
+  const nestedInstrumentations = Array.isArray(version?.instrumentations) ? version.instrumentations : [];
+
+  if (nestedInstrumentations.length > 0) {
+    return nestedInstrumentations.map((instrumentation) => ({
+      id: typeof instrumentation.instrumentationId === 'string' && instrumentation.instrumentationId.trim().length > 0
+        ? instrumentation.instrumentationId.trim()
+        : instrumentation.id,
+      name: instrumentation.instrumentName || instrumentation.instrumentationId || instrumentation.id || 'Instrumento',
+      lyrics: typeof instrumentation.lyrics === 'string' ? instrumentation.lyrics : undefined,
+      sheetFileUrl: typeof instrumentation.sheetFileUrl === 'string' ? instrumentation.sheetFileUrl : undefined
+    }));
+  }
+
+  return song.instruments.map((instrument) => ({
+    id: instrument.id,
+    name: instrument.name
+  }));
+}
+
+function getSelectedInstrumentationOption(
+  song: SongDetail,
+  version?: SongVersion | null,
+  selectedInstrumentId?: string
+): SongWorkspaceInstrumentationOption | undefined {
+  const options = getInstrumentationOptions(song, version);
+  const selectedId = typeof selectedInstrumentId === 'string' ? selectedInstrumentId.trim() : '';
+
+  if (selectedId) {
+    const selected = options.find((instrument) => instrument.id === selectedId);
+    if (selected) {
+      return selected;
+    }
+  }
+
+  return options[0];
 }
 
 interface SongWorkspaceProps {
@@ -68,6 +149,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { user } = useAuth();
+  const { playSong: playGlobalSong } = useAudio();
   const { openPremiumPlans } = usePremiumNavigation();
 
   const persistentTools = [
@@ -91,11 +173,12 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
     return song.currentVersionId;
   });
-  const [selectedInstrumentId, setSelectedInstrumentId] = useState(song.currentInstrumentId);
+  const [selectedInstrumentIdState, setSelectedInstrumentId] = useState(() => {
+    return resolveSelectedInstrumentId(song, song.versions.find((version) => version.id === song.currentVersionId) ?? song.versions[0]);
+  });
   const [isAutoScrolling, setIsAutoScrolling] = useState(false);
-  const scrollSpeed = 1;
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [songAccessMessage, setSongAccessMessage] = useState('');
-  const [isRenderingSheet, setIsRenderingSheet] = useState(false);
   const [sheetRenderError, setSheetRenderError] = useState('');
   const [songStatusSelection, setSongStatusSelection] = useState<SongEditorialStatus>(() => {
     const raw = typeof song.status === 'string' ? song.status.trim().toUpperCase() : '';
@@ -105,7 +188,6 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const [isUpdatingSongStatus, setIsUpdatingSongStatus] = useState(false);
 
   const lyricsRef = useRef<HTMLDivElement>(null);
-  const sheetContainerRef = useRef<HTMLDivElement>(null);
   const audioTriggerTimeoutRef = useRef<number | null>(null);
   const hasTrackedEntryRef = useRef(false);
 
@@ -156,18 +238,36 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     return firstAllowed ?? song.versions[0];
   }, [hasAdvancedAccess, selectedVersionId, song.versions]);
 
+  const selectedInstrumentId = useMemo(() => {
+    const options = getInstrumentationOptions(song, selectedVersion);
+    if (options.length === 0) {
+      return resolveSelectedInstrumentId(song, selectedVersion);
+    }
+
+    const found = options.find((instrument) => instrument.id === selectedInstrumentIdState);
+    return found?.id ?? options[0]?.id ?? '';
+  }, [selectedInstrumentIdState, selectedVersion, song]);
+
   const selectedInstrument = useMemo(() => {
-    return song.instruments.find((instrument) => instrument.id === selectedInstrumentId) ?? song.instruments[0];
-  }, [selectedInstrumentId, song.instruments]);
+    return getSelectedInstrumentationOption(song, selectedVersion, selectedInstrumentId);
+  }, [selectedInstrumentId, selectedVersion, song]);
 
   const activeLyrics = useMemo(() => {
     if (typeof selectedVersion?.lyrics === 'string' && selectedVersion.lyrics.trim().length > 0) {
       return selectedVersion.lyrics;
     }
+    if (typeof selectedInstrument?.lyrics === 'string' && selectedInstrument.lyrics.trim().length > 0) {
+      return selectedInstrument.lyrics;
+    }
     return song.lyrics;
-  }, [selectedVersion?.lyrics, song.lyrics]);
+  }, [selectedInstrument?.lyrics, selectedVersion?.lyrics, song.lyrics]);
 
   const activeSheetUrl = useMemo(() => {
+    const fromInstrumentation = typeof selectedInstrument?.sheetFileUrl === 'string' ? selectedInstrument.sheetFileUrl.trim() : '';
+    if (fromInstrumentation.length > 0) {
+      return fromInstrumentation;
+    }
+
     const fromVersion = typeof selectedVersion?.sheetFileUrl === 'string' ? selectedVersion.sheetFileUrl.trim() : '';
     if (fromVersion.length > 0) {
       return fromVersion;
@@ -175,9 +275,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
     const legacySongSheet = typeof song.sheet === 'string' ? song.sheet.trim() : '';
     return legacySongSheet;
-  }, [selectedVersion?.sheetFileUrl, song.sheet]);
-
-  const shouldRenderMusicXmlSheet = useMemo(() => isMusicXmlSheet(activeSheetUrl), [activeSheetUrl]);
+  }, [selectedInstrument?.sheetFileUrl, selectedVersion?.sheetFileUrl, song.sheet]);
 
   const resolveCoverUrl = (value?: string | null) => (typeof value === 'string' && value.trim().length > 0 ? value.trim() : '');
   const coverImageUrl =
@@ -197,8 +295,8 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
         setSelectedVersionId(preferences.currentVersionId);
       }
 
-      if (preferences.currentInstrumentId && song.instruments.some((instrument) => instrument.id === preferences.currentInstrumentId)) {
-        setSelectedInstrumentId(preferences.currentInstrumentId);
+      if (typeof preferences.currentInstrumentId === 'string' && preferences.currentInstrumentId.trim().length > 0) {
+        setSelectedInstrumentId(preferences.currentInstrumentId.trim());
       }
     });
 
@@ -216,6 +314,22 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
     setSelectedVersionId(song.currentVersionId);
   }, [initialVersionId, song.currentVersionId, song.versions]);
+
+  useEffect(() => {
+    const options = getInstrumentationOptions(song, selectedVersion);
+    if (options.length === 0) {
+      return;
+    }
+
+    const current = selectedInstrumentIdState.trim();
+    const nextInstrumentId = options.some((instrument) => instrument.id === current)
+      ? current
+      : options[0].id;
+
+    if (nextInstrumentId !== current) {
+      setSelectedInstrumentId(nextInstrumentId);
+    }
+  }, [selectedInstrumentIdState, selectedVersion, song]);
 
   useEffect(() => {
     let isMounted = true;
@@ -243,6 +357,12 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
       return;
     }
 
+    // Calculate scroll speed based on audio duration if available
+    // Default to 1 if no audio or duration is unknown
+    const calculatedSpeed = audioDuration && audioDuration > 0 
+      ? Math.max(1, Math.floor(target.scrollHeight / (audioDuration * 60))) // Approximate pixels per second
+      : 1;
+
     const interval = window.setInterval(() => {
       const maxScrollTop = target.scrollHeight - target.clientHeight;
       if (target.scrollTop >= maxScrollTop - 1) {
@@ -250,13 +370,13 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
         return;
       }
 
-      target.scrollTop += scrollSpeed;
+      target.scrollTop += calculatedSpeed;
     }, 38);
 
     return () => {
       window.clearInterval(interval);
     };
-  }, [isAutoScrolling, scrollSpeed]);
+  }, [isAutoScrolling, audioDuration]);
 
   useEffect(() => {
     return () => {
@@ -275,6 +395,37 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   }, [song.id]);
 
   useEffect(() => {
+    if (!pathname) {
+      return;
+    }
+
+    const expectedVersionId = selectedVersion?.id ?? selectedVersionId;
+    const expectedInstrumentId = selectedInstrumentId;
+    const currentVersionParam = searchParams?.get('versionId') ?? '';
+    const currentInstrumentParam = searchParams?.get('instrumentId') ?? '';
+
+    if (currentVersionParam === expectedVersionId && currentInstrumentParam === expectedInstrumentId) {
+      return;
+    }
+
+    const params = new URLSearchParams(searchParams?.toString());
+    if (expectedVersionId) {
+      params.set('versionId', expectedVersionId);
+    } else {
+      params.delete('versionId');
+    }
+
+    if (expectedInstrumentId) {
+      params.set('instrumentId', expectedInstrumentId);
+    } else {
+      params.delete('instrumentId');
+    }
+
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams, selectedInstrumentId, selectedVersion?.id, selectedVersionId]);
+
+  useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ message?: string }>).detail;
       if (detail?.message) {
@@ -284,76 +435,6 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     window.addEventListener('canticum:plan_limit', handler);
     return () => window.removeEventListener('canticum:plan_limit', handler);
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!shouldRenderMusicXmlSheet || !activeSheetUrl) {
-      setIsRenderingSheet(false);
-      setSheetRenderError('');
-      if (sheetContainerRef.current) {
-        sheetContainerRef.current.innerHTML = '';
-      }
-      return;
-    }
-
-    const container = sheetContainerRef.current;
-    if (!container) {
-      return;
-    }
-
-    setIsRenderingSheet(true);
-    setSheetRenderError('');
-    container.innerHTML = '';
-
-    void (async () => {
-      try {
-        const response = await fetch(activeSheetUrl, { cache: 'no-store' });
-        if (!response.ok) {
-          throw new Error('No se pudo cargar la partitura.');
-        }
-
-        const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
-        const extension = getSheetFileExtension(activeSheetUrl);
-        const arrayBuffer = await response.arrayBuffer();
-        const isMxl = extension === 'mxl'
-          || contentType.includes('zip')
-          || contentType.includes('compressed');
-        const source: string | Uint8Array = isMxl
-          ? new Uint8Array(arrayBuffer)
-          : new TextDecoder().decode(arrayBuffer);
-
-        const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay');
-        const osmd = new OpenSheetMusicDisplay(container, {
-          autoResize: true,
-          drawTitle: false,
-          drawingParameters: 'compact'
-        });
-
-        await osmd.load(source);
-        osmd.render();
-
-        if (cancelled) {
-          return;
-        }
-      } catch {
-        if (!cancelled) {
-          setSheetRenderError('No se pudo renderizar la partitura automáticamente.');
-        }
-      } finally {
-        if (!cancelled) {
-          setIsRenderingSheet(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (container) {
-        container.innerHTML = '';
-      }
-    };
-  }, [activeSheetUrl, shouldRenderMusicXmlSheet]);
 
   const triggerAudioFeedback = () => {
     if (audioTriggerTimeoutRef.current !== null) {
@@ -377,16 +458,32 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
       return;
     }
 
-    if (activeAudioSrc === audioSource && isAudioPlaying) {
+    // Close player if already open
+    if (activeAudioSrc) {
       setActiveAudioSrc(null);
       setIsAudioPlaying(false);
       return;
     }
 
+    // Open the player
     setActiveAudioSrc(audioSource);
     setAudioAutoplayToken((prev) => prev + 1);
     setSongAccessMessage('');
     triggerAudioFeedback();
+
+    // Sync with global audio context for floating player
+    const coverImageUrl = resolveCoverUrl(selectedVersion?.coverImageUrl) ||
+      resolveCoverUrl(song.coverImageUrl) ||
+      resolveCoverUrl(song.images?.[0]?.url);
+
+    playGlobalSong({
+      id: song.id,
+      title: song.title,
+      artistName: selectedVersion?.artistName ?? song.artistName,
+      coverUrl: coverImageUrl,
+      audioUrl: audioSource,
+      versionId: selectedVersionId
+    });
   };
 
   const onToggleFavorite = () => {
@@ -408,25 +505,32 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
       return;
     }
 
+    // Stop audio when changing version
+    if (activeAudioSrc) {
+      setActiveAudioSrc(null);
+      setIsAudioPlaying(false);
+    }
+
     setSelectedVersionId(versionId);
     setSongAccessMessage('');
+    const nextInstrumentId = resolveVersionInstrumentationId(version, selectedInstrumentIdState);
+    if (nextInstrumentId) {
+      setSelectedInstrumentId(nextInstrumentId);
+    }
     void saveSongUserPreferences(song.id, {
       currentVersionId: versionId,
-      currentInstrumentId: selectedInstrumentId
+      currentInstrumentId: nextInstrumentId
     });
-
-    if (pathname) {
-      const currentVersionParam = searchParams?.get('versionId') ?? '';
-      if (currentVersionParam !== versionId) {
-        const params = new URLSearchParams(searchParams?.toString());
-        params.set('versionId', versionId);
-        const query = params.toString();
-        router.replace(`${pathname}?${query}`, { scroll: false });
-      }
-    }
   };
 
   const onSelectInstrument = (instrumentId: string) => {
+    const options = getInstrumentationOptions(song, selectedVersion);
+    const exists = options.some((instrument) => instrument.id === instrumentId);
+    if (!exists) {
+      setSongAccessMessage('No existe una instrumentación disponible para esta versión.');
+      return;
+    }
+
     setSelectedInstrumentId(instrumentId);
     setSongAccessMessage('');
     void saveSongUserPreferences(song.id, {
@@ -467,8 +571,9 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
               className="song-filter-select"
               value={selectedInstrumentId}
               onChange={(e) => onSelectInstrument(e.target.value)}
+              title="Selecciona una instrumentación para saltar a su versión correspondiente"
             >
-              {song.instruments.map((instrument) => (
+              {getInstrumentationOptions(song, selectedVersion).map((instrument) => (
                 <option key={instrument.id} value={instrument.id}>
                   {instrument.name}
                 </option>
@@ -568,7 +673,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                     onClick={onPlayReferenceAudio}
                     aria-label={isAudioPlaying ? 'Pausar audio' : 'Reproducir audio'}
                   >
-                    <span className="material-symbols-outlined">{isAudioPlaying ? 'pause_circle' : 'play_circle'}</span>
+                    <span className="song-play-audio-button">{isAudioPlaying ? 'Cerrar' : 'Reproducir'}</span>
                   </button>
                   
                   {activeAudioSrc ? (
@@ -577,10 +682,12 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                         key={`${activeAudioSrc}-${audioAutoplayToken}`}
                         src={activeAudioSrc}
                         title={song.title}
+                        songId={song.id}
+                        artistName={selectedVersion?.artistName ?? song.artistName}
+                        coverUrl={coverImageUrl}
                         autoPlay
-                        showMainButton={false}
-                        onEnded={() => setIsAudioPlaying(false)}
                         onPlayingChange={setIsAudioPlaying}
+                        onDurationChange={setAudioDuration}
                       />
                     </div>
                   ) : null}
@@ -590,7 +697,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                   <button
                     type="button"
                     className={isAutoScrolling ? 'song-secondary-button is-active' : 'song-secondary-button'} 
-                    onClick={() => setIsAutoScrolling((prev) => !prev)}
+                    onClick={() => { setIsAutoScrolling((prev) => !prev); onPlayReferenceAudio(); }}
                   >
                     <span className="material-symbols-outlined">swap_vert</span>
                     Desplazar
@@ -724,7 +831,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
         {/* Lyrics/Sheet Workspace */}
         <div className="song-workspace layout-h-margin">
-          <div className="song-workspace-toolbar">
+          {/* <div className="song-workspace-toolbar">
             <div className="song-workspace-toolbar-left">
               <button
                 type="button"
@@ -746,20 +853,16 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
             <div className="song-workspace-toolbar-right">
               <span className="song-workspace-mode-badge">MODO TEXTO</span>
             </div>
-          </div>
+          </div> */}
 
           <div className="song-workspace-content" ref={lyricsRef}>
-            {shouldRenderMusicXmlSheet ? (
-              <div className="song-sheet-renderer" aria-live="polite">
-                {isRenderingSheet ? <p className="song-sheet-status">Cargando partitura…</p> : null}
-                <div className="song-sheet-canvas" ref={sheetContainerRef} aria-label="Partitura renderizada" />
-                {sheetRenderError ? <p className="song-sheet-error">{sheetRenderError}</p> : null}
-              </div>
+            {activeSheetUrl ? (
+              <SheetRenderer url={activeSheetUrl} onError={setSheetRenderError} />
             ) : (
               <pre className="song-lyrics">{activeLyrics}</pre>
             )}
 
-            {activeSheetUrl ? (
+            {activeSheetUrl && sheetRenderError ? (
               <p className="song-sheet-hint">
                 <a href={activeSheetUrl} target="_blank" rel="noreferrer">Abrir archivo de partitura</a>
               </p>

@@ -3,11 +3,11 @@
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import Skeleton from 'react-loading-skeleton';
 import { useAuth } from '../../context/AuthContext';
 import { getSongDetailById, requestDeleteSong, requestUpdateSong } from '../../features/song/repository';
 import { uploadVersionAsset } from '../../features/song/versionAssetUpload';
 import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { SkeletonCard, SkeletonText } from '../ui/skeleton';
 import type { SongDetail, SongVersion } from '../../types/song';
 
 interface EditSongWorkspaceProps {
@@ -16,8 +16,30 @@ interface EditSongWorkspaceProps {
 
 type SongState = 'DRAFT' | 'UPLOADED' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'PUBLISHED' | 'ARCHIVED';
 
-interface EditableVersion extends SongVersion {
+interface EditableInstrumentation {
+  id?: string;
+  instrumentationId?: string;
+  versionId?: string;
+  localId: string;
+  docId: string;
+  instrumentName: string;
+  lyrics?: string;
+  lyricsFileUrl?: string;
+  sheetFileUrl?: string;
+  lyricsFile: File | null;
+  sheetFile: File | null;
+  audioFile: File | null;
+  audioReferenceUrl: string;
+  tone?: string;
+  notationType?: string;
+}
+
+interface EditableVersion extends Omit<SongVersion, 'instrumentations'> {
   markedForDeletion?: boolean;
+  audioMode?: 'shared' | 'per_instrumentation' | 'legacy';
+  audioFile?: File | null;
+  audioReferenceUrl?: string;
+  instrumentations?: EditableInstrumentation[];
 }
 
 function parseState(raw: unknown): SongState {
@@ -58,7 +80,21 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
       setSong(detail);
       setTitle(detail.title);
       setState(parseState((detail as SongDetail & { status?: unknown }).status));
-      setVersions(detail.versions.map((version) => ({ ...version, markedForDeletion: false })));
+      setVersions(detail.versions.map((version) => ({
+        ...version,
+        markedForDeletion: false,
+        audioMode: version.audioMode || 'legacy',
+        audioReferenceUrl: version.audioReferenceUrl || '',
+        instrumentations: (version.instrumentations || []).map((inst) => ({
+          ...inst,
+          localId: inst.id || `inst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          docId: inst.instrumentationId || '',
+          lyricsFile: null,
+          sheetFile: null,
+          audioFile: null,
+          audioReferenceUrl: inst.audioReferenceUrl || ''
+        }))
+      })));
       const nextCoverImageUrl = detail.coverImageUrl ?? detail.images?.[0]?.url ?? '';
       setCoverPreviewUrl(nextCoverImageUrl);
       setLoading(false);
@@ -77,8 +113,58 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
     setVersions((prev) => prev.map((entry) => (entry.id === versionId ? { ...entry, ...patch } : entry)));
   };
 
+  const updateInstrumentation = (versionId: string, instLocalId: string, patch: Partial<EditableInstrumentation>) => {
+    setVersions((prev) => prev.map((version) => {
+      if (version.id !== versionId) return version;
+      return {
+        ...version,
+        instrumentations: version.instrumentations?.map((inst) =>
+          inst.localId === instLocalId ? { ...inst, ...patch } : inst
+        ) || []
+      };
+    }));
+  };
+
+  const addInstrumentation = (versionId: string) => {
+    setVersions((prev) => prev.map((version) => {
+      if (version.id !== versionId) return version;
+      // const seed = (version.instrumentations?.length || 0) + 1;
+      const localId = `inst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      return {
+        ...version,
+        instrumentations: [
+          ...(version.instrumentations || []),
+          {
+            localId,
+            docId: '',
+            instrumentName: 'Letra',
+            lyrics: '',
+            lyricsFile: null,
+            sheetFile: null,
+            audioFile: null,
+            audioReferenceUrl: '',
+            tone: '',
+            notationType: ''
+          }
+        ]
+      };
+    }));
+  };
+
+  const removeInstrumentation = (versionId: string, instLocalId: string) => {
+    setVersions((prev) => prev.map((version) => {
+      if (version.id !== versionId) return version;
+      if (!version.instrumentations || version.instrumentations.length <= 1) return version;
+      return {
+        ...version,
+        instrumentations: version.instrumentations.filter((inst) => inst.localId !== instLocalId)
+      };
+    }));
+  };
+
   const addVersion = () => {
     const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const instLocalId = `inst-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setVersions((prev) => [
       ...prev,
       {
@@ -87,11 +173,24 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
         songId,
         versionName: `Versión ${prev.length + 1}`,
         artistName: song?.artistName ?? user?.displayName ?? user?.email ?? 'Autor',
-        instrumentName: 'Letra',
         label: `Versión ${prev.length + 1}`,
         lyrics: '',
         isPremium: false,
-        markedForDeletion: false
+        markedForDeletion: false,
+        audioMode: 'shared',
+        audioReferenceUrl: '',
+        instrumentations: [{
+          localId: instLocalId,
+          docId: '',
+          instrumentName: 'Letra',
+          lyrics: '',
+          lyricsFile: null,
+          sheetFile: null,
+          audioFile: null,
+          audioReferenceUrl: '',
+          tone: '',
+          notationType: ''
+        }]
       }
     ]);
   };
@@ -163,7 +262,18 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
           notationType: version.notationType ?? null,
           tone: version.tone ?? null,
           coverImageUrl: version.coverImageUrl ?? null,
-          markedForDeletion: version.markedForDeletion === true
+          markedForDeletion: version.markedForDeletion === true,
+          audioMode: version.audioMode || 'legacy',
+          instrumentations: version.instrumentations?.map((inst) => ({
+            instrumentationId: inst.instrumentationId,
+            instrumentName: inst.instrumentName,
+            lyrics: inst.lyrics || undefined,
+            lyricsFileUrl: inst.lyricsFileUrl || undefined,
+            sheetFileUrl: inst.sheetFileUrl || undefined,
+            audioReferenceUrl: version.audioMode === 'per_instrumentation' ? (inst.audioReferenceUrl || undefined) : undefined,
+            tone: inst.tone || undefined,
+            notationType: inst.notationType || undefined
+          })) || []
         }))
         .filter((version) => !(version.markedForDeletion && String(version.id ?? '').startsWith('local-')));
 
@@ -210,30 +320,30 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
     return (
       <section className="account-page-layout layout-h-margin" aria-busy aria-label="Cargando canción">
         <header className="account-page-head">
-          <Skeleton width={220} height={34} />
-          <Skeleton width="70%" height={16} />
+          <SkeletonText width={220} className="edit-song-skeleton-title" />
+          <SkeletonText width="70%" className="edit-song-skeleton-subtitle" />
         </header>
         <article className="account-card">
           <div className="account-basic-grid">
-            <Skeleton height={44} />
-            <Skeleton height={44} />
+            <SkeletonText className="edit-song-skeleton-input" />
+            <SkeletonText className="edit-song-skeleton-input" />
           </div>
-          <Skeleton width={180} height={180} />
-          <Skeleton height={42} width={220} />
+          <SkeletonCard className="edit-song-skeleton-cover" />
+          <SkeletonText width={220} className="edit-song-skeleton-button" />
         </article>
         <article className="account-card song-edit-versions-card">
           <div className="create-versions-header song-edit-versions-head">
-            <Skeleton width={150} height={30} />
-            <Skeleton width={140} height={36} />
+            <SkeletonText width={150} className="edit-song-skeleton-section-title" />
+            <SkeletonText width={140} className="edit-song-skeleton-button-small" />
           </div>
           <div className="account-items-grid song-edit-versions-grid">
             {Array.from({ length: 2 }).map((_, idx) => (
               <div className="account-item-card song-edit-version-card" key={idx}>
-                <Skeleton height={40} />
-                <Skeleton height={40} />
-                <Skeleton height={110} />
-                <Skeleton height={40} />
-                <Skeleton height={36} width={160} />
+                <SkeletonText className="edit-song-skeleton-version-field" />
+                <SkeletonText className="edit-song-skeleton-version-field" />
+                <SkeletonText className="edit-song-skeleton-version-lyrics" />
+                <SkeletonText className="edit-song-skeleton-version-field" />
+                <SkeletonText width={160} className="edit-song-skeleton-version-action" />
               </div>
             ))}
           </div>
@@ -304,53 +414,183 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
               </label>
 
               <label className="song-edit-version-field">
-                <span>Instrumento</span>
-                <input
-                  value={version.instrumentName ?? ''}
-                  onChange={(event) => updateVersion(version.id, { instrumentName: event.target.value })}
-                />
+                <span>Modo de audio</span>
+                <select
+                  value={version.audioMode || 'legacy'}
+                  onChange={(event) => updateVersion(version.id, { audioMode: event.target.value as 'shared' | 'per_instrumentation' | 'legacy' })}
+                >
+                  <option value="legacy">Legado (un instrumento)</option>
+                  <option value="shared">Audio compartido</option>
+                  <option value="per_instrumentation">Audio por instrumentación</option>
+                </select>
               </label>
 
-              <label className="song-edit-version-field song-edit-version-field--full">
-                <span>Letra</span>
-                <textarea
-                  className="song-edit-lyrics-input"
-                  rows={6}
-                  value={version.lyrics ?? ''}
-                  onChange={(event) => updateVersion(version.id, { lyrics: event.target.value })}
-                />
-              </label>
+              {/* Legacy fields for backward compatibility */}
+              {version.audioMode === 'legacy' && (
+                <>
+                  <label className="song-edit-version-field">
+                    <span>Instrumento (legado)</span>
+                    <input
+                      value={version.instrumentName ?? ''}
+                      onChange={(event) => updateVersion(version.id, { instrumentName: event.target.value })}
+                    />
+                  </label>
 
-              <label className="song-edit-version-field">
-                <span>Audio URL</span>
-                <input
-                  value={version.audioReferenceUrl ?? ''}
-                  onChange={(event) => updateVersion(version.id, { audioReferenceUrl: event.target.value })}
-                />
-              </label>
+                  <label className="song-edit-version-field song-edit-version-field--full">
+                    <span>Letra (legado)</span>
+                    <textarea
+                      className="song-edit-lyrics-input"
+                      rows={6}
+                      value={version.lyrics ?? ''}
+                      onChange={(event) => updateVersion(version.id, { lyrics: event.target.value })}
+                    />
+                  </label>
 
-              <label className="song-edit-version-field song-edit-file-field">
-                <span>Archivo audio (opcional)</span>
-                <input
-                  type="file"
-                  accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0] ?? null;
-                    if (!file) return;
-                    void uploadVersionAsset({
-                      file,
-                      songId,
-                      versionId: version.id,
-                      kind: 'audio',
-                      filenameBase: version.versionName ?? 'audio'
-                    }).then((result) => {
-                      if (result.ok && result.url) {
-                        updateVersion(version.id, { audioReferenceUrl: result.url });
-                      }
-                    });
-                  }}
-                />
-              </label>
+                  <label className="song-edit-version-field">
+                    <span>Audio URL (legado)</span>
+                    <input
+                      value={version.audioReferenceUrl ?? ''}
+                      onChange={(event) => updateVersion(version.id, { audioReferenceUrl: event.target.value })}
+                    />
+                  </label>
+
+                  <label className="song-edit-version-field song-edit-file-field">
+                    <span>Archivo audio (opcional)</span>
+                    <input
+                      type="file"
+                      accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] ?? null;
+                        if (!file) return;
+                        void uploadVersionAsset({
+                          file,
+                          songId,
+                          versionId: version.id,
+                          kind: 'audio',
+                          filenameBase: version.versionName ?? 'audio'
+                        }).then((result) => {
+                          if (result.ok && result.url) {
+                            updateVersion(version.id, { audioReferenceUrl: result.url });
+                          }
+                        });
+                      }}
+                    />
+                  </label>
+                </>
+              )}
+
+              {/* New instrumentation-based UI */}
+              {version.audioMode !== 'legacy' && (
+                <div className="song-edit-instrumentations-section">
+                  <div className="song-edit-instrumentations-header">
+                    <strong>Instrumentaciones</strong>
+                    <button
+                      type="button"
+                      className="create-form-cancel"
+                      onClick={() => addInstrumentation(version.id)}
+                    >
+                      + Agregar
+                    </button>
+                  </div>
+
+                  {version.instrumentations?.map((inst, instIndex) => (
+                    <div key={inst.localId} className="song-edit-instrumentation-card">
+                      <div className="song-edit-instrumentation-header">
+                        <strong>Instrumentación {instIndex + 1}</strong>
+                        <button
+                          type="button"
+                          className="create-version-remove"
+                          disabled={!version.instrumentations || version.instrumentations.length <= 1}
+                          onClick={() => removeInstrumentation(version.id, inst.localId)}
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+
+                      <label className="song-edit-version-field">
+                        <span>Instrumento</span>
+                        <input
+                          value={inst.instrumentName}
+                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { instrumentName: event.target.value })}
+                        />
+                      </label>
+
+                      {version.audioMode === 'per_instrumentation' && (
+                        <>
+                          <label className="song-edit-version-field">
+                            <span>Audio URL</span>
+                            <input
+                              value={inst.audioReferenceUrl}
+                              onChange={(event) => updateInstrumentation(version.id, inst.localId, { audioReferenceUrl: event.target.value })}
+                            />
+                          </label>
+                        </>
+                      )}
+
+                      <label className="song-edit-version-field">
+                        <span>Tono</span>
+                        <input
+                          value={inst.tone || ''}
+                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { tone: event.target.value })}
+                        />
+                      </label>
+
+                      <label className="song-edit-version-field">
+                        <span>Tipo de Notación</span>
+                        <input
+                          value={inst.notationType || ''}
+                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { notationType: event.target.value })}
+                        />
+                      </label>
+
+                      <label className="song-edit-version-field song-edit-version-field--full">
+                        <span>Letra</span>
+                        <textarea
+                          className="song-edit-lyrics-input"
+                          rows={4}
+                          value={inst.lyrics || ''}
+                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { lyrics: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                  ))}
+
+                  {version.audioMode === 'shared' && (
+                    <>
+                      <label className="song-edit-version-field">
+                        <span>Audio URL (compartido)</span>
+                        <input
+                          value={version.audioReferenceUrl ?? ''}
+                          onChange={(event) => updateVersion(version.id, { audioReferenceUrl: event.target.value })}
+                        />
+                      </label>
+
+                      <label className="song-edit-version-field song-edit-file-field">
+                        <span>Archivo audio (opcional)</span>
+                        <input
+                          type="file"
+                          accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0] ?? null;
+                            if (!file) return;
+                            void uploadVersionAsset({
+                              file,
+                              songId,
+                              versionId: version.id,
+                              kind: 'audio',
+                              filenameBase: version.versionName ?? 'audio'
+                            }).then((result) => {
+                              if (result.ok && result.url) {
+                                updateVersion(version.id, { audioReferenceUrl: result.url });
+                              }
+                            });
+                          }}
+                        />
+                      </label>
+                    </>
+                  )}
+                </div>
+              )}
 
               <div className="account-item-actions song-edit-version-actions">
                 <button

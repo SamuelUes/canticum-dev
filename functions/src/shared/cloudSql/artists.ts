@@ -473,6 +473,10 @@ export async function getArtistProfileBundle(
       reviewStatus: 'reviewed' | 'pending';
     }>(
       `
+        WITH max_week AS (
+          SELECT MAX(snapshot_week) AS week
+          FROM featured_songs
+        )
         SELECT
           s.id AS "id",
           s.title AS "title",
@@ -497,17 +501,13 @@ export async function getArtistProfileBundle(
             WHEN UPPER(COALESCE(ss.code, '')) = 'APPROVED' THEN 'reviewed'
             ELSE 'pending'
           END AS "reviewStatus",
-          EXISTS (
-            SELECT 1
-            FROM featured_songs fs
-            WHERE fs.song_id = s.id
-              AND fs.snapshot_week = (SELECT MAX(snapshot_week) FROM featured_songs)
-          ) AS "isFeatured"
+          COALESCE(fs.song_id IS NOT NULL, FALSE) AS "isFeatured"
         FROM songs s
         LEFT JOIN song_versions sv ON sv.song_id = s.id
         LEFT JOIN instruments i ON i.id = sv.instrument_id
         LEFT JOIN song_states ss ON ss.id = s.state_id
         LEFT JOIN users u ON u.id = s.user_id
+        LEFT JOIN featured_songs fs ON fs.song_id = s.id AND fs.snapshot_week = (SELECT week FROM max_week)
         WHERE (
             s.artist_id = $1
             OR sv.artist_id = $1
@@ -521,7 +521,7 @@ export async function getArtistProfileBundle(
               AND u.firebase_uid = $2::TEXT
             )
           )
-        GROUP BY s.id
+        GROUP BY s.id, fs.song_id
         ORDER BY
           "isFeatured" DESC,
           COALESCE(s.popularity, 0) DESC,
@@ -594,32 +594,20 @@ export async function getArtistProfileBundle(
       .filter((value) => value.length > 0);
 
     try {
+      // OPTIMIZATION: Use GIN index with @> operator for genre matching instead of jsonb_array_elements_text
+      const genresJsonArray = JSON.stringify(normalizedGenres);
+      
       const fallbackSuggestionsResult = await getPool().query<{
         id: number;
         name: string;
         imageUrl: string | null;
+        genreMatchCount: number;
       }>(
         `
           SELECT
             a.id AS "id",
             a.name AS "name",
-            a.image_url AS "imageUrl"
-          FROM artists a
-          WHERE a.id <> $1
-            AND (
-              COALESCE(array_length($2::TEXT[], 1), 0) = 0
-              OR EXISTS (
-                SELECT 1
-                FROM jsonb_array_elements_text(
-                  CASE
-                    WHEN jsonb_typeof(a.genres_json) = 'array' THEN a.genres_json
-                    ELSE '[]'::jsonb
-                  END
-                ) AS g(value)
-                WHERE LOWER(TRIM(g.value)) = ANY($2::TEXT[])
-              )
-            )
-          ORDER BY
+            a.image_url AS "imageUrl",
             CASE
               WHEN COALESCE(array_length($2::TEXT[], 1), 0) = 0 THEN 0
               ELSE (
@@ -629,15 +617,23 @@ export async function getArtistProfileBundle(
                     WHEN jsonb_typeof(a.genres_json) = 'array' THEN a.genres_json
                     ELSE '[]'::jsonb
                   END
-                ) AS g2(value)
-                WHERE LOWER(TRIM(g2.value)) = ANY($2::TEXT[])
+                ) AS g(value)
+                WHERE LOWER(TRIM(g.value)) = ANY($2::TEXT[])
               )
-            END DESC,
+            END AS "genreMatchCount"
+          FROM artists a
+          WHERE a.id <> $1
+            AND (
+              COALESCE(array_length($2::TEXT[], 1), 0) = 0
+              OR a.genres_json @> $3::jsonb
+            )
+          ORDER BY
+            "genreMatchCount" DESC,
             COALESCE(a.popularity, 0) DESC,
             a.name ASC
           LIMIT 12;
         `,
-        [artistId, normalizedGenres]
+        [artistId, normalizedGenres, genresJsonArray]
       );
 
       fallbackSuggestionsResult.rows.forEach((row) => {

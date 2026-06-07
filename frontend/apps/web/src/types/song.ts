@@ -8,6 +8,21 @@ export interface SongVersionDocument {
   notationType?: string;
   audioReferenceUrl?: string;
   isPremium: boolean;
+  audioMode?: 'shared' | 'per_instrumentation' | 'legacy';
+}
+
+export interface SongInstrumentation {
+  id: string;
+  instrumentationId: string;
+  versionId: string;
+  instrumentName: string;
+  instrumentId?: string;
+  lyrics?: string;
+  lyricsFileUrl?: string;
+  sheetFileUrl?: string;
+  audioReferenceUrl?: string;
+  tone?: string;
+  notationType?: string;
 }
 
 export interface SongVersion {
@@ -24,6 +39,8 @@ export interface SongVersion {
   instrumentName?: string;
   label: string;
   isPremium?: boolean;
+  audioMode?: 'shared' | 'per_instrumentation' | 'legacy';
+  instrumentations?: SongInstrumentation[];
   /** Per-version lyrics text (replaces legacy song-level lyrics). */
   lyrics?: string;
   /** Optional uploaded lyrics file URL. */

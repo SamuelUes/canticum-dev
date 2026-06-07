@@ -15,6 +15,7 @@ import { useAuth } from '../../context/AuthContext';
 import { isModeratorUser } from '../../features/auth/repository';
 import { getSongStatusLabel, normalizeSongStatus } from '../../features/song/status';
 import { getAlbumStatusLabel, normalizeAlbumStatus } from '../../features/album/status';
+import { SkeletonList } from '../ui/skeleton';
 import type { ArtistDetail, ArtistImage, ArtistrepertoireRef, ArtistSongRow } from '../../types/artist';
 
 function pickImage(images: ArtistImage[] | undefined, targetSize: number, fallback?: string): string | undefined {
@@ -639,8 +640,7 @@ function AllSongsModal({ songs, artistName, canViewStatus, onClose }: AllSongsMo
 
           {isLoading && (
             <div className="loading-indicator">
-              <span className="material-symbols-outlined loading-spinner">refresh</span>
-              <span>Cargando más canciones...</span>
+              <SkeletonList count={3} className="artist-modal-skeleton-item" />
             </div>
           )}
 

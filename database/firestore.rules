@@ -63,6 +63,10 @@ service cloud.firestore {
         allow write: if isAdmin();
       }
 
+      match /bookmarks/{repertoireId} {
+        allow read, write: if isOwner(userId);
+      }
+
       match /private/{docId} {
         allow read: if isOwner(userId);
         allow write: if isOwner(userId) || isAdmin();

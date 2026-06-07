@@ -14,6 +14,8 @@
   "dependencies": {
     "firebase": "^11.0.2",
     "i18n": "^0.15.3",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.12.0",
     "next": "14.2.15",
     "opensheetmusicdisplay": "^1.9.9",
     "react": "18.2.0",
@@ -24,8 +26,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.17.50",
-    "@types/react-beautiful-dnd": "^13.1.8",
     "@types/react": "^18.3.12",
+    "@types/react-beautiful-dnd": "^13.1.8",
     "@types/react-dom": "^18.3.1",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.15",
