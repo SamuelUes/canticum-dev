@@ -11,7 +11,8 @@ import {
   requestSearchRepertoireSongs,
   type CreaterepertoirePayload
 } from '../../features/repertoire/clientPersistence';
-import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { CropperModal } from '../ui/CropperModal';
 import type { RepertoireSongSearchOption, SongRef } from '../../types/repertoire';
 import { db } from '../../services/firebase';
 
@@ -63,6 +64,10 @@ export function CreaterepertoireWorkspace() {
   } = useBlobUrl();
   const [coverError, setCoverError] = useState('');
   const [coverPreparing, setCoverPreparing] = useState(false);
+
+  // Cropper state
+  const [showCropper, setShowCropper] = useState(false);
+  const [imageToCrop, setImageToCrop] = useState<string>('');
 
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -159,7 +164,7 @@ export function CreaterepertoireWorkspace() {
 
     setCoverPreparing(true);
 
-    const prepared = await prepareCoverImageFile(file);
+    const prepared = await prepareCoverImageFileOriginalSize(file);
     if (!prepared.ok) {
       setCoverFile(null);
       clearCoverPreviewUrl();
@@ -168,9 +173,21 @@ export function CreaterepertoireWorkspace() {
       return;
     }
 
-    setCoverFile(prepared.file);
-    setCoverPreviewFromFile(prepared.file);
+    setImageToCrop(URL.createObjectURL(prepared.file));
+    setShowCropper(true);
     setCoverPreparing(false);
+  };
+
+  const handleCropConfirm = (croppedFile: File) => {
+    setCoverFile(croppedFile);
+    setCoverPreviewFromFile(croppedFile);
+    setShowCropper(false);
+    setImageToCrop('');
+  };
+
+  const handleCropCancel = () => {
+    setShowCropper(false);
+    setImageToCrop('');
   };
 
   const handleRemoveSong = (songId: string) => {
@@ -535,6 +552,14 @@ export function CreaterepertoireWorkspace() {
           </p>
         )}
       </form>
+
+      <CropperModal
+        isOpen={showCropper}
+        imageSrc={imageToCrop}
+        aspectRatio={1}
+        onConfirm={handleCropConfirm}
+        onCancel={handleCropCancel}
+      />
     </section>
   );
 }

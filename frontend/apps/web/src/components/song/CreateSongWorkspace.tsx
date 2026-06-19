@@ -13,7 +13,8 @@ import {
   type CreateSongPayloadVersion
 } from '../../features/song/clientPersistence';
 import { uploadInstrumentationAsset, uploadVersionAsset } from '../../features/song/versionAssetUpload';
-import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { CropperModal } from '../ui/CropperModal';
 import { db } from '../../services/firebase';
 import { ArtistAutocomplete, type ArtistOption } from '../shared/ArtistAutocomplete';
 
@@ -184,6 +185,10 @@ export function CreateSongWorkspace() {
   const [coverError, setCoverError] = useState('');
   const [coverPreparing, setCoverPreparing] = useState(false);
 
+  // Cropper state
+  const [showCropper, setShowCropper] = useState(false);
+  const [imageToCrop, setImageToCrop] = useState<string>('');
+
   // Add-version fields.
   const [existingArtistOption, setExistingArtistOption] = useState<ArtistOption | null>(null);
   const [existingArtistSongs, setExistingArtistSongs] = useState<ArtistSongLookup[]>([]);
@@ -353,7 +358,7 @@ export function CreateSongWorkspace() {
 
     setCoverPreparing(true);
 
-    const prepared = await prepareCoverImageFile(file);
+    const prepared = await prepareCoverImageFileOriginalSize(file);
     if (!prepared.ok) {
       setCoverFile(null);
       clearCoverPreviewUrl();
@@ -362,9 +367,21 @@ export function CreateSongWorkspace() {
       return;
     }
 
-    setCoverFile(prepared.file);
-    setCoverPreviewFromFile(prepared.file);
+    setImageToCrop(URL.createObjectURL(prepared.file));
+    setShowCropper(true);
     setCoverPreparing(false);
+  };
+
+  const handleCropConfirm = (croppedFile: File) => {
+    setCoverFile(croppedFile);
+    setCoverPreviewFromFile(croppedFile);
+    setShowCropper(false);
+    setImageToCrop('');
+  };
+
+  const handleCropCancel = () => {
+    setShowCropper(false);
+    setImageToCrop('');
   };
 
   const removeVersion = (localId: string) => {
@@ -1272,6 +1289,14 @@ export function CreateSongWorkspace() {
           </p>
         )}
       </form>
+
+      <CropperModal
+        isOpen={showCropper}
+        imageSrc={imageToCrop}
+        aspectRatio={1}
+        onConfirm={handleCropConfirm}
+        onCancel={handleCropCancel}
+      />
     </section>
   );
 }

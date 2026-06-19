@@ -5,17 +5,15 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { useAuth } from '../../context/AuthContext';
+import { isAdminUser } from '../../features/auth/repository';
 import { ArtistAutocomplete, ArtistOption } from '../shared/ArtistAutocomplete';
 import { fetchSongsByArtist } from '../../features/artist/repository';
 import type { ArtistSongLookup } from '../../features/artist/repository';
-import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
+import { CropperModal } from '../ui/CropperModal';
 import { requestCreateAlbum } from '../../features/album/clientPersistence';
 import { functionsBaseUrl, buildFunctionsHeaders} from '../../features/shared/functionsClient';
 import type { AlbumTrack, AlbumType } from '../../types/album';
-
-function isAlbumManager(role?: string): boolean {
-  return role === 'admin' || role === 'editor';
-}
 
 const GENRES = ['Litúrgico', 'Contemporáneo', 'Tradicional', 'Instrumental'];
 const ALBUM_TYPES: AlbumType[] = ['album', 'single', 'ep', 'compilation', 'live', 'concert'];
@@ -38,6 +36,10 @@ export function CreateAlbumWorkspace() {
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreview, setCoverPreview] = useState<string>('');
   const [coverInputKey, setCoverInputKey] = useState(0);
+
+  // Cropper state
+  const [showCropper, setShowCropper] = useState(false);
+  const [imageToCrop, setImageToCrop] = useState<string>('');
   
   // Track state
   const [addedTracks, setAddedTracks] = useState<AlbumTrack[]>([]);
@@ -50,7 +52,7 @@ export function CreateAlbumWorkspace() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  const canManage = useMemo(() => isAlbumManager(user?.role), [user?.role]);
+  const canManage = useMemo(() => isAdminUser(user), [user]);
 
   // Fetch songs when artist is selected
   useEffect(() => {
@@ -111,13 +113,25 @@ export function CreateAlbumWorkspace() {
       return;
     }
 
-    const result = await prepareCoverImageFile(file);
+    const result = await prepareCoverImageFileOriginalSize(file);
     if (result.ok) {
-      setCoverFile(result.file);
-      setCoverPreview(URL.createObjectURL(result.file));
+      setImageToCrop(URL.createObjectURL(result.file));
+      setShowCropper(true);
     } else {
       setErrorMessage('Error al procesar la imagen de portada.');
     }
+  };
+
+  const handleCropConfirm = (croppedFile: File) => {
+    setCoverFile(croppedFile);
+    setCoverPreview(URL.createObjectURL(croppedFile));
+    setShowCropper(false);
+    setImageToCrop('');
+  };
+
+  const handleCropCancel = () => {
+    setShowCropper(false);
+    setImageToCrop('');
   };
 
   const handleSelectSong = (song: ArtistSongLookup) => {
@@ -251,7 +265,7 @@ export function CreateAlbumWorkspace() {
       <section className="create-page-layout album-create-layout">
         <header className="create-page-header">
           <h1>Crear nuevo álbum</h1>
-          <p>Solo admin o editor pueden crear álbumes.</p>
+          <p>Solo admin pueden crear álbumes.</p>
         </header>
 
         <div className="album-create-locked">
@@ -525,6 +539,14 @@ export function CreateAlbumWorkspace() {
           </button>
         </div>
       </form>
+
+      <CropperModal
+        isOpen={showCropper}
+        imageSrc={imageToCrop}
+        aspectRatio={1}
+        onConfirm={handleCropConfirm}
+        onCancel={handleCropCancel}
+      />
     </section>
   );
 }

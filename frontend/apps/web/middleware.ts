@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-const PROTECTED_ROUTES: Array<{ prefix: string; reason: 'auth' | 'auth-to-buy' }> = [
+const PROTECTED_ROUTES: Array<{ prefix: string; reason: 'auth' | 'auth-to-buy' | 'admin' }> = [
   { prefix: '/create/repertoires', reason: 'auth' },
   { prefix: '/create/song', reason: 'auth' },
   { prefix: '/account', reason: 'auth' },
+  { prefix: '/admin', reason: 'admin' },
   { prefix: '/checkout', reason: 'auth-to-buy' },
   { prefix: '/premium', reason: 'auth-to-buy' },
   { prefix: '/payment', reason: 'auth-to-buy' }
@@ -18,14 +19,14 @@ function decodeBase64Url(value: string): string {
   return atob(padded);
 }
 
-function hasValidSessionStructure(value: string): boolean {
+function readSessionPayload(value: string): { valid: boolean; role?: string } {
   const parts = value.split('.');
   if (parts.length !== 3) {
-    return false;
+    return { valid: false };
   }
 
   try {
-    const payload = JSON.parse(decodeBase64Url(parts[1])) as { exp?: number; sub?: string; user_id?: string };
+    const payload = JSON.parse(decodeBase64Url(parts[1])) as { exp?: number; sub?: string; user_id?: string; role?: unknown };
     const subject = typeof payload.sub === 'string' && payload.sub.trim().length > 0
       ? payload.sub.trim()
       : typeof payload.user_id === 'string' && payload.user_id.trim().length > 0
@@ -33,25 +34,30 @@ function hasValidSessionStructure(value: string): boolean {
         : '';
 
     if (!subject) {
-      return false;
+      return { valid: false };
     }
 
     if (typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000)) {
-      return false;
+      return { valid: false };
     }
 
-    return true;
+    return {
+      valid: true,
+      role: typeof payload.role === 'string' ? payload.role : undefined
+    };
   } catch {
-    return false;
+    return { valid: false };
   }
 }
 
-function buildRedirect(request: NextRequest, reason: 'auth' | 'auth-to-buy'): NextResponse {
+function buildRedirect(request: NextRequest, reason: 'auth' | 'auth-to-buy' | 'admin'): NextResponse {
   const loginUrl = new URL(AUTH_ROUTE, request.url);
   loginUrl.searchParams.set('redirect', request.nextUrl.pathname);
 
   if (reason === 'auth-to-buy') {
     loginUrl.searchParams.set('reason', 'purchase');
+  } else if (reason === 'admin') {
+    loginUrl.searchParams.set('reason', 'admin');
   }
 
   return NextResponse.redirect(loginUrl);
@@ -71,10 +77,14 @@ export function middleware(request: NextRequest) {
   }
 
   const sessionCookie = request.cookies.get('__session')?.value;
-  const hasSession = Boolean(sessionCookie && hasValidSessionStructure(sessionCookie));
+  const session = sessionCookie ? readSessionPayload(sessionCookie) : { valid: false };
 
-  if (!hasSession) {
+  if (!session.valid) {
     return buildRedirect(request, matched.reason);
+  }
+
+  if (matched.reason === 'admin' && session.role !== 'admin') {
+    return buildRedirect(request, 'admin');
   }
 
   return NextResponse.next();
@@ -85,6 +95,7 @@ export const config = {
     '/create/repertoires/:path*',
     '/create/song/:path*',
     '/account/:path*',
+    '/admin/:path*',
     '/checkout/:path*',
     '/premium/:path*',
     '/payment/:path*'

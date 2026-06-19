@@ -9,9 +9,11 @@ interface HeaderUserMenuProps {
   welcomeLabel: string;
   profileLabel: string;
   accountLabel: string;
+  adminLabel?: string;
   signOutLabel: string;
   onProfile: () => void;
   onAccount: () => void;
+  onAdmin?: () => void;
   onSignOut: () => void;
 }
 
@@ -21,9 +23,11 @@ export function HeaderUserMenu({
   welcomeLabel,
   profileLabel,
   accountLabel,
+  adminLabel,
   signOutLabel,
   onProfile,
   onAccount,
+  onAdmin,
   onSignOut
 }: HeaderUserMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -100,6 +104,19 @@ export function HeaderUserMenu({
           >
             {accountLabel}
           </button>
+          {adminLabel && onAdmin ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="welcome-dropdown-item"
+              onClick={() => {
+                setIsOpen(false);
+                onAdmin();
+              }}
+            >
+              {adminLabel}
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitem"

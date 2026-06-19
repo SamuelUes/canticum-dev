@@ -1,3 +1,4 @@
+
 import { deleteObject, getDownloadURL, getMetadata, listAll, ref, uploadBytes, type StorageReference } from 'firebase/storage';
 import { auth, storage } from '../../services/firebase';
 import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
@@ -207,7 +208,7 @@ async function collectStorageLeafItems(root: StorageReference, cap: number): Pro
 
     queue.push(...listed.prefixes);
 
-    listed.items.forEach((itemRef) => {
+    listed.items.forEach((itemRef: StorageReference) => {
       items.push({ path: itemRef.fullPath, name: itemRef.name });
     });
   }

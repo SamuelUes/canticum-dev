@@ -9,6 +9,7 @@ import {
   sendJson
 } from '../../shared/http/http';
 import { countSongsByStatusForUser, type UserSongStatusCountRow } from '../../shared/cloudSql/songs';
+import { updateUserStatus } from '../../shared/cloudSql/users';
 
 const STATUS_ORDER = ['DRAFT', 'UPLOADED', 'IN_REVIEW', 'APPROVED', 'REJECTED', 'PUBLISHED', 'ARCHIVED'] as const;
 type CanonicalStatus = (typeof STATUS_ORDER)[number];
@@ -185,6 +186,38 @@ export const account = functions.https.onRequest(async (req, res) => {
   if (segments.length > 0) {
     sendError(res, 404, 'not_found', 'Endpoint not found.');
     return;
+  }
+
+  if (req.method === 'DELETE') {
+    const auth = await getOptionalAuthContext(req);
+    if (!auth?.uid) {
+      sendError(res, 401, 'unauthorized', 'Authenticated user required.');
+      return;
+    }
+
+    const db = getAppFirestore();
+
+    try {
+      await db.collection('users').doc(auth.uid).update({
+        status: 'away',
+        updatedAt: new Date().toISOString()
+      });
+
+      await updateUserStatus(auth.uid, 'away');
+
+      sendJson(res, 200, {
+        ok: true,
+        message: 'Cuenta marcada como away (soft-delete).'
+      });
+      return;
+    } catch (error) {
+      functions.logger.error('Account soft-delete failed', {
+        uid: auth.uid,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      sendError(res, 500, 'internal', 'No se pudo marcar la cuenta como away.');
+      return;
+    }
   }
 
   if (req.method !== 'GET') {

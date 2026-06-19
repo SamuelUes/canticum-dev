@@ -8,6 +8,7 @@ export * as webPayments from './payments';
 export * as webAccount from './account';
 export * as webMisales from './misales';
 
+export { admin } from './admin'; 
 export { songs } from './songs';
 export { search } from './search';
 export { repertoires, Repertoires } from './repertoires';

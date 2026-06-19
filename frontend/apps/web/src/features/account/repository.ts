@@ -116,3 +116,36 @@ export async function fetchAccountSummary(userId?: string): Promise<AccountSumma
 export function invalidateAccountSummaryCache(): void {
   removeClientCacheByPrefix(ACCOUNT_SUMMARY_CACHE_PREFIX);
 }
+
+export async function softDeleteAccount(): Promise<void> {
+  if (!functionsBaseUrl) {
+    throw new Error('Functions base URL not configured.');
+  }
+
+  const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
+  if (!headers.Authorization) {
+    throw new Error('Debes iniciar sesión para eliminar tu cuenta.');
+  }
+
+  const response = await fetch(`${functionsBaseUrl}/account`, {
+    method: 'DELETE',
+    headers,
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    const reason = response.status === 401
+      ? 'Debes iniciar sesión para eliminar tu cuenta.'
+      : response.status === 403
+        ? 'No tienes permiso para eliminar esta cuenta.'
+        : 'No se pudo eliminar la cuenta.';
+    throw new Error(reason);
+  }
+
+  const payload = (await response.json()) as unknown;
+  if (typeof payload === 'object' && payload !== null && 'ok' in payload && payload.ok === true) {
+    return;
+  }
+
+  throw new Error('No se pudo eliminar la cuenta.');
+}

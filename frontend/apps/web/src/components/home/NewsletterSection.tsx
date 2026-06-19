@@ -1,3 +1,7 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { functionsBaseUrl } from '../../features/shared/functionsClient';
 import type { HomeText, NewsletterStat } from '../../types/home';
 
 interface NewsletterSectionProps {
@@ -6,6 +10,44 @@ interface NewsletterSectionProps {
 }
 
 export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchNewsletterImage = async () => {
+      try {
+        const response = await fetch(`${functionsBaseUrl}/admin-admin/newsletter`, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const payload = await response.json() as { ok: boolean; imageUrl: string | null };
+          if (payload.ok && payload.imageUrl) {
+            setImageUrl(payload.imageUrl);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch newsletter image:', error);
+      } finally {
+        // Image loaded or failed
+      }
+    };
+
+    void fetchNewsletterImage();
+  }, []);
+
+  if (imageUrl) {
+    return (
+      <section className="newsletter-banner layout-h-margin">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={imageUrl} alt={text.newsletterTitle} className="newsletter-banner-image" />
+      </section>
+    );
+  }
+
+  // Fallback to original design if no image is configured
   return (
     <section className="newsletter-banner layout-h-margin">
       <div className="banner-content">

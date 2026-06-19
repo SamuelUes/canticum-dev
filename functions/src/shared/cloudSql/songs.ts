@@ -1,5 +1,5 @@
 import { type Pool } from 'pg';
-import { getSharedPool } from './pool';
+import { getSharedPool, withPoolRetry } from './pool';
 
 export interface InstrumentationInput {
   instrumentationId?: string | null;
@@ -1125,44 +1125,46 @@ export async function setSongFavoriteInCloudSql(firebaseUid: string, sqlSongId: 
 }
 
 export async function getSongMetricsBySqlIds(sqlSongIds: number[]): Promise<Map<number, SongMetricRow>> {
-  const ids = Array.from(new Set(sqlSongIds.filter((id) => Number.isFinite(id) && id > 0).map((id) => Math.floor(id))));
-  const metrics = new Map<number, SongMetricRow>();
+  return withPoolRetry(async () => {
+    const ids = Array.from(new Set(sqlSongIds.filter((id) => Number.isFinite(id) && id > 0).map((id) => Math.floor(id))));
+    const metrics = new Map<number, SongMetricRow>();
 
-  if (ids.length === 0) {
-    return metrics;
-  }
+    if (ids.length === 0) {
+      return metrics;
+    }
 
-  const result = await getPool().query<{
-    sqlSongId: number;
-    totalViews: number;
-    likeCount: number;
-    popularity: number;
-    artistId: number | null;
-  }>(
-    `
-      SELECT
-        s.id AS "sqlSongId",
-        COALESCE(s.total_views, 0)::INT AS "totalViews",
-        COALESCE(s.like_count, 0)::INT AS "likeCount",
-        COALESCE(s.popularity, 0)::INT AS "popularity",
-        s.artist_id AS "artistId"
-      FROM songs s
-      WHERE s.id = ANY($1::INT[]);
-    `,
-    [ids]
-  );
+    const result = await getPool().query<{
+      sqlSongId: number;
+      totalViews: number;
+      likeCount: number;
+      popularity: number;
+      artistId: number | null;
+    }>(
+      `
+        SELECT
+          s.id AS "sqlSongId",
+          COALESCE(s.total_views, 0)::INT AS "totalViews",
+          COALESCE(s.like_count, 0)::INT AS "likeCount",
+          COALESCE(s.popularity, 0)::INT AS "popularity",
+          s.artist_id AS "artistId"
+        FROM songs s
+        WHERE s.id = ANY($1::INT[]);
+      `,
+      [ids]
+    );
 
-  result.rows.forEach((row) => {
-    metrics.set(row.sqlSongId, {
-      sqlSongId: row.sqlSongId,
-      totalViews: row.totalViews,
-      likeCount: row.likeCount,
-      popularity: row.popularity,
-      artistId: row.artistId
+    result.rows.forEach((row) => {
+      metrics.set(row.sqlSongId, {
+        sqlSongId: row.sqlSongId,
+        totalViews: row.totalViews,
+        likeCount: row.likeCount,
+        popularity: row.popularity,
+        artistId: row.artistId
+      });
     });
-  });
 
-  return metrics;
+    return metrics;
+  });
 }
 
 export async function listTopSongs(limit: number = 50): Promise<TopSongRow[]> {

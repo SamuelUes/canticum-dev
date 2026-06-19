@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { isAdminUser } from '../../features/auth/repository';
 import { usePremiumNavigation } from '../../hooks/usePremiumNavigation';
 import type { HomeText } from '../../types/home';
 import { CommandSearch } from '../ui/CommandSearch';
@@ -20,7 +21,7 @@ export function Header({ text }: HeaderProps) {
   const router = useRouter();
   const { user, loading, signOut } = useAuth();
   const { openPremiumPlans } = usePremiumNavigation();
-  const canManageMisales = user?.role === 'admin' || user?.role === 'editor';
+  const canManageAdminRoutes = isAdminUser(user);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -38,8 +39,10 @@ export function Header({ text }: HeaderProps) {
       router.prefetch('/profile');
       router.prefetch('/account');
       router.prefetch('/auth');
-      if (canManageMisales) {
+      if (canManageAdminRoutes) {
+        router.prefetch('/admin/dashboard');
         router.prefetch('/admin/misales');
+        router.prefetch('/admin/albums');
       }
     };
 
@@ -54,7 +57,7 @@ export function Header({ text }: HeaderProps) {
 
     const timeoutId = win.setTimeout(prefetchRoutes, 900);
     return () => win.clearTimeout(timeoutId);
-  }, [router, canManageMisales]);
+  }, [router, canManageAdminRoutes]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -93,9 +96,11 @@ export function Header({ text }: HeaderProps) {
             welcomeLabel={text.welcome}
             profileLabel={text.userNameLabel}
             accountLabel="Cuenta"
+            adminLabel={canManageAdminRoutes ? 'Panel admin' : undefined}
             signOutLabel="Cerrar sesión"
             onProfile={() => router.push('/profile')}
             onAccount={() => router.push('/account')}
+            onAdmin={canManageAdminRoutes ? () => router.push('/admin/dashboard') : undefined}
             onSignOut={() => void handleSignOut()}
           />
         </div>

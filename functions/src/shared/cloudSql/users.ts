@@ -53,14 +53,15 @@ export async function upsertUserInCloudSql(authUser: UserRecord, displayNameOver
   const passwordHash = rawPassword ? hashPassword(rawPassword) : null;
 
   const query = `
-    INSERT INTO users (firebase_uid, name, email, password, auth_provider)
-    VALUES ($1, $2, $3, $4, 'firebase_auth')
+    INSERT INTO users (firebase_uid, name, email, password, auth_provider, status)
+    VALUES ($1, $2, $3, $4, 'firebase_auth', 'active')
     ON CONFLICT (email)
     DO UPDATE SET
       firebase_uid = EXCLUDED.firebase_uid,
       name = EXCLUDED.name,
       auth_provider = EXCLUDED.auth_provider,
-      password = COALESCE(EXCLUDED.password, users.password)
+      password = COALESCE(EXCLUDED.password, users.password),
+      status = COALESCE(EXCLUDED.status, users.status)
     RETURNING id, firebase_uid AS "firebaseUid", name, email, created_at AS "createdAt";
   `;
 
@@ -105,4 +106,17 @@ export async function hasCloudSqlUser(uid: string, email?: string | null): Promi
 
 export async function testCloudSqlConnection(): Promise<void> {
   await getPool().query('SELECT 1;');
+}
+
+export async function updateUserStatus(firebaseUid: string, status: 'active' | 'away'): Promise<void> {
+  const query = `
+    UPDATE users
+    SET status = $1
+    WHERE firebase_uid = $2;
+  `;
+
+  const result = await getPool().query(query, [status, firebaseUid]);
+  if (result.rowCount === 0) {
+    throw new Error('User not found in Cloud SQL.');
+  }
 }

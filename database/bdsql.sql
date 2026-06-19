@@ -18,6 +18,7 @@ CREATE TABLE users (
   email VARCHAR(150) UNIQUE NOT NULL,
   password TEXT,
   auth_provider VARCHAR(50) NOT NULL DEFAULT 'firebase_auth',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -163,6 +164,8 @@ CREATE TABLE artists (
   popularity SMALLINT DEFAULT 0,
   genres_json JSONB DEFAULT '[]'::jsonb,
   categories_json JSONB DEFAULT '[]'::jsonb,
+  status VARCHAR(20) DEFAULT 'active',
+  is_official BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -777,6 +780,9 @@ CREATE INDEX idx_users_email ON users(email);
 -- For artist suggestions
 CREATE INDEX idx_artist_suggestions_artist_score ON artist_suggestions(artist_id, relevance_score DESC);
 CREATE INDEX idx_artist_suggestions_suggested_score ON artist_suggestions(suggested_artist_id, relevance_score DESC);
+
+-- For artist status (soft delete)
+CREATE INDEX idx_artists_status ON artists(status);
 
 -- For song metrics (only if table exists)
 -- CREATE INDEX idx_song_metrics_song_id ON song_metrics(song_id);

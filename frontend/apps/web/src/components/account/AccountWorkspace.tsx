@@ -3,8 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { fetchAccountSummary, invalidateAccountSummaryCache } from '../../features/account/repository';
-import { bootstrapInitialAdminAccount } from '../../features/auth/repository';
+import { fetchAccountSummary, invalidateAccountSummaryCache, softDeleteAccount } from '../../features/account/repository';
 import type { AccountSummary } from '../../features/account/repository';
 import { getCachedSearchDatasetClient, getSearchDatasetClient } from '../../features/search/repository';
 import type { SearchrepertoireItem, SearchSongItem } from '../../types/search';
@@ -21,6 +20,16 @@ const statusLabels: Record<CanonicalStatus, string> = {
   REJECTED: 'Rechazada',
   PUBLISHED: 'Publicada',
   ARCHIVED: 'Archivada'
+};
+
+const statusToneClass: Record<CanonicalStatus, string> = {
+  DRAFT: 'is-draft',
+  UPLOADED: 'is-uploaded',
+  IN_REVIEW: 'is-review',
+  APPROVED: 'is-approved',
+  REJECTED: 'is-rejected',
+  PUBLISHED: 'is-published',
+  ARCHIVED: 'is-archived'
 };
 
 function normalizeStatus(raw: unknown): CanonicalStatus {
@@ -63,11 +72,13 @@ function toSongStatus(item: SearchSongItem): CanonicalStatus {
   return normalizeStatus((item as SearchSongItem & { status?: unknown }).status);
 }
 
-function countByStatus(items: CanonicalStatus[]) {
-  const map = new Map<CanonicalStatus, number>();
-  STATUS_ORDER.forEach((status) => map.set(status, 0));
-  items.forEach((status) => map.set(status, (map.get(status) ?? 0) + 1));
-  return map;
+function getInitials(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.at(0)?.toUpperCase() ?? '')
+    .join('') || 'CU';
 }
 
 export function AccountWorkspace() {
@@ -76,11 +87,9 @@ export function AccountWorkspace() {
   const [summary, setSummary] = useState<AccountSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [bootstrapLoading, setBootstrapLoading] = useState(false);
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  const [bootstrapSuccess, setBootstrapSuccess] = useState<string | null>(null);
-  const [isDeletingOldSongs, setIsDeletingOldSongs] = useState(false);
-  const [deleteResult, setDeleteResult] = useState<string | null>(null);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
+  const [deleteAccountSuccess, setDeleteAccountSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -209,38 +218,17 @@ export function AccountWorkspace() {
   const songItems = summary ? summarySongs : fallbackSongs;
   const repertoireItems = summary ? summaryRepertoires : fallbackRepertoires;
 
-  const songStatusSummary = useMemo(() => {
-    if (summary) {
-      const map = new Map<CanonicalStatus, number>();
-      STATUS_ORDER.forEach((status) => {
-        const cloudSqlValue = summary.stats.songs.cloudSql?.[status] ?? 0;
-        const firestoreValue = summary.stats.songs.firestore?.[status] ?? 0;
-        map.set(status, cloudSqlValue || firestoreValue || 0);
-      });
-      return map;
-    }
-
-    return countByStatus(songItems.map((item) => item.status));
-  }, [summary, songItems]);
-
-  const repertoireStatusSummary = useMemo(() => {
-    if (summary) {
-      const map = new Map<CanonicalStatus, number>();
-      STATUS_ORDER.forEach((status) => {
-        map.set(status, summary.stats.repertoires?.[status] ?? 0);
-      });
-      return map;
-    }
-
-    return countByStatus(repertoireItems.map((item) => item.status));
-  }, [summary, repertoireItems]);
-
   const songDrafts = songItems.filter((song) => song.status === 'DRAFT').length;
+  const songInReview = songItems.filter((song) => song.status === 'IN_REVIEW').length;
   const songApproved = songItems.filter((song) => song.status === 'APPROVED').length;
   const songPublished = songItems.filter((song) => song.status === 'PUBLISHED').length;
 
   const privateRepertoires = repertoireItems.filter((item) => !item.isPublic).length;
   const publicRepertoires = repertoireItems.filter((item) => item.isPublic).length;
+  const totalSongs = songItems.length;
+  const totalRepertoires = repertoireItems.length;
+  const totalPublished = songPublished + publicRepertoires;
+  const editorialPending = songDrafts + songInReview;
 
   const profileEmail = summary?.profile.email ?? user?.email ?? 'Sin correo';
   const profileName = summary?.profile.displayName ?? user?.displayName ?? user?.email ?? 'Sin nombre';
@@ -248,216 +236,249 @@ export function AccountWorkspace() {
   const profilePlan = summary?.profile.plan ?? (summary?.profile.premium ?? user?.isPremium ? 'premium' : 'free');
   const profilePremium = summary?.profile.premium ?? user?.isPremium ?? false;
   const canBootstrapInitialAdmin = profileRole === 'admin';
+  const profileInitials = getInitials(profileName);
+  const visibleSongs = songItems.slice(0, 5);
+  const visibleRepertoires = repertoireItems.slice(0, 5);
+  const planLabel = profilePremium || profilePlan === 'premium' ? 'Premium' : 'Free';
 
-  const handleBootstrapInitialAdmin = async () => {
-    if (!canBootstrapInitialAdmin || bootstrapLoading) {
+  const handleSoftDeleteAccount = async () => {
+    if (isDeletingAccount) {
       return;
     }
 
-    setBootstrapLoading(true);
-    setBootstrapError(null);
-    setBootstrapSuccess(null);
-
-    const result = await bootstrapInitialAdminAccount();
-    if (!result.ok) {
-      setBootstrapError(result.error ?? 'No se pudo activar el admin inicial.');
-      setBootstrapLoading(false);
-      return;
-    }
-
-    invalidateAccountSummaryCache();
-    const refreshedSummary = await fetchAccountSummary();
-    if (refreshedSummary) {
-      setSummary(refreshedSummary);
-    }
-
-    setBootstrapSuccess('Cuenta activada como admin.');
-    setBootstrapLoading(false);
-  };
-
-  const handleBulkDeleteOldSongs = async () => {
-    const confirm = window.confirm(
-      '¿Estás seguro? Esta acción eliminará TODAS las canciones creadas antes del 10 de agosto de 2026. ' +
-      'Esta acción no se puede deshacer.'
+    const confirmed = window.confirm(
+      '¿Estás seguro de que quieres eliminar tu cuenta? Esta acción marcará tu cuenta como "away" y no podrás acceder a ella ni a tus contenidos. Los datos se conservarán en el sistema pero no serán visibles ni accesibles.'
     );
-    if (!confirm) return;
 
-    setIsDeletingOldSongs(true);
-    setDeleteResult(null);
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    setDeleteAccountError(null);
+    setDeleteAccountSuccess(null);
 
     try {
-      const response = await fetch('/api/songs/admin/bulk-delete-before-date', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const result = await response.json();
-      if (response.ok) {
-        setDeleteResult(`Eliminadas ${result.deletedCount} canciones de Cloud SQL y ${result.firestoreDeletedCount} de Firestore.`);
-        await invalidateAccountSummaryCache();
-        const updated = await fetchAccountSummary();
-        setSummary(updated);
-      } else {
-        setDeleteResult(`Error: ${result.error || 'No se pudo completar la eliminación.'}`);
-      }
+      await softDeleteAccount();
+      setDeleteAccountSuccess('Cuenta marcada como away. Serás redirigido al inicio de sesión.');
+      invalidateAccountSummaryCache();
+
+      setTimeout(() => {
+        window.location.href = '/auth';
+      }, 2000);
     } catch (error) {
-      setDeleteResult(`Error al eliminar canciones: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+      setDeleteAccountError(error instanceof Error ? error.message : 'No se pudo eliminar la cuenta.');
     } finally {
-      setIsDeletingOldSongs(false);
+      setIsDeletingAccount(false);
     }
   };
 
   return (
     <section className="account-page-layout layout-h-margin">
       <header className="account-page-head">
+        <span className="account-page-kicker">Centro de control</span>
         <h1>Mi cuenta</h1>
-        <p>Gestiona tu perfil, estados de contenido y acceso rápido a edición de canciones y repertorios.</p>
+        <p>Gestiona tu perfil, el flujo editorial de tu contenido y los accesos rápidos para seguir publicando música.</p>
       </header>
 
-      {summaryLoading ? <p>Cargando datos de tu cuenta...</p> : null}
-      {summaryError ? <p className="create-form-error">{summaryError}</p> : null}
+      {summaryLoading ? (
+        <div className="account-loading-card" role="status">Cargando datos de tu cuenta...</div>
+      ) : null}
+      {summaryError ? <p className="create-form-error account-feedback">{summaryError}</p> : null}
 
-      <article className="account-card">
-        <h2>Datos básicos</h2>
-        <div className="account-basic-grid">
-          <div>
-            <span>Correo</span>
-            <strong>{profileEmail}</strong>
-          </div>
-          <div>
-            <span>Nombre</span>
-            <strong>{profileName}</strong>
-          </div>
-          <div>
-            <span>Tipo Perfil</span>
-            <strong>{profileRole}</strong>
-          </div>
-          <div>
-            <span>Plan</span>
-            <strong>{profilePremium ? 'Premium' : profilePlan === 'premium' ? 'Premium' : 'Free'}</strong>
-          </div>
-        </div>
-
-        {canBootstrapInitialAdmin ? (
-          <div className="account-admin-actions">
-            <p className="account-admin-note">
-              Esta cuenta puede convertirse en el administrador inicial para habilitar la gestión de roles.
-            </p>
-            <button
-              type="button"
-              className="create-form-submit account-admin-button"
-              onClick={() => void handleBootstrapInitialAdmin()}
-              disabled={bootstrapLoading}
-            >
-              {bootstrapLoading ? 'Activando...' : 'Activar admin inicial'}
-            </button>
-            {bootstrapError ? <p className="create-form-error">{bootstrapError}</p> : null}
-            {bootstrapSuccess ? <p className="create-form-success">{bootstrapSuccess}</p> : null}
-
-            {user?.role === 'admin' && (
-              <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #e5e7eb' }}>
-                <p style={{ fontSize: '0.875rem', color: '#6b7280', marginBottom: '0.5rem' }}>
-                  Acciones de administrador
-                </p>
-                <button
-                  type="button"
-                  className="create-form-submit"
-                  style={{ backgroundColor: '#dc2626', color: 'white' }}
-                  onClick={() => void handleBulkDeleteOldSongs()}
-                  disabled={isDeletingOldSongs}
-                >
-                  {isDeletingOldSongs ? 'Eliminando...' : 'Eliminar canciones antes del 10 de agosto de 2026'}
-                </button>
-                {deleteResult ? <p className={deleteResult.startsWith('Error') ? 'create-form-error' : 'create-form-success'} style={{ marginTop: '0.5rem' }}>{deleteResult}</p> : null}
+      <section className="account-hero-grid" aria-label="resumen principal de cuenta">
+        <article className="account-hero-card">
+          <div className="account-profile-lockup">
+            <div className="account-avatar" aria-hidden="true">{profileInitials}</div>
+            <div>
+              <span className="account-page-kicker">Perfil musical</span>
+              <h2>{profileName}</h2>
+              <p>{profileEmail}</p>
+              <div className="account-profile-badges" aria-label="detalles del perfil">
+                <span>{profileRole}</span>
+                <span className={profilePremium || profilePlan === 'premium' ? 'is-premium' : ''}>{planLabel}</span>
               </div>
-            )}
+            </div>
           </div>
-        ) : null}
-      </article>
+
+          <div className="account-hero-actions">
+            <Link href="/profile" className="account-secondary-action">Editar perfil</Link>
+            <Link href="/create/song" className="account-primary-action">Crear canción</Link>
+            <Link href="/create/repertoires" className="account-secondary-action">Crear repertorio</Link>
+          </div>
+        </article>
+
+        <article className="account-impact-card">
+          <div>
+            <span className="account-page-kicker">Impacto general</span>
+            <h2>Tu biblioteca</h2>
+          </div>
+          <div className="account-impact-grid">
+            <div>
+              <span>Canciones</span>
+              <strong>{totalSongs}</strong>
+            </div>
+            <div>
+              <span>Repertorios</span>
+              <strong>{totalRepertoires}</strong>
+            </div>
+            <div>
+              <span>Publicadas</span>
+              <strong>{totalPublished}</strong>
+            </div>
+            <div>
+              <span>Pendientes</span>
+              <strong>{editorialPending}</strong>
+            </div>
+          </div>
+        </article>
+      </section>
 
       <section className="account-kpi-grid" aria-label="resumen de cuenta">
         <article className="account-kpi-card">
-          <small>Canciones en draft</small>
+          <small>Canciones en borrador</small>
           <strong>{songDrafts}</strong>
+          <span>Listas para seguir editando.</span>
+        </article>
+        <article className="account-kpi-card">
+          <small>En revisión</small>
+          <strong>{songInReview}</strong>
+          <span>Contenido esperando validación.</span>
         </article>
         <article className="account-kpi-card">
           <small>Canciones aprobadas</small>
           <strong>{songApproved}</strong>
-        </article>
-        <article className="account-kpi-card">
-          <small>Canciones publicadas</small>
-          <strong>{songPublished}</strong>
+          <span>Material listo para publicar.</span>
         </article>
         <article className="account-kpi-card">
           <small>Repertorios privados</small>
           <strong>{privateRepertoires}</strong>
+          <span>Colecciones internas.</span>
         </article>
         <article className="account-kpi-card">
           <small>Repertorios públicos</small>
           <strong>{publicRepertoires}</strong>
+          <span>Disponibles para la comunidad.</span>
+        </article>
+      </section>
+  
+
+      <section className="account-content-columns" aria-label="contenido reciente">
+        <article className="account-card">
+          <div className="account-section-head">
+            <div>
+              <span className="account-page-kicker">{totalSongs} canciones</span>
+              <h2>Mis canciones recientes</h2>
+            </div>
+            <Link href="/search?type=song">Ver todas</Link>
+          </div>
+          {songItems.length === 0 ? (
+            <div className="account-empty-state">
+              <strong>Aún no tienes canciones registradas.</strong>
+              <span>Crea tu primera canción para comenzar a construir tu biblioteca.</span>
+              <Link href="/create/song">Crear canción</Link>
+            </div>
+          ) : null}
+          <div className="account-items-grid" hidden={songItems.length === 0}>
+            {visibleSongs.map((song) => (
+              <div key={song.id} className="account-item-card">
+                <div className="account-item-thumb" aria-hidden="true">♪</div>
+                <div className="account-item-main">
+                  <strong>{song.title}</strong>
+                  <small>{song.subtitle ?? 'Sin artista'}</small>
+                  <span className={`account-state-pill ${statusToneClass[song.status]}`}>{statusLabels[song.status]}</span>
+                </div>
+                <div className="account-item-actions">
+                  <Link href={`/songs/${song.linkId}/edit`}>Editar</Link>
+                  <Link href={`/songs/${song.linkId}`}>Ver</Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="account-card">
+          <div className="account-section-head">
+            <div>
+              <span className="account-page-kicker">{totalRepertoires} repertorios</span>
+              <h2>Mis repertorios recientes</h2>
+            </div>
+            <Link href="/repertoires">Ver todos</Link>
+          </div>
+          {repertoireItems.length === 0 ? (
+            <div className="account-empty-state">
+              <strong>Aún no tienes repertorios registrados.</strong>
+              <span>Organiza canciones por celebraciones, ciclos o agrupaciones.</span>
+              <Link href="/create/repertoires">Crear repertorio</Link>
+            </div>
+          ) : null}
+          <div className="account-items-grid" hidden={repertoireItems.length === 0}>
+            {visibleRepertoires.map((item) => (
+              <div key={item.id} className="account-item-card">
+                <div className="account-item-thumb is-repertoire" aria-hidden="true">≡</div>
+                <div className="account-item-main">
+                  <strong>{item.title}</strong>
+                  <small>{item.subtitle ?? 'Sin descripción'}</small>
+                  <span className={`account-state-pill ${statusToneClass[item.status]}`}>{statusLabels[item.status]}</span>
+                </div>
+                <div className="account-item-actions">
+                  <Link href={`/repertoires/${item.linkId}/edit`}>Editar</Link>
+                  <Link href={`/repertoires/${item.linkId}`}>Ver</Link>
+                </div>
+              </div>
+            ))}
+          </div>
         </article>
       </section>
 
-      <article className="account-card">
-        <h2>Estados actuales de canciones</h2>
-        <ul className="account-status-list">
-          {STATUS_ORDER.map((status) => (
-            <li key={`song-${status}`}>
-              <span>{statusLabels[status]}</span>
-              <strong>{songStatusSummary.get(status) ?? 0}</strong>
-            </li>
-          ))}
-        </ul>
-      </article>
-
-      <article className="account-card">
-        <h2>Estados actuales de repertorios</h2>
-        <ul className="account-status-list">
-          {STATUS_ORDER.map((status) => (
-            <li key={`repertoire-${status}`}>
-              <span>{statusLabels[status]}</span>
-              <strong>{repertoireStatusSummary.get(status) ?? 0}</strong>
-            </li>
-          ))}
-        </ul>
-      </article>
-
-      <article className="account-card">
-        <h2>Mis canciones</h2>
-        {songItems.length === 0 ? <p>Aún no tienes canciones registradas.</p> : null}
-        <div className="account-items-grid" hidden={songItems.length === 0}>
-          {songItems.map((song) => (
-            <div key={song.id} className="account-item-card">
-              <div>
-                <strong>{song.title}</strong>
-                <small>{song.subtitle ?? 'Sin artista'}</small>
-              </div>
-              <span className="account-state-pill">{statusLabels[song.status]}</span>
-              <div className="account-item-actions">
-                <Link href={`/songs/${song.linkId}`}>Ver</Link>
-                <Link href={`/songs/${song.linkId}/edit`}>Editar</Link>
-              </div>
+      {canBootstrapInitialAdmin ? (
+        <article className="account-card account-admin-panel">
+          <div className="account-section-head">
+            <div>
+              <span className="account-page-kicker">Administración</span>
+              <h2>Panel administrativo</h2>
             </div>
-          ))}
+          </div>
+          <div className="account-admin-actions">
+            <p className="account-admin-note">
+              Las acciones globales de administración ahora viven en el panel dedicado.
+            </p>
+            <Link href="/admin/dashboard" className="account-secondary-action account-admin-button">
+              Abrir panel de administración
+            </Link>
+          </div>
+        </article>
+      ) : null}
+
+      <article className="account-card account-tools">
+        <div className="account-section-head">
+          <div>
+            <span className="account-page-kicker">Administración</span>
+            <h2>Herramientas de cuenta</h2>
+          </div>
         </div>
-      </article>
+        <div className="account-admin-actions">
+          <p className="account-admin-note">
+            Las acciones de administración global se gestionan desde el panel dedicado.
+          </p>
 
-      <article className="account-card">
-        <h2>Mis repertorios</h2>
-        {repertoireItems.length === 0 ? <p>Aún no tienes repertorios registrados.</p> : null}
-        <div className="account-items-grid" hidden={repertoireItems.length === 0}>
-          {repertoireItems.map((item) => (
-            <div key={item.id} className="account-item-card">
-              <div>
-                <strong>{item.title}</strong>
-                <small>{item.subtitle ?? 'Sin descripción'}</small>
-              </div>
-              <span className="account-state-pill">{statusLabels[item.status]}</span>
-              <div className="account-item-actions">
-                <Link href={`/repertoires/${item.linkId}`}>Ver</Link>
-                <Link href={`/repertoires/${item.linkId}/edit`}>Editar</Link>
-              </div>
-            </div>
-          ))}
+          <Link href="/admin/dashboard" className="account-secondary-action account-admin-button">
+            Abrir panel de administración
+          </Link>
+
+          <div className="account-danger-zone">
+            <p>Zona de peligro: acciones destructivas de cuenta</p>
+            <button
+              type="button"
+              className="account-danger-button"
+              onClick={() => void handleSoftDeleteAccount()}
+              disabled={isDeletingAccount}
+            >
+              {isDeletingAccount ? 'Eliminando cuenta...' : 'Eliminar mi cuenta'}
+            </button>
+            {deleteAccountError ? <p className="create-form-error">{deleteAccountError}</p> : null}
+            {deleteAccountSuccess ? <p className="create-form-success">{deleteAccountSuccess}</p> : null}
+          </div>
         </div>
       </article>
     </section>

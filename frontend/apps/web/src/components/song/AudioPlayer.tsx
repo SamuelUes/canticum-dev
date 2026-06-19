@@ -103,7 +103,7 @@ export function AudioPlayer({ src, title, autoPlay = false, onPlayingChange, onD
       setVolume(previousVolumeRef.current || 0.8);
     }
     setMuted(next);
-  }, [muted, volume, setVolume]);
+  }, [muted, volume, setVolume, setMuted]);
 
   const handleVolumeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const next = Number(event.target.value) / 100;

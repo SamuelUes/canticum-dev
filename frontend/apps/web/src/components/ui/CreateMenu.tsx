@@ -4,14 +4,14 @@ import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { isAdminUser } from '../../features/auth/repository';
 
 export function CreateMenu() {
   const [isOpen, setIsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { user, loading } = useAuth();
-  const canManageMisales = user?.role === 'admin' || user?.role === 'editor';
-  const canManageAlbums = user?.role === 'admin' || user?.role === 'editor';
+  const canManageAdminShortcuts = isAdminUser(user);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dialogTitleId = useId();
 
@@ -107,7 +107,7 @@ export function CreateMenu() {
                     <strong>Repertorio</strong>
                   </button>
 
-                  {canManageMisales ? (
+                  {canManageAdminShortcuts ? (
                     <button
                       type="button"
                       className="create-overlay-card create-overlay-card--misal"
@@ -118,7 +118,7 @@ export function CreateMenu() {
                     </button>
                   ) : null}
 
-                  {canManageAlbums ? (
+                  {canManageAdminShortcuts ? (
                     <button
                       type="button"
                       className="create-overlay-card create-overlay-card--album"

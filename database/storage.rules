@@ -110,6 +110,11 @@ service firebase.storage {
       allow write: if canUploadRepertoireCover(repertoireId);
     }
 
+    match /artists/{artistId}/cover/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdminOrEditor();
+    }
+
     match /misal/{weekId}/{misalId} {
       allow read: if true;
       allow write: if isAdminOrEditor()

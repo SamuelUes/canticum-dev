@@ -1,5 +1,5 @@
 import { type Pool } from 'pg';
-import { getSharedPool } from './pool';
+import { getSharedPool, withPoolRetry } from './pool';
 
 export interface CloudSqlArtistRow {
   id: number;
@@ -9,10 +9,13 @@ export interface CloudSqlArtistRow {
   imageUrl: string | null;
   images?: Array<{ url: string; width?: number; height?: number }>;
   genres?: string[];
+  categories?: string[];
   songsCount?: number;
   likeCount?: number;
   totalViews?: number;
   popularity?: number;
+  status?: string;
+  isOfficial?: boolean;
 }
 
 export interface ArtistViewMetricRow {
@@ -256,47 +259,51 @@ export async function getArtistById(artistId: number): Promise<CloudSqlArtistRow
 }
 
 export async function listTopArtists(limit: number = 30): Promise<CloudSqlArtistRow[]> {
-  const result = await getPool().query<CloudSqlArtistRow>(
-    `
-      SELECT
-        id,
-        name,
-        type,
-        image_url AS "imageUrl"
-      FROM artists
-      WHERE popularity IS NOT NULL
-        AND popularity > 0
-      ORDER BY
-        compute_artist_popularity(COALESCE(total_views, 0), COALESCE(like_count, 0)) DESC,
-        popularity DESC NULLS LAST,
-        name ASC
-      LIMIT $1;
-    `,
-    [limit]
-  );
+  return withPoolRetry(async () => {
+    const result = await getPool().query<CloudSqlArtistRow>(
+      `
+        SELECT
+          id,
+          name,
+          type,
+          image_url AS "imageUrl"
+        FROM artists
+        WHERE popularity IS NOT NULL
+          AND popularity > 0
+        ORDER BY
+          compute_artist_popularity(COALESCE(total_views, 0), COALESCE(like_count, 0)) DESC,
+          popularity DESC NULLS LAST,
+          name ASC
+        LIMIT $1;
+      `,
+      [limit]
+    );
 
-  return result.rows;
+    return result.rows;
+  });
 }
 
 export async function listActiveCategorySlugs(limit: number = 200): Promise<string[]> {
-  const normalizedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 200;
+  return withPoolRetry(async () => {
+    const normalizedLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 200;
 
-  const activeResult = await getPool().query<{ slug: string }>(
-    `
-      SELECT slug
-      FROM categories
-      WHERE is_active = TRUE
-        AND slug IS NOT NULL
-        AND btrim(slug) <> ''
-      ORDER BY slug ASC
-      LIMIT $1;
-    `,
-    [normalizedLimit]
-  );
+    const activeResult = await getPool().query<{ slug: string }>(
+      `
+        SELECT slug
+        FROM categories
+        WHERE is_active = TRUE
+          AND slug IS NOT NULL
+          AND btrim(slug) <> ''
+        ORDER BY slug ASC
+        LIMIT $1;
+      `,
+      [normalizedLimit]
+    );
 
-  return activeResult.rows
-    .map((row) => (typeof row.slug === 'string' ? row.slug.trim().toLowerCase() : ''))
-    .filter((slug) => slug.length > 0);
+    return activeResult.rows
+      .map((row) => (typeof row.slug === 'string' ? row.slug.trim().toLowerCase() : ''))
+      .filter((slug) => slug.length > 0);
+  });
 }
 
 export async function findArtistByNameSlug(slug: string): Promise<CloudSqlArtistRow | null> {
@@ -926,4 +933,222 @@ export async function syncFeaturedArtistsToSuggestions(artists: FeaturedArtistSn
   } finally {
     client.release();
   }
+}
+
+export async function updateArtistInCloudSql(
+  artistId: number,
+  data: {
+    name?: string;
+    type?: string;
+    bio?: string | null;
+    imageUrl?: string | null;
+    images?: Array<{ url: string; width?: number; height?: number }>;
+    genres?: string[];
+    categories?: string[];
+    status?: string;
+    isOfficial?: boolean;
+  }
+): Promise<CloudSqlArtistRow> {
+  const numericArtistId = Number(artistId);
+  if (!Number.isFinite(numericArtistId) || numericArtistId <= 0) {
+    throw new Error('Invalid artist ID');
+  }
+
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  let paramIndex = 1;
+
+  if (data.name !== undefined) {
+    updates.push(`name = $${paramIndex}`);
+    values.push(data.name.trim());
+    paramIndex++;
+  }
+
+  if (data.type !== undefined) {
+    updates.push(`type = $${paramIndex}`);
+    values.push(data.type);
+    paramIndex++;
+  }
+
+  if (data.bio !== undefined) {
+    updates.push(`bio = $${paramIndex}`);
+    values.push(data.bio);
+    paramIndex++;
+  }
+
+  if (data.imageUrl !== undefined) {
+    updates.push(`image_url = $${paramIndex}`);
+    values.push(data.imageUrl);
+    paramIndex++;
+  }
+
+  if (data.images !== undefined) {
+    updates.push(`images_json = $${paramIndex}`);
+    values.push(JSON.stringify(data.images));
+    paramIndex++;
+  }
+
+  if (data.genres !== undefined) {
+    updates.push(`genres_json = $${paramIndex}`);
+    values.push(JSON.stringify(data.genres));
+    paramIndex++;
+  }
+
+  if (data.categories !== undefined) {
+    updates.push(`categories_json = $${paramIndex}`);
+    values.push(JSON.stringify(data.categories));
+    paramIndex++;
+  }
+
+  if (data.status !== undefined) {
+    updates.push(`status = $${paramIndex}`);
+    values.push(data.status);
+    paramIndex++;
+  }
+
+  if (data.isOfficial !== undefined) {
+    updates.push(`is_official = $${paramIndex}`);
+    values.push(data.isOfficial);
+    paramIndex++;
+  }
+
+  if (updates.length === 0) {
+    throw new Error('No fields to update');
+  }
+
+  values.push(numericArtistId);
+
+  const query = `
+    UPDATE artists
+    SET ${updates.join(', ')}
+    WHERE id = $${paramIndex}
+    RETURNING
+      id,
+      name,
+      type,
+      bio,
+      image_url AS "imageUrl",
+      images_json AS "images",
+      genres_json AS "genres",
+      categories_json AS "categories",
+      status,
+      created_at AS "createdAt";
+  `;
+
+  const result = await getPool().query<CloudSqlArtistRow>(query, values);
+
+  if (!result.rows.length) {
+    throw new Error('Artist not found');
+  }
+
+  return result.rows[0];
+}
+
+export async function softDeleteArtist(artistId: number): Promise<CloudSqlArtistRow> {
+  const numericArtistId = Number(artistId);
+  if (!Number.isFinite(numericArtistId) || numericArtistId <= 0) {
+    throw new Error('Invalid artist ID');
+  }
+
+  const query = `
+    UPDATE artists
+    SET status = 'inactive'
+    WHERE id = $1
+    RETURNING
+      id,
+      name,
+      type,
+      bio,
+      image_url AS "imageUrl",
+      images_json AS "images",
+      genres_json AS "genres",
+      categories_json AS "categories",
+      status,
+      created_at AS "createdAt";
+  `;
+
+  const result = await getPool().query<CloudSqlArtistRow>(query, [numericArtistId]);
+
+  if (!result.rows.length) {
+    throw new Error('Artist not found');
+  }
+
+  return result.rows[0];
+}
+
+export async function hardDeleteArtist(artistId: number): Promise<void> {
+  const numericArtistId = Number(artistId);
+  if (!Number.isFinite(numericArtistId) || numericArtistId <= 0) {
+    throw new Error('Invalid artist ID');
+  }
+
+  const client = await getPool().connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Delete artist suggestions
+    await client.query(
+      'DELETE FROM artist_suggestions WHERE artist_id = $1 OR suggested_artist_id = $1',
+      [numericArtistId]
+    );
+
+    // Delete artist likes
+    await client.query('DELETE FROM artist_likes WHERE artist_id = $1', [numericArtistId]);
+
+    // Update songs to remove artist reference
+    await client.query('UPDATE songs SET artist_id = NULL WHERE artist_id = $1', [numericArtistId]);
+
+    // Update song versions to remove artist reference
+    await client.query('UPDATE song_versions SET artist_id = NULL WHERE artist_id = $1', [numericArtistId]);
+
+    // Update albums to remove artist reference
+    await client.query('UPDATE albums SET artist_id = NULL WHERE artist_id = $1', [numericArtistId]);
+
+    // Delete artist discography
+    await client.query('DELETE FROM artist_discography WHERE artist_id = $1', [numericArtistId]);
+
+    // Delete artist
+    await client.query('DELETE FROM artists WHERE id = $1', [numericArtistId]);
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getArtistByIdForAdmin(artistId: number): Promise<CloudSqlArtistRow | null> {
+  const numericArtistId = Number(artistId);
+  if (!Number.isFinite(numericArtistId) || numericArtistId <= 0) {
+    console.log('getArtistByIdForAdmin: Invalid artist ID', artistId);
+    return null;
+  }
+
+  const query = `
+    SELECT
+      id,
+      name,
+      type,
+      bio,
+      image_url AS "imageUrl",
+      images_json AS "images",
+      genres_json AS "genres",
+      categories_json AS "categories",
+      like_count AS "likeCount",
+      total_views AS "totalViews",
+      popularity,
+      COALESCE(status, 'active') AS "status",
+      COALESCE(is_official, FALSE) AS "isOfficial",
+      created_at AS "createdAt"
+    FROM artists
+    WHERE id = $1
+    LIMIT 1;
+  `;
+
+  const result = await getPool().query<CloudSqlArtistRow>(query, [numericArtistId]);
+  console.log('getArtistByIdForAdmin: Query result for artist', numericArtistId, ':', result.rows[0]);
+  return result.rows[0] ?? null;
 }

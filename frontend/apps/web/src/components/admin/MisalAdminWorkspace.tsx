@@ -1,13 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
+import { isAdminUser } from '../../features/auth/repository';
 import { uploadWeeklyMisal } from '../../features/misales/repository';
-
-function isMisalManager(role?: string): boolean {
-  return role === 'admin' || role === 'editor';
-}
 
 export function MisalAdminWorkspace() {
   const router = useRouter();
@@ -19,7 +16,7 @@ export function MisalAdminWorkspace() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  const canManage = useMemo(() => isMisalManager(user?.role), [user?.role]);
+  const canManage = isAdminUser(user);
 
   if (loading) {
     return (
@@ -37,7 +34,7 @@ export function MisalAdminWorkspace() {
       <section className="create-page-layout misal-admin-layout">
         <header className="create-page-header">
           <h1>Programa semanal de misas</h1>
-          <p>Solo admin o moderador pueden subir misales.</p>
+          <p>Solo admin pueden subir misales.</p>
         </header>
 
         <div className="misal-admin-locked">

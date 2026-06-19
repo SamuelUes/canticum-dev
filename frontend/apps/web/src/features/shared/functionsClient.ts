@@ -37,33 +37,12 @@ async function getClientAuthToken(): Promise<string | null> {
   }
 }
 
-async function getServerSessionToken(): Promise<string | null> {
-  if (typeof window !== 'undefined') {
-    return null;
-  }
-
-  try {
-    const { cookies } = await import('next/headers');
-    return cookies().get('__session')?.value ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export async function buildFunctionsHeaders(baseHeaders: Record<string, string>): Promise<Record<string, string>> {
   const clientToken = await getClientAuthToken();
   if (clientToken) {
     return {
       ...baseHeaders,
       Authorization: `Bearer ${clientToken}`
-    };
-  }
-
-  const serverToken = await getServerSessionToken();
-  if (serverToken) {
-    return {
-      ...baseHeaders,
-      Authorization: `Bearer ${serverToken}`
     };
   }
 

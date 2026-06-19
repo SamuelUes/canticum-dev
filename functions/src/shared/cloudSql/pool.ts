@@ -38,10 +38,10 @@ function buildPoolConfig(): PoolConfig {
     database,
     user,
     password,
-    max: 10,
-    min: 1,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 10_000,
+    max: 20,
+    min: 2,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 15_000,
     statement_timeout: 30_000,  // Prevent runaway queries
     query_timeout: 30_000,       // Prevent runaway queries
     // allowExitOnIdle: true,
@@ -90,4 +90,34 @@ export function getSharedPool(): Pool {
   }
 
   return sharedPool;
+}
+
+/**
+ * Wrapper to retry queries on connection pool exhaustion (error code 53300)
+ */
+export async function withPoolRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3
+): Promise<T> {
+  let lastError: Error | undefined;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      const pgError = error as { code?: string };
+      
+      // Only retry on connection pool exhaustion
+      if (pgError.code !== '53300' || attempt === maxRetries) {
+        throw error;
+      }
+      
+      const delayMs = Math.min(100 * Math.pow(2, attempt), 1000);
+      console.warn(`[CloudSQL] Connection pool exhausted, retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  
+  throw lastError;
 }

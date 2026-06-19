@@ -1,3 +1,4 @@
+
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, storage } from '../../services/firebase';
 import type { UploadAssetResult } from '../song/versionAssetUpload';
@@ -14,7 +15,7 @@ const MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
 const MIN_IMAGE_DIMENSION_PX = 120;
 const TARGET_IMAGE_SIZE_PX = 480;
 
-export type CoverEntity = 'songs' | 'albums' | 'repertoires';
+export type CoverEntity = 'songs' | 'albums' | 'repertoires' | 'artists';
 
 export interface UploadCoverImageParams {
   file: File;
@@ -151,6 +152,28 @@ export async function prepareCoverImageFile(file: File): Promise<PrepareCoverIma
         type: outputType,
         lastModified: Date.now()
       })
+    };
+  } catch {
+    return { ok: false, error: 'No se pudo procesar la imagen. Intenta con otra portada.' };
+  }
+}
+
+export async function prepareCoverImageFileOriginalSize(file: File): Promise<PrepareCoverImageResult> {
+  const validationError = validateCoverImageFile(file);
+  if (validationError) {
+    return { ok: false, error: validationError };
+  }
+
+  try {
+    const image = await loadImageFromFile(file);
+
+    if (image.naturalWidth < MIN_IMAGE_DIMENSION_PX || image.naturalHeight < MIN_IMAGE_DIMENSION_PX) {
+      return { ok: false, error: 'La imagen debe tener al menos 120x120 píxeles.' };
+    }
+
+    return {
+      ok: true,
+      file: file
     };
   } catch {
     return { ok: false, error: 'No se pudo procesar la imagen. Intenta con otra portada.' };

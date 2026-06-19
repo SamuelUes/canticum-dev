@@ -4,6 +4,13 @@ import { NewsletterSection } from '../src/components/home/NewsletterSection';
 import { homeMockData } from '../src/features/home/mockData';
 import { getHomeText } from '../src/i18n/home';
 import type { Locale } from '../src/types/home';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  icons: {
+    icon: '/assets/icon/canticumlogo.png',
+  },
+};
 
 export default function HomePage() {
   const locale: Locale = 'es';

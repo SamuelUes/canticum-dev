@@ -35,9 +35,30 @@ function readLocalFavorite(songId: string, versionId: string): boolean | null {
   }
 }
 
+const TRACKED_KEY = '__canticum_tracked_listens__';
+
+function getTrackedSongs(): Set<string> {
+  if (typeof window === 'undefined') {
+    return new Set();
+  }
+  const w = window as unknown as Record<string, unknown>;
+  const existing = w[TRACKED_KEY];
+  if (existing instanceof Set) {
+    return existing as Set<string>;
+  }
+  const set = new Set<string>();
+  w[TRACKED_KEY] = set;
+  return set;
+}
+
 export async function requestTrackSongListen(songId: string): Promise<boolean> {
   if (!functionsBaseUrl) {
     return false;
+  }
+
+  const trackedSongsThisSession = getTrackedSongs();
+  if (trackedSongsThisSession.has(songId)) {
+    return true;
   }
 
   try {
@@ -52,6 +73,15 @@ export async function requestTrackSongListen(songId: string): Promise<boolean> {
       headers,
       body: JSON.stringify({ userId })
     });
+
+    if (response.status === 429) {
+      trackedSongsThisSession.add(songId);
+      return true;
+    }
+
+    if (response.ok) {
+      trackedSongsThisSession.add(songId);
+    }
 
     return response.ok;
   } catch {
