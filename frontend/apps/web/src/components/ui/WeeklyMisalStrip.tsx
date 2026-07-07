@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { listLatestWeeklyMisales, type WeeklyMisalRecord } from '../../features/misales/repository';
+import { listLatestWeeklyMisales, type WeeklyMisalRecord } from '../../features/plan/repository';
 import { SkeletonText } from './skeleton';
 
 function WeeklyMisalSkeletonCard() {
@@ -53,7 +53,7 @@ export function WeeklyMisalStrip({ className }: WeeklyMisalStripProps) {
           return;
         }
         setMisales([]);
-        setError('No fue posible cargar el misal semanal.');
+        setError('No fue posible cargar el plan semanal.');
       } finally {
         if (active) {
           setLoading(false);
@@ -88,7 +88,7 @@ export function WeeklyMisalStrip({ className }: WeeklyMisalStripProps) {
             aria-controls="weekly-misal-grid"
             onClick={() => setExpanded((prev) => !prev)}
           >
-            <span className="weekly-misal-toggle-text">Top 3</span>
+            <span className="weekly-misal-toggle-text">Ver</span>
             <span className={`material-symbols-outlined song-filter-icon${expanded ? ' is-open' : ''}`} aria-hidden>keyboard_arrow_down</span>
           </button>
         </header>

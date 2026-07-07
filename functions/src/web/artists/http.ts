@@ -1,7 +1,8 @@
 import * as functions from 'firebase-functions/v1';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
-import { getBodyRecord, getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { getClientIp, getBodyRecord, getOptionalAuthContext, getPathSegments, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
 import {
   createArtist,
   findArtistByNameSlug,
@@ -355,8 +356,18 @@ export const artists = functions.https.onRequest(async (req, res) => {
   }
 
   if (subpath === 'listen') {
-    if (req.method !== 'POST') {
+    if (req.method !== 'PUT') {
       sendError(res, 405, 'method_not_allowed', 'Method not allowed.');
+      return;
+    }
+
+    const authContext = await getOptionalAuthContext(req);
+    const listenLimiterIdentifier = authContext?.uid ?? getClientIp(req) ?? `artist:${artistId}`;
+    const listenLimiter = await checkRateLimit(`${listenLimiterIdentifier}:${artistId}`, 'artists_listen', 5, 300);
+    applyRateLimitHeaders(res, 5, listenLimiter);
+    if (!listenLimiter.allowed) {
+      res.set('Retry-After', String(listenLimiter.retryAfterSeconds));
+      sendError(res, 429, 'too_many_requests', `Listen limit reached. Retry in ${listenLimiter.retryAfterSeconds}s.`);
       return;
     }
 

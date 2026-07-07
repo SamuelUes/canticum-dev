@@ -5,6 +5,55 @@ import { applyCors, getBodyRecord, getOptionalAuthContext, handlePreflight, send
 import { getAdminDashboardMetrics, getDraftSongsForAdmin, getDraftSongsCount, getArtistsForAdmin, getArtistsCount } from '../../shared/cloudSql/admin';
 import { updateArtistInCloudSql, softDeleteArtist, hardDeleteArtist, getArtistByIdForAdmin } from '../../shared/cloudSql/artists';
 
+type NewsletterSlide = {
+  id: string;
+  imageUrl: string;
+  storagePath: string;
+  uploadedAt: string;
+  uploadedBy: string;
+};
+
+function normalizeNewsletterSlides(value: unknown): NewsletterSlide[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return null;
+      }
+
+      const candidate = item as Record<string, unknown>;
+      if (
+        typeof candidate.id !== 'string' ||
+        typeof candidate.imageUrl !== 'string' ||
+        typeof candidate.storagePath !== 'string' ||
+        typeof candidate.uploadedAt !== 'string' ||
+        typeof candidate.uploadedBy !== 'string'
+      ) {
+        return null;
+      }
+
+      return {
+        id: candidate.id,
+        imageUrl: candidate.imageUrl,
+        storagePath: candidate.storagePath,
+        uploadedAt: candidate.uploadedAt,
+        uploadedBy: candidate.uploadedBy,
+      } satisfies NewsletterSlide;
+    })
+    .filter((item): item is NewsletterSlide => item !== null);
+}
+
+function buildNewsletterPayload(slides: NewsletterSlide[]) {
+  return {
+    ok: true,
+    imageUrl: slides[0]?.imageUrl ?? null,
+    slides,
+  };
+}
+
 export const admin = functions.runWith({
   timeoutSeconds: 540,
   memory: '512MB',
@@ -247,33 +296,23 @@ export const admin = functions.runWith({
     applyCors(res);
 
     if (req.method === 'GET') {
-      // Get current newsletter image (public endpoint)
+      // Get current newsletter carousel (public endpoint)
       try {
         const db = getAppFirestore();
         const newsletterDoc = await db.collection('settings').doc('newsletter').get();
 
-        if (!newsletterDoc.exists) {
-          sendJson(res, 200, {
-            ok: true,
-            imageUrl: null,
-          });
-          return;
-        }
-
-        const data = newsletterDoc.data() as Record<string, unknown>;
-        sendJson(res, 200, {
-          ok: true,
-          imageUrl: typeof data.imageUrl === 'string' ? data.imageUrl : null,
-        });
+        const data = newsletterDoc.exists ? (newsletterDoc.data() as Record<string, unknown>) : {};
+        const slides = normalizeNewsletterSlides(data.slides);
+        sendJson(res, 200, buildNewsletterPayload(slides));
       } catch (error) {
-        console.error('Error fetching newsletter image:', error);
-        sendError(res, 500, 'internal', 'Failed to fetch newsletter image.');
+        console.error('Error fetching newsletter carousel:', error);
+        sendError(res, 500, 'internal', 'Failed to fetch newsletter carousel.');
       }
       return;
     }
 
     if (req.method === 'POST') {
-      // Upload newsletter image (admin only)
+      // Upload newsletter slide (admin only)
       const auth = await getOptionalAuthContext(req);
 
       if (!auth?.uid || auth.token.role !== 'admin') {
@@ -334,21 +373,68 @@ export const admin = functions.runWith({
         // Store in Firestore
         const db = getAppFirestore();
         const newsletterRef = db.collection('settings').doc('newsletter');
-        await newsletterRef.set({
+        const newsletterDoc = await newsletterRef.get();
+        const existingSlides = normalizeNewsletterSlides(newsletterDoc.exists ? newsletterDoc.data()?.slides : []);
+        const slide: NewsletterSlide = {
+          id: newsletterId,
           imageUrl: publicUrl,
           storagePath,
           uploadedAt: new Date().toISOString(),
           uploadedBy: auth.uid,
+        };
+        const slides = [...existingSlides, slide];
+
+        await newsletterRef.set({
+          imageUrl: slides[0]?.imageUrl ?? null,
+          slides,
+          updatedAt: new Date().toISOString(),
+          updatedBy: auth.uid,
         }, { merge: true });
 
         sendJson(res, 200, {
           ok: true,
           imageUrl: publicUrl,
           storagePath,
+          slide,
+          slides,
         });
       } catch (error) {
         console.error('Error uploading newsletter image:', error);
         sendError(res, 500, 'internal', 'Failed to upload newsletter image.');
+      }
+      return;
+    }
+
+    if (req.method === 'PUT') {
+      const auth = await getOptionalAuthContext(req);
+
+      if (!auth?.uid || auth.token.role !== 'admin') {
+        sendError(res, 403, 'forbidden', 'Only admin can update newsletter images.');
+        return;
+      }
+
+      try {
+        const body = getBodyRecord(req);
+        const slides = normalizeNewsletterSlides(body.slides);
+
+        if (slides.length === 0) {
+          sendError(res, 400, 'invalid_argument', 'slides must be a non-empty array.');
+          return;
+        }
+
+        const db = getAppFirestore();
+        const newsletterRef = db.collection('settings').doc('newsletter');
+        await newsletterRef.set({
+          imageUrl: slides[0].imageUrl,
+          slides,
+          updatedAt: new Date().toISOString(),
+          updatedBy: auth.uid,
+        }, { merge: true });
+
+        sendJson(res, 200, buildNewsletterPayload(slides));
+      } catch (error) {
+        console.error('Error updating newsletter carousel:', error);
+        sendError(res, 500, 'internal', 'Failed to update newsletter carousel.');
       }
       return;
     }

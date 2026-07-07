@@ -8,6 +8,9 @@ import { getStorage } from 'firebase/storage';
 const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
 const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 
+export const googleOAuthClientId = process.env.NEXT_PUBLIC_GOOGLE_AUTH_API_2 ?? null;
+export const googleOAuthClientSecret = process.env.NEXT_PUBLIC_GOOGLE_AUTH_API_2_SECRET ?? null;
+
 if (!apiKey || !projectId) {
   if (typeof window !== 'undefined') {
     console.info('[Canticum] Firebase no configurado — modo desarrollo activo.');
@@ -31,3 +34,5 @@ export const auth = app ? getAuth(app) : null!;
 export const db = app ? getFirestore(app) : null!;
 export const functions = app ? getFunctions(app, 'us-central1') : null!;
 export const storage = app ? getStorage(app) : null!;
+
+export const googleAuthConfigured = Boolean(googleOAuthClientId && googleOAuthClientSecret);

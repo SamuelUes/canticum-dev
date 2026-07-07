@@ -111,10 +111,10 @@ export function CreateMenu() {
                     <button
                       type="button"
                       className="create-overlay-card create-overlay-card--misal"
-                      onClick={() => handleOption('/admin/misales')}
+                      onClick={() => handleOption('/admin/plan')}
                     >
                       <span className="create-overlay-card-icon">📄</span>
-                      <strong>Misal semanal</strong>
+                      <strong>Plan Semanal</strong>
                     </button>
                   ) : null}
 

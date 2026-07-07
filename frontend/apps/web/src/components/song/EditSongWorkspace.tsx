@@ -16,6 +16,8 @@ interface EditSongWorkspaceProps {
 
 type SongState = 'DRAFT' | 'UPLOADED' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'PUBLISHED' | 'ARCHIVED';
 
+const NOTATION_TYPES = ['Cifrado', 'Partitura', 'Tablatura', 'Ninguno'];
+
 interface EditableInstrumentation {
   id?: string;
   instrumentationId?: string;
@@ -318,117 +320,161 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
 
   if (loading) {
     return (
-      <section className="account-page-layout layout-h-margin" aria-busy aria-label="Cargando canción">
-        <header className="account-page-head">
+      <section className="create-page-layout layout-h-margin" aria-busy aria-label="Cargando canción">
+        <header className="create-page-header">
           <SkeletonText width={220} className="edit-song-skeleton-title" />
           <SkeletonText width="70%" className="edit-song-skeleton-subtitle" />
         </header>
-        <article className="account-card">
-          <div className="account-basic-grid">
-            <SkeletonText className="edit-song-skeleton-input" />
-            <SkeletonText className="edit-song-skeleton-input" />
-          </div>
+        <div className="create-form-grid">
+          <SkeletonText className="edit-song-skeleton-input" />
+          <SkeletonText className="edit-song-skeleton-input" />
+        </div>
+        <div className="create-cover-field">
           <SkeletonCard className="edit-song-skeleton-cover" />
-          <SkeletonText width={220} className="edit-song-skeleton-button" />
-        </article>
-        <article className="account-card song-edit-versions-card">
-          <div className="create-versions-header song-edit-versions-head">
+        </div>
+        <section className="create-versions-section">
+          <div className="create-versions-header">
             <SkeletonText width={150} className="edit-song-skeleton-section-title" />
             <SkeletonText width={140} className="edit-song-skeleton-button-small" />
           </div>
-          <div className="account-items-grid song-edit-versions-grid">
-            {Array.from({ length: 2 }).map((_, idx) => (
-              <div className="account-item-card song-edit-version-card" key={idx}>
-                <SkeletonText className="edit-song-skeleton-version-field" />
-                <SkeletonText className="edit-song-skeleton-version-field" />
-                <SkeletonText className="edit-song-skeleton-version-lyrics" />
-                <SkeletonText className="edit-song-skeleton-version-field" />
-                <SkeletonText width={160} className="edit-song-skeleton-version-action" />
-              </div>
-            ))}
-          </div>
-        </article>
+          {Array.from({ length: 2 }).map((_, idx) => (
+            <div className="create-version-card" key={idx}>
+              <SkeletonText className="edit-song-skeleton-version-field" />
+              <SkeletonText className="edit-song-skeleton-version-field" />
+              <SkeletonText className="edit-song-skeleton-version-lyrics" />
+              <SkeletonText className="edit-song-skeleton-version-field" />
+              <SkeletonText width={160} className="edit-song-skeleton-version-action" />
+            </div>
+          ))}
+        </section>
       </section>
     );
   }
 
   return (
-    <section className="account-page-layout layout-h-margin">
-      <header className="account-page-head">
+    <section className="create-page-layout layout-h-margin">
+      <header className="create-page-header">
         <h1>Editar canción</h1>
         <p>Actualiza portada, letra, versiones y estado editorial. Si estaba aprobada/publicada vuelve a DRAFT.</p>
       </header>
 
-      {error ? <p className="create-form-error">{error}</p> : null}
+      <form className="create-song-form" onSubmit={(e) => { e.preventDefault(); void onSave(); }}>
+        {error ? <p className="create-form-error">{error}</p> : null}
 
-      <article className="account-card">
-        <div className="account-basic-grid">
-          <label>
+        {/* ── Basic info ──────────────────────────────────── */}
+        <div className="create-form-grid">
+          <label className="create-form-field">
             <span>Título</span>
-            <input value={title} onChange={(event) => setTitle(event.target.value)} />
+            <input
+              type="text"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Nombre de la canción"
+            />
           </label>
-          <label>
+
+          <label className="create-form-field">
             <span>Estado</span>
             <input value={state} disabled />
           </label>
         </div>
 
-        <label>
-          <span>Cover</span>
-          {coverPreviewUrl ? (
-            <Image
-              src={coverPreviewUrl}
-              alt="Cover canción"
-              className="account-cover-preview"
-              width={180}
-              height={180}
-              unoptimized={coverPreviewUrl.startsWith('blob:') || coverPreviewUrl.startsWith('data:')}
+        {/* ── Cover ───────────────────────────────────────── */}
+        <div className="create-cover-field">
+          <span>Portada</span>
+          <div className="create-cover-upload-row">
+            <input
+              id="song-cover-edit"
+              className="create-cover-input"
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              onChange={(event) => void onCoverSelected(event.target.files?.[0] ?? null)}
             />
-          ) : null}
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/jpg,image/webp"
-            onChange={(event) => void onCoverSelected(event.target.files?.[0] ?? null)}
-          />
-        </label>
-      </article>
+            <label htmlFor="song-cover-edit" className="create-cover-upload-button">
+              Seleccionar imagen
+            </label>
+            <span className="create-cover-upload-meta">
+              Mínimo 120x120 • máx 5MB
+            </span>
+          </div>
 
-      <article className="account-card song-edit-versions-card">
-        <div className="create-versions-header song-edit-versions-head">
-          <h2 className="song-edit-versions-title">Versiones</h2>
-          <button type="button" className="create-form-cancel song-edit-add-version" onClick={addVersion}>+ Agregar versión</button>
+          {coverPreviewUrl && (
+            <div className="create-cover-preview">
+              <Image
+                src={coverPreviewUrl}
+                alt="Cover canción"
+                width={88}
+                height={88}
+                unoptimized={coverPreviewUrl.startsWith('blob:') || coverPreviewUrl.startsWith('data:')}
+              />
+              <div className="create-cover-preview-actions">
+                <span>{coverFile?.name ?? 'portada.jpg'}</span>
+                <button
+                  type="button"
+                  className="create-form-cancel"
+                  onClick={() => void onCoverSelected(null)}
+                >
+                  Quitar imagen
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="account-items-grid song-edit-versions-grid">
-          {versions.map((version) => (
-            <div className="account-item-card song-edit-version-card" key={version.id}>
-              <label className="song-edit-version-field">
-                <span>Nombre versión</span>
-                <input
-                  value={version.versionName ?? ''}
-                  onChange={(event) => updateVersion(version.id, {
-                    versionName: event.target.value,
-                    label: event.target.value
-                  })}
-                />
-              </label>
+        {/* ── Versions ────────────────────────────────────── */}
+        <section className="create-versions-section">
+          <div className="create-versions-header">
+            <h3>Versiones</h3>
+            <button type="button" className="create-form-cancel" onClick={addVersion}>
+              + Agregar versión
+            </button>
+          </div>
 
-              <label className="song-edit-version-field">
-                <span>Modo de audio</span>
-                <select
-                  value={version.audioMode || 'legacy'}
-                  onChange={(event) => updateVersion(version.id, { audioMode: event.target.value as 'shared' | 'per_instrumentation' | 'legacy' })}
+          {versions.map((version, index) => (
+            <article key={version.id} className="create-version-card">
+              <div className="create-version-card-header">
+                <strong>Versión {index + 1}</strong>
+                <button
+                  type="button"
+                  className="create-version-remove"
+                  onClick={() => toggleDeleteVersion(version.id)}
+                  style={version.markedForDeletion ? { background: '#e8fff1', color: '#235b3a' } : undefined}
                 >
-                  <option value="legacy">Legado (un instrumento)</option>
-                  <option value="shared">Audio compartido</option>
-                  <option value="per_instrumentation">Audio por instrumentación</option>
-                </select>
-              </label>
+                  {version.markedForDeletion ? 'Restaurar versión' : 'Eliminar versión'}
+                </button>
+              </div>
+
+              <div className="create-form-grid">
+                <label className="create-form-field">
+                  <span>Nombre de versión</span>
+                  <input
+                    type="text"
+                    value={version.versionName ?? ''}
+                    onChange={(event) => updateVersion(version.id, {
+                      versionName: event.target.value,
+                      label: event.target.value
+                    })}
+                    placeholder="Ej: Acústica"
+                  />
+                </label>
+
+                <label className="create-form-field">
+                  <span>Modo de audio</span>
+                  <select
+                    value={version.audioMode || 'legacy'}
+                    onChange={(event) => updateVersion(version.id, { audioMode: event.target.value as 'shared' | 'per_instrumentation' | 'legacy' })}
+                  >
+                    <option value="legacy">Legado (un instrumento)</option>
+                    <option value="shared">Audio compartido (una pista para todos)</option>
+                    <option value="per_instrumentation">Audio por instrumentación</option>
+                  </select>
+                </label>
+              </div>
 
               {/* Legacy fields for backward compatibility */}
               {version.audioMode === 'legacy' && (
-                <>
-                  <label className="song-edit-version-field">
+                <div className="create-form-grid">
+                  <label className="create-form-field">
                     <span>Instrumento (legado)</span>
                     <input
                       value={version.instrumentName ?? ''}
@@ -436,67 +482,78 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
                     />
                   </label>
 
-                  <label className="song-edit-version-field song-edit-version-field--full">
+                  <label className="create-form-field">
+                    <span>Audio URL (legado)</span>
+                    <input
+                      type="url"
+                      value={version.audioReferenceUrl ?? ''}
+                      onChange={(event) => updateVersion(version.id, { audioReferenceUrl: event.target.value })}
+                      placeholder="https://ejemplo.com/audio.mp3"
+                    />
+                  </label>
+
+                  <label className="create-form-field" style={{ gridColumn: '1 / -1' }}>
                     <span>Letra (legado)</span>
                     <textarea
-                      className="song-edit-lyrics-input"
                       rows={6}
                       value={version.lyrics ?? ''}
                       onChange={(event) => updateVersion(version.id, { lyrics: event.target.value })}
                     />
                   </label>
 
-                  <label className="song-edit-version-field">
-                    <span>Audio URL (legado)</span>
-                    <input
-                      value={version.audioReferenceUrl ?? ''}
-                      onChange={(event) => updateVersion(version.id, { audioReferenceUrl: event.target.value })}
-                    />
-                  </label>
-
-                  <label className="song-edit-version-field song-edit-file-field">
+                  <div className="create-form-field">
                     <span>Archivo audio (opcional)</span>
-                    <input
-                      type="file"
-                      accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0] ?? null;
-                        if (!file) return;
-                        void uploadVersionAsset({
-                          file,
-                          songId,
-                          versionId: version.id,
-                          kind: 'audio',
-                          filenameBase: version.versionName ?? 'audio'
-                        }).then((result) => {
-                          if (result.ok && result.url) {
-                            updateVersion(version.id, { audioReferenceUrl: result.url });
-                          }
-                        });
-                      }}
-                    />
-                  </label>
-                </>
+                    <div className="create-file-upload-wrapper">
+                      <input
+                        id={`version-audio-legacy-${version.id}`}
+                        className="create-file-upload-input"
+                        type="file"
+                        accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0] ?? null;
+                          if (!file) return;
+                          void uploadVersionAsset({
+                            file,
+                            songId,
+                            versionId: version.id,
+                            kind: 'audio',
+                            filenameBase: version.versionName ?? 'audio'
+                          }).then((result) => {
+                            if (result.ok && result.url) {
+                              updateVersion(version.id, { audioReferenceUrl: result.url });
+                            }
+                          });
+                        }}
+                      />
+                      <label htmlFor={`version-audio-legacy-${version.id}`} className="create-file-upload-button">
+                        Seleccionar archivo
+                      </label>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* New instrumentation-based UI */}
               {version.audioMode !== 'legacy' && (
-                <div className="song-edit-instrumentations-section">
-                  <div className="song-edit-instrumentations-header">
+                <div className="create-instrumentations-section">
+                  <div className="create-instrumentations-header">
                     <strong>Instrumentaciones</strong>
                     <button
                       type="button"
                       className="create-form-cancel"
                       onClick={() => addInstrumentation(version.id)}
                     >
-                      + Agregar
+                      + Agregar instrumentación
                     </button>
                   </div>
 
                   {version.instrumentations?.map((inst, instIndex) => (
-                    <div key={inst.localId} className="song-edit-instrumentation-card">
-                      <div className="song-edit-instrumentation-header">
-                        <strong>Instrumentación {instIndex + 1}</strong>
+                    <article key={inst.localId} className="create-instrumentation-card">
+                      <div className="create-instrumentation-card-header">
+                        <div className="create-instrumentation-title">
+                          <span className="create-instrumentation-number">{instIndex + 1}</span>
+                          <strong>{inst.instrumentName || 'Instrumentación sin nombre'}</strong>
+                        </div>
                         <button
                           type="button"
                           className="create-version-remove"
@@ -507,116 +564,198 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
                         </button>
                       </div>
 
-                      <label className="song-edit-version-field">
-                        <span>Instrumento</span>
-                        <input
-                          value={inst.instrumentName}
-                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { instrumentName: event.target.value })}
-                        />
-                      </label>
+                      <div className="create-instrumentation-body">
+                        <div className="create-instrumentation-section">
+                          <h4 className="create-instrumentation-section-title">Información básica</h4>
+                          <div className="create-form-grid">
+                            <label className="create-form-field">
+                              <span>Instrumento</span>
+                              <input
+                                type="text"
+                                value={inst.instrumentName}
+                                onChange={(event) => updateInstrumentation(version.id, inst.localId, { instrumentName: event.target.value })}
+                                placeholder="Ej: Guitarra, Piano, Letra"
+                              />
+                            </label>
 
-                      {version.audioMode === 'per_instrumentation' && (
-                        <>
-                          <label className="song-edit-version-field">
-                            <span>Audio URL</span>
-                            <input
-                              value={inst.audioReferenceUrl}
-                              onChange={(event) => updateInstrumentation(version.id, inst.localId, { audioReferenceUrl: event.target.value })}
-                            />
-                          </label>
-                        </>
-                      )}
+                            <label className="create-form-field">
+                              <span>Tono</span>
+                              <input
+                                type="text"
+                                value={inst.tone || ''}
+                                onChange={(event) => updateInstrumentation(version.id, inst.localId, { tone: event.target.value })}
+                                placeholder="Ej: Do Mayor, Em"
+                              />
+                            </label>
 
-                      <label className="song-edit-version-field">
-                        <span>Tono</span>
-                        <input
-                          value={inst.tone || ''}
-                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { tone: event.target.value })}
-                        />
-                      </label>
+                            <label className="create-form-field">
+                              <span>Tipo de Notación</span>
+                              <select
+                                value={inst.notationType || ''}
+                                onChange={(event) => updateInstrumentation(version.id, inst.localId, { notationType: event.target.value })}
+                              >
+                                <option value="">— Seleccionar —</option>
+                                {NOTATION_TYPES.map((nt) => (
+                                  <option key={nt} value={nt}>{nt}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        </div>
 
-                      <label className="song-edit-version-field">
-                        <span>Tipo de Notación</span>
-                        <input
-                          value={inst.notationType || ''}
-                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { notationType: event.target.value })}
-                        />
-                      </label>
+                        {version.audioMode === 'per_instrumentation' && (
+                          <div className="create-instrumentation-section">
+                            <h4 className="create-instrumentation-section-title">Audio</h4>
+                            <div className="create-form-grid">
+                              <div className="create-form-field">
+                                <span>Audio (archivo)</span>
+                                <div className="create-file-upload-wrapper">
+                                  <input
+                                    id={`inst-audio-${version.id}-${inst.localId}`}
+                                    className="create-file-upload-input"
+                                    type="file"
+                                    accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
+                                    onChange={(event) => {
+                                      const file = event.target.files?.[0] ?? null;
+                                      updateInstrumentation(version.id, inst.localId, { audioFile: file });
+                                    }}
+                                  />
+                                  <label htmlFor={`inst-audio-${version.id}-${inst.localId}`} className="create-file-upload-button">
+                                    {inst.audioFile ? inst.audioFile.name : 'Seleccionar archivo'}
+                                  </label>
+                                </div>
+                              </div>
 
-                      <label className="song-edit-version-field song-edit-version-field--full">
-                        <span>Letra</span>
-                        <textarea
-                          className="song-edit-lyrics-input"
-                          rows={4}
-                          value={inst.lyrics || ''}
-                          onChange={(event) => updateInstrumentation(version.id, inst.localId, { lyrics: event.target.value })}
-                        />
-                      </label>
-                    </div>
+                              <label className="create-form-field">
+                                <span>o URL de Audio</span>
+                                <input
+                                  type="url"
+                                  value={inst.audioReferenceUrl}
+                                  onChange={(event) => updateInstrumentation(version.id, inst.localId, { audioReferenceUrl: event.target.value })}
+                                  placeholder="https://ejemplo.com/audio.mp3"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="create-instrumentation-section">
+                          <h4 className="create-instrumentation-section-title">Archivos y contenido</h4>
+                          <div className="create-form-grid">
+                            <div className="create-form-field">
+                              <span>Partitura (archivo opcional)</span>
+                              <div className="create-file-upload-wrapper">
+                                <input
+                                  id={`inst-sheet-${version.id}-${inst.localId}`}
+                                  className="create-file-upload-input"
+                                  type="file"
+                                  accept=".pdf,.png,.jpg,.jpeg,.xml,.musicxml,.mxl,.doc,.docx,.mscz,.mscx,.txt,application/pdf,image/png,image/jpeg,application/xml,text/xml,text/plain"
+                                  onChange={(event) => {
+                                    const file = event.target.files?.[0] ?? null;
+                                    updateInstrumentation(version.id, inst.localId, { sheetFile: file });
+                                  }}
+                                />
+                                <label htmlFor={`inst-sheet-${version.id}-${inst.localId}`} className="create-file-upload-button">
+                                  {inst.sheetFile ? inst.sheetFile.name : 'Seleccionar archivo'}
+                                </label>
+                                {inst.sheetFile && (
+                                  <button
+                                    type="button"
+                                    className="create-file-upload-cancel"
+                                    onClick={() => {
+                                      const input = document.getElementById(`inst-sheet-${version.id}-${inst.localId}`) as HTMLInputElement | null;
+                                      if (input) input.value = '';
+                                      updateInstrumentation(version.id, inst.localId, { sheetFile: null });
+                                    }}
+                                  >
+                                    Cancelar
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {inst.sheetFile ? (
+                            <p className="create-form-hint" style={{ fontWeight: '900' }}>
+                              Al subir una partitura, la letra no está disponible para esta instrumentación. Solo puedes elegir uno: partitura <strong>o</strong> letra. Si necesitas la letra, crea una nueva instrumentación.
+                            </p>
+                          ) : (
+                            <label className="create-form-field">
+                              <span>Letra de esta instrumentación</span>
+                              <textarea
+                                value={inst.lyrics || ''}
+                                onChange={(event) => updateInstrumentation(version.id, inst.localId, { lyrics: event.target.value })}
+                                placeholder="Escribe o pega la letra para esta instrumentación…"
+                                rows={6}
+                              />
+                            </label>
+                          )}
+                        </div>
+                      </div>
+                    </article>
                   ))}
 
                   {version.audioMode === 'shared' && (
-                    <>
-                      <label className="song-edit-version-field">
+                    <div className="create-form-grid">
+                      <label className="create-form-field">
                         <span>Audio URL (compartido)</span>
                         <input
+                          type="url"
                           value={version.audioReferenceUrl ?? ''}
                           onChange={(event) => updateVersion(version.id, { audioReferenceUrl: event.target.value })}
+                          placeholder="https://ejemplo.com/audio.mp3"
                         />
                       </label>
 
-                      <label className="song-edit-version-field song-edit-file-field">
+                      <div className="create-form-field">
                         <span>Archivo audio (opcional)</span>
-                        <input
-                          type="file"
-                          accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
-                          onChange={(event) => {
-                            const file = event.target.files?.[0] ?? null;
-                            if (!file) return;
-                            void uploadVersionAsset({
-                              file,
-                              songId,
-                              versionId: version.id,
-                              kind: 'audio',
-                              filenameBase: version.versionName ?? 'audio'
-                            }).then((result) => {
-                              if (result.ok && result.url) {
-                                updateVersion(version.id, { audioReferenceUrl: result.url });
-                              }
-                            });
-                          }}
-                        />
-                      </label>
-                    </>
+                        <div className="create-file-upload-wrapper">
+                          <input
+                            id={`version-audio-shared-${version.id}`}
+                            className="create-file-upload-input"
+                            type="file"
+                            accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] ?? null;
+                              if (!file) return;
+                              void uploadVersionAsset({
+                                file,
+                                songId,
+                                versionId: version.id,
+                                kind: 'audio',
+                                filenameBase: version.versionName ?? 'audio'
+                              }).then((result) => {
+                                if (result.ok && result.url) {
+                                  updateVersion(version.id, { audioReferenceUrl: result.url });
+                                }
+                              });
+                            }}
+                          />
+                          <label htmlFor={`version-audio-shared-${version.id}`} className="create-file-upload-button">
+                            Seleccionar archivo
+                          </label>
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
-
-              <div className="account-item-actions song-edit-version-actions">
-                <button
-                  type="button"
-                  className={`song-edit-version-delete ${version.markedForDeletion ? 'is-restore' : 'is-delete'}`}
-                  onClick={() => toggleDeleteVersion(version.id)}
-                >
-                  {version.markedForDeletion ? 'Restaurar versión' : 'Eliminar versión'}
-                </button>
-              </div>
-            </div>
+            </article>
           ))}
-        </div>
-      </article>
+        </section>
 
-      <div className="create-form-actions">
-        <button type="button" className="create-form-cancel" onClick={() => router.back()}>
-          Cancelar
-        </button>
-        <button type="button" className="create-form-submit" disabled={!canSave} onClick={() => void onSave()}>
-          {saving ? 'Guardando...' : 'Guardar cambios'}
-        </button>
-        <button type="button" className="create-form-cancel" onClick={() => void onDeleteSong()}>
-          Eliminar canción
-        </button>
-      </div>
+        <div className="create-form-actions">
+          <button type="button" className="create-form-cancel" onClick={() => router.back()}>
+            Cancelar
+          </button>
+          <button type="submit" className="create-form-submit" disabled={!canSave}>
+            {saving ? 'Guardando...' : 'Guardar cambios'}
+          </button>
+          <button type="button" className="create-form-cancel" onClick={() => void onDeleteSong()}>
+            Eliminar canción
+          </button>
+        </div>
+      </form>
     </section>
   );
 }

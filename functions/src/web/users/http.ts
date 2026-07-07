@@ -431,7 +431,7 @@ export const users = functions.https.onRequest(async (req, res) => {
       const bookmarkSnap = await bookmarkRef.get();
 
       if (!bookmarkSnap.exists) {
-        sendError(res, 404, 'not_found', 'Bookmark not found.');
+        sendJson(res, 200, { isBookmarked: false, repertoireId });
         return;
       }
 

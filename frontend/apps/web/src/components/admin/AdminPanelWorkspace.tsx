@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
+import { CropperModal } from '../ui/CropperModal';
+import { CreateMenu } from '../ui/CreateMenu';
 import { isAdminUser, BOOTSTRAP_ADMIN_UID } from '../../features/auth/repository';
-import { bulkDeleteSongsBeforeDate, deleteAdminUser, fetchAdminDashboardMetrics, fetchAdminUsers, fetchDraftSongs, fetchNewsletterImage, uploadNewsletterImage, updateAdminUser, fetchArtists, type AdminDashboardMetrics, type AdminUserSummary, type DraftSong, type Artist } from '../../features/admin/repository';
+import { bulkDeleteSongsBeforeDate, deleteAdminUser, fetchAdminDashboardMetrics, fetchAdminUsers, fetchDraftSongs, fetchNewsletterImage, fetchNewsletterSlides, uploadNewsletterImage, updateNewsletterSlides, updateAdminUser, fetchArtists, type AdminDashboardMetrics, type AdminUserSummary, type DraftSong, type Artist, type NewsletterSlide } from '../../features/admin/repository';
 
 type DashboardMetric = {
   label: string;
@@ -72,7 +74,11 @@ export function AdminPanelWorkspace() {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [artistsLoading, setArtistsLoading] = useState(true);
   const [artistsPagination, setArtistsPagination] = useState({ total: 0, limit: 10, offset: 0 });
-  const [newsletterImageUrl, setNewsletterImageUrl] = useState<string | null>(null);
+  const [, setNewsletterImageUrl] = useState<string | null>(null);
+  const [newsletterSlides, setNewsletterSlides] = useState<NewsletterSlide[]>([]);
+  const [newsletterPendingFiles, setNewsletterPendingFiles] = useState<File[]>([]);
+  const [newsletterCropperOpen, setNewsletterCropperOpen] = useState(false);
+  const [newsletterCropperImageSrc, setNewsletterCropperImageSrc] = useState('');
   const [newsletterLoading, setNewsletterLoading] = useState(true);
   const [newsletterUploading, setNewsletterUploading] = useState(false);
 
@@ -222,12 +228,13 @@ export function AdminPanelWorkspace() {
     const loadNewsletter = async () => {
       setNewsletterLoading(true);
       try {
-        const imageUrl = await fetchNewsletterImage();
+        const [imageUrl, slides] = await Promise.all([fetchNewsletterImage(), fetchNewsletterSlides()]);
         if (!alive) return;
         setNewsletterImageUrl(imageUrl);
+        setNewsletterSlides(slides);
       } catch (error) {
         if (!alive) return;
-        console.error('Failed to load newsletter image:', error);
+        console.error('Failed to load newsletter carousel:', error);
       } finally {
         if (alive) {
           setNewsletterLoading(false);
@@ -289,6 +296,69 @@ export function AdminPanelWorkspace() {
     }
   };
 
+  const handleNewsletterCropConfirm = async (croppedFile: File) => {
+    if (newsletterPendingFiles.length === 0) {
+      setNewsletterCropperOpen(false);
+      return;
+    }
+
+    const nextFiles = [croppedFile, ...newsletterPendingFiles.slice(1)];
+    setNewsletterPendingFiles(nextFiles);
+    setNewsletterCropperOpen(false);
+    setNewsletterCropperImageSrc('');
+  };
+
+  const handleNewsletterCropCancel = () => {
+    setNewsletterCropperOpen(false);
+    setNewsletterCropperImageSrc('');
+  };
+
+  const handleConfirmNewsletterUpload = async () => {
+    if (newsletterPendingFiles.length === 0) {
+      setUsersError('Selecciona al menos una imagen antes de confirmar la subida.');
+      return;
+    }
+
+    await handleNewsletterFiles(newsletterPendingFiles);
+    setNewsletterPendingFiles([]);
+  };
+
+  const handleNewsletterPreview = (slide: NewsletterSlide) => {
+    setNewsletterCropperImageSrc(slide.imageUrl);
+    setNewsletterCropperOpen(true);
+  };
+
+  const handleNewsletterSelection = (files: FileList | null) => {
+    const items = Array.from(files ?? []);
+    if (items.length === 0) return;
+
+    setNewsletterPendingFiles(items);
+    const firstFile = items[0];
+    setNewsletterCropperImageSrc(URL.createObjectURL(firstFile));
+    setNewsletterCropperOpen(true);
+  };
+
+  const handleNewsletterMoveToEdge = async (index: number, target: 'start' | 'end') => {
+    if (index < 0 || index >= newsletterSlides.length) return;
+
+    const nextSlides = [...newsletterSlides];
+    const [current] = nextSlides.splice(index, 1);
+    if (target === 'start') {
+      nextSlides.unshift(current);
+    } else {
+      nextSlides.push(current);
+    }
+
+    try {
+      const persisted = await updateNewsletterSlides(nextSlides);
+      setNewsletterSlides(persisted);
+      setNewsletterImageUrl(persisted[0]?.imageUrl ?? null);
+      setActivityMessage(target === 'start' ? 'Slide movido al inicio del carrusel.' : 'Slide movido al final del carrusel.');
+    } catch (error) {
+      setUsersError(error instanceof Error ? error.message : 'No se pudo reordenar el carrusel.');
+    }
+  };
+
   const handleUpdateUserStatus = async (uid: string, status: 'active' | 'away') => {
     setPendingUid(uid);
     setActivityMessage(null);
@@ -341,24 +411,94 @@ export function AdminPanelWorkspace() {
     }
   };
 
-  const handleNewsletterUpload = async (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setUsersError('Solo se permiten archivos de imagen.');
-      return;
-    }
+  // const handleNewsletterUpload = async (file: File) => {
+  //   if (!file.type.startsWith('image/')) {
+  //     setUsersError('Solo se permiten archivos de imagen.');
+  //     return;
+  //   }
+
+  //   setNewsletterUploading(true);
+  //   setActivityMessage(null);
+  //   setUsersError(null);
+
+  //   try {
+  //     const result = await uploadNewsletterImage(file);
+  //     setNewsletterImageUrl(result.imageUrl);
+  //     setNewsletterSlides(result.slides);
+  //     setActivityMessage('Imagen del newsletter actualizada correctamente.');
+  //   } catch (error) {
+  //     setUsersError(error instanceof Error ? error.message : 'No se pudo subir la imagen del newsletter.');
+  //   } finally {
+  //     setNewsletterUploading(false);
+  //   }
+  // };
+
+  const handleNewsletterFiles = async (files: FileList | File[] | null) => {
+    const items = Array.isArray(files) ? files : Array.from(files ?? []);
+    if (items.length === 0) return;
 
     setNewsletterUploading(true);
     setActivityMessage(null);
     setUsersError(null);
 
     try {
-      const result = await uploadNewsletterImage(file);
-      setNewsletterImageUrl(result.imageUrl);
-      setActivityMessage('Imagen del newsletter actualizada correctamente.');
+      const uploaded: NewsletterSlide[] = [];
+      for (const file of items) {
+        if (!file.type.startsWith('image/')) {
+          throw new Error('Solo se permiten archivos de imagen.');
+        }
+
+        const result = await uploadNewsletterImage(file);
+        uploaded.push(result.slide);
+      }
+
+      const nextSlides = [...newsletterSlides, ...uploaded];
+      const persisted = await updateNewsletterSlides(nextSlides);
+      setNewsletterSlides(persisted);
+      setNewsletterImageUrl(persisted[0]?.imageUrl ?? null);
+      setActivityMessage('Carrusel del newsletter actualizado correctamente.');
     } catch (error) {
-      setUsersError(error instanceof Error ? error.message : 'No se pudo subir la imagen del newsletter.');
+      setUsersError(error instanceof Error ? error.message : 'No se pudo actualizar el carrusel del newsletter.');
     } finally {
       setNewsletterUploading(false);
+    }
+  };
+
+  const handleNewsletterMove = async (index: number, direction: -1 | 1) => {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= newsletterSlides.length) return;
+
+    const nextSlides = [...newsletterSlides];
+    const [current] = nextSlides.splice(index, 1);
+    nextSlides.splice(nextIndex, 0, current);
+
+    try {
+      const persisted = await updateNewsletterSlides(nextSlides);
+      setNewsletterSlides(persisted);
+      setNewsletterImageUrl(persisted[0]?.imageUrl ?? null);
+      setActivityMessage('Orden del carrusel actualizado.');
+    } catch (error) {
+      setUsersError(error instanceof Error ? error.message : 'No se pudo actualizar el orden del carrusel.');
+    }
+  };
+
+  const handleNewsletterRemove = async (index: number) => {
+    const confirmed = window.confirm('¿Eliminar esta imagen del carrusel?');
+    if (!confirmed) return;
+
+    const nextSlides = newsletterSlides.filter((_, slideIndex) => slideIndex !== index);
+    if (nextSlides.length === 0) {
+      setUsersError('El carrusel no puede quedar vacío.');
+      return;
+    }
+
+    try {
+      const persisted = await updateNewsletterSlides(nextSlides);
+      setNewsletterSlides(persisted);
+      setNewsletterImageUrl(persisted[0]?.imageUrl ?? null);
+      setActivityMessage('Imagen eliminada del carrusel.');
+    } catch (error) {
+      setUsersError(error instanceof Error ? error.message : 'No se pudo eliminar la imagen del carrusel.');
     }
   };
 
@@ -394,7 +534,8 @@ export function AdminPanelWorkspace() {
   }
 
   return (
-    <section className="admin-panel-shell layout-h-margin" id="admin-panel-top">
+   <div className="layout-h-margin">
+    <section className="admin-panel-shell" id="admin-panel-top">
       <header className="admin-panel-hero">
         <div>
           <span className="admin-panel-kicker">Panel de Administración</span>
@@ -402,9 +543,8 @@ export function AdminPanelWorkspace() {
           <p>Monitorea moderación, administra accesos, publica contenido editorial y controla el estado de la plataforma.</p>
         </div>
 
-        <button type="button" className="admin-primary-button" onClick={() => router.push('/create/song')}>
-          <span className="material-symbols-outlined" aria-hidden="true">add</span>
-          Nuevo Registro
+        <button className="admin-primary-button admin-hero-create">
+          <CreateMenu /> <span>Nuevo Registro</span>
         </button>
       </header>
 
@@ -468,14 +608,103 @@ export function AdminPanelWorkspace() {
 
           <div className="admin-newsletter-preview">
             {newsletterLoading ? (
-              <p>Cargando imagen del newsletter...</p>
-            ) : newsletterImageUrl ? (
-              <div className="admin-newsletter-image-container">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={newsletterImageUrl} alt="Newsletter" className="admin-newsletter-image" />
+              <div className="admin-newsletter-loading">
+                <div className="admin-newsletter-loading-main" />
+                <div className="admin-newsletter-loading-aside">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            ) : newsletterSlides.length > 0 ? (
+              <div className="admin-newsletter-layout">
+                <div className="admin-newsletter-hero">
+                  <div className="admin-newsletter-image-container admin-newsletter-image-container--hero">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={newsletterSlides[0].imageUrl} alt="Slide principal del newsletter" className="admin-newsletter-image" />
+                  </div>
+
+                  <div className="admin-newsletter-hero-meta">
+                    <div>
+                      <strong>Slide principal</strong>
+                      <span>Se usa como portada pública del newsletter.</span>
+                    </div>
+                    <div className="admin-newsletter-pill-row" aria-label="Recuento de slides">
+                      <span className="admin-newsletter-pill">{newsletterSlides.length} imágenes</span>
+                      <span className="admin-newsletter-pill">Orden editable</span>
+                    </div>
+                    <div className="admin-newsletter-slide-actions admin-newsletter-slide-actions--hero">
+                      <button
+                        type="button"
+                        className="admin-secondary-button preview-button"
+                        onClick={() => handleNewsletterPreview(newsletterSlides[0])}
+                        disabled={newsletterUploading}
+                      >
+                        Preview
+                      </button>
+                      <button
+                        type="button"
+                        className="admin-secondary-button"
+                        onClick={() => void handleNewsletterMoveToEdge(0, 'end')}
+                        disabled={newsletterSlides.length < 2 || newsletterUploading}
+                      >
+                        Enviar al final
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <aside className="admin-newsletter-sidebar" aria-label="miniaturas del newsletter">
+                  {newsletterSlides.map((slide, index) => (
+                    <article key={slide.id} className={`admin-newsletter-slide ${index === 0 ? 'is-featured' : ''}`}>
+                      <button
+                        type="button"
+                        className="admin-newsletter-thumb"
+                        onClick={() => setNewsletterImageUrl(slide.imageUrl)}
+                        disabled={newsletterUploading}
+                        aria-label={`Seleccionar slide ${index + 1}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={slide.imageUrl} alt={`Miniatura del slide ${index + 1}`} className="admin-newsletter-thumb-image" />
+                      </button>
+
+                      <div className="admin-newsletter-slide-meta">
+                        <strong>Slide {index + 1}</strong>
+                        <span>{new Date(slide.uploadedAt).toLocaleDateString()}</span>
+                      </div>
+
+                      <div className="admin-newsletter-slide-actions">
+                        <button type="button" className="admin-secondary-button preview-button admin-newsletter-action-preview" onClick={() => handleNewsletterPreview(slide)} disabled={newsletterUploading} title="Vista previa">
+                          <span className="material-symbols-outlined" aria-hidden="true">visibility</span>
+                          <span>Preview</span>
+                        </button>
+
+                        <div className="admin-newsletter-reorder" role="group" aria-label={`Reordenar slide ${index + 1}`}>
+                          <button type="button" className="admin-reorder-btn" onClick={() => void handleNewsletterMoveToEdge(index, 'start')} disabled={index === 0 || newsletterUploading} title="Mover al inicio" aria-label="Mover al inicio">
+                            <span className="material-symbols-outlined" aria-hidden="true">first_page</span>
+                          </button>
+                          <button type="button" className="admin-reorder-btn" onClick={() => void handleNewsletterMove(index, -1)} disabled={index === 0 || newsletterUploading} title="Subir" aria-label="Subir">
+                            <span className="material-symbols-outlined" aria-hidden="true">keyboard_arrow_up</span>
+                          </button>
+                          <button type="button" className="admin-reorder-btn" onClick={() => void handleNewsletterMove(index, 1)} disabled={index === newsletterSlides.length - 1 || newsletterUploading} title="Bajar" aria-label="Bajar">
+                            <span className="material-symbols-outlined" aria-hidden="true">keyboard_arrow_down</span>
+                          </button>
+                          <button type="button" className="admin-reorder-btn" onClick={() => void handleNewsletterMoveToEdge(index, 'end')} disabled={index === newsletterSlides.length - 1 || newsletterUploading} title="Mover al final" aria-label="Mover al final">
+                            <span className="material-symbols-outlined" aria-hidden="true">last_page</span>
+                          </button>
+                        </div>
+
+                        <button type="button" className="admin-danger-button admin-newsletter-action-delete" onClick={() => void handleNewsletterRemove(index)} disabled={newsletterUploading} title="Eliminar slide">
+                          <span className="material-symbols-outlined" aria-hidden="true">delete</span>
+                          <span>Eliminar</span>
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </aside>
               </div>
             ) : (
-              <p>No hay imagen del newsletter configurada.</p>
+              <p>No hay imágenes del newsletter configuradas.</p>
             )}
 
             <div className="admin-newsletter-upload">
@@ -483,12 +712,11 @@ export function AdminPanelWorkspace() {
                 type="file"
                 id="newsletter-upload"
                 accept="image/*"
+                multiple
                 disabled={newsletterUploading}
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    void handleNewsletterUpload(file);
-                  }
+                  handleNewsletterSelection(e.target.files);
+                  e.currentTarget.value = '';
                 }}
                 className="admin-file-input"
               />
@@ -496,9 +724,32 @@ export function AdminPanelWorkspace() {
                 htmlFor="newsletter-upload"
                 className={`admin-secondary-button ${newsletterUploading ? 'admin-secondary-button--disabled' : ''}`}
               >
-                {newsletterUploading ? 'Subiendo...' : 'Subir nueva imagen'}
+                Seleccionar imágenes
               </label>
+              <button
+                type="button"
+                className="admin-primary-button"
+                onClick={() => void handleConfirmNewsletterUpload()}
+                disabled={newsletterUploading || newsletterPendingFiles.length === 0}
+              >
+                {newsletterUploading ? 'Subiendo...' : `Confirmar subida${newsletterPendingFiles.length ? ` (${newsletterPendingFiles.length})` : ''}`}
+              </button>
+              <button
+                type="button"
+                className="admin-secondary-button"
+                onClick={() => setNewsletterPendingFiles([])}
+                disabled={newsletterUploading || newsletterPendingFiles.length === 0}
+              >
+                Limpiar selección
+              </button>
             </div>
+            <CropperModal
+              isOpen={newsletterCropperOpen}
+              imageSrc={newsletterCropperImageSrc}
+              aspectRatio={16 / 9}
+              onConfirm={handleNewsletterCropConfirm}
+              onCancel={handleNewsletterCropCancel}
+            />
           </div>
         </article>
 
@@ -536,7 +787,7 @@ export function AdminPanelWorkspace() {
         </article>
       </section>
 
-      <section id="draft-songs">
+      <section id="draft-songs" aria-label="Canciones en borrador">
         <div className="admin-section-head">
           <div>
             <span className="admin-panel-kicker">Canciones</span>
@@ -548,11 +799,11 @@ export function AdminPanelWorkspace() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Song Title</th>
-                <th>Artist</th>
-                <th>Date</th>
-                <th>Status</th>
-                <th className="admin-table-actions-head">Actions</th>
+                <th>Título</th>
+                <th>Artista</th>
+                <th>Fecha</th>
+                <th>Estado</th>
+                <th className="admin-table-actions-head">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -578,9 +829,9 @@ export function AdminPanelWorkspace() {
                     <td className="admin-row-actions">
                       <button
                         type="button"
-                        role="button"
                         className="admin-icon-button"
-                        title="Verify"
+                        title="Ver canción"
+                        aria-label="Ver canción"
                         disabled={!song.firestoreId}
                         onClick={() => song.firestoreId && router.push(`/songs/${song.firestoreId}`)}
                       >
@@ -589,7 +840,8 @@ export function AdminPanelWorkspace() {
                       <button
                         type="button"
                         className="admin-icon-button"
-                        title="Edit"
+                        title="Editar canción"
+                        aria-label="Editar canción"
                         disabled={!song.firestoreId}
                         onClick={() => song.firestoreId && router.push(`/songs/${song.firestoreId}/edit`)}
                       >
@@ -606,28 +858,30 @@ export function AdminPanelWorkspace() {
           <div className="admin-pagination">
             <button
               type="button"
-              className="admin-secondary-button"
+              className="admin-secondary-button admin-pagination-btn"
               disabled={draftSongsPagination.offset === 0 || draftSongsLoading}
               onClick={() => setDraftSongsPagination(prev => ({ ...prev, offset: Math.max(0, prev.offset - prev.limit) }))}
             >
-              Anterior
+              <span className="material-symbols-outlined" aria-hidden="true">chevron_left</span>
+              <span>Anterior</span>
             </button>
             <span className="admin-pagination-info">
               Página {Math.floor(draftSongsPagination.offset / draftSongsPagination.limit) + 1} de {Math.ceil(draftSongsPagination.total / draftSongsPagination.limit)}
             </span>
             <button
               type="button"
-              className="admin-secondary-button"
+              className="admin-secondary-button admin-pagination-btn"
               disabled={draftSongsPagination.offset + draftSongsPagination.limit >= draftSongsPagination.total || draftSongsLoading}
               onClick={() => setDraftSongsPagination(prev => ({ ...prev, offset: prev.offset + prev.limit }))}
             >
-              Siguiente
+              <span>Siguiente</span>
+              <span className="material-symbols-outlined" aria-hidden="true">chevron_right</span>
             </button>
           </div>
         )}
       </section>
 
-      <section id="artists">
+      <section id="artists" aria-label="Gestión de artistas">
         <div className="admin-section-head">
           <div>
             <span className="admin-panel-kicker">Artistas</span>
@@ -642,7 +896,7 @@ export function AdminPanelWorkspace() {
                 <th>Nombre</th>
                 <th>Canciones</th>
                 <th>Fecha de creación</th>
-                <th className="admin-table-actions-head">Actions</th>
+                <th className="admin-table-actions-head">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -664,7 +918,8 @@ export function AdminPanelWorkspace() {
                       <button
                         type="button"
                         className="admin-icon-button"
-                        title="View Artist"
+                        title="Ver artista"
+                        aria-label="Ver artista"
                         onClick={() => router.push(`/artists/${artist.id}`)}
                       >
                         <span className="material-symbols-outlined" aria-hidden="true">visibility</span>
@@ -672,7 +927,8 @@ export function AdminPanelWorkspace() {
                       <button
                         type="button"
                         className="admin-icon-button"
-                        title="Edit Artist"
+                        title="Editar artista"
+                        aria-label="Editar artista"
                         onClick={() => router.push(`/admin/artists/edit/${artist.id}`)}
                       >
                         <span className="material-symbols-outlined" aria-hidden="true">edit</span>
@@ -688,22 +944,24 @@ export function AdminPanelWorkspace() {
           <div className="admin-pagination">
             <button
               type="button"
-              className="admin-secondary-button"
+              className="admin-secondary-button admin-pagination-btn"
               disabled={artistsPagination.offset === 0 || artistsLoading}
               onClick={() => setArtistsPagination(prev => ({ ...prev, offset: Math.max(0, prev.offset - prev.limit) }))}
             >
-              Anterior
+              <span className="material-symbols-outlined" aria-hidden="true">chevron_left</span>
+              <span>Anterior</span>
             </button>
             <span className="admin-pagination-info">
               Página {Math.floor(artistsPagination.offset / artistsPagination.limit) + 1} de {Math.ceil(artistsPagination.total / artistsPagination.limit)}
             </span>
             <button
               type="button"
-              className="admin-secondary-button"
+              className="admin-secondary-button admin-pagination-btn"
               disabled={artistsPagination.offset + artistsPagination.limit >= artistsPagination.total || artistsLoading}
               onClick={() => setArtistsPagination(prev => ({ ...prev, offset: prev.offset + prev.limit }))}
             >
-              Siguiente
+              <span>Siguiente</span>
+              <span className="material-symbols-outlined" aria-hidden="true">chevron_right</span>
             </button>
           </div>
         )}
@@ -711,7 +969,7 @@ export function AdminPanelWorkspace() {
 
 
 
-      <section id="users">
+      <section id="users" aria-label="Gestión de cuentas">
         <div className="admin-section-head">
           <div>
             <span className="admin-panel-kicker">Usuarios</span>
@@ -721,9 +979,13 @@ export function AdminPanelWorkspace() {
         </div>
 
         {usersLoading ? (
-          <div className="admin-empty-state">Cargando el listado de usuarios...</div>
+          <div className="admin-empty-state admin-empty-state--loading">
+            <span className="material-symbols-outlined admin-empty-state-icon" aria-hidden="true">progress_activity</span>
+            <span>Cargando el listado de usuarios...</span>
+          </div>
         ) : adminUsers.length === 0 ? (
           <div className="admin-empty-state">
+            <span className="material-symbols-outlined admin-empty-state-icon" aria-hidden="true">group_off</span>
             <strong>No hay usuarios para mostrar.</strong>
             <span>Cuando el backend responda, el panel listará las cuentas activas y suspendidas.</span>
           </div>
@@ -747,22 +1009,25 @@ export function AdminPanelWorkspace() {
                   </div>
 
                   <div className="admin-user-meta">
-                    <span>{entry.plan}</span>
+                    {/* <span>{entry.plan}</span> */}
                     <span>{entry.premium ? 'Premium' : 'Free'}</span>
                     <span>{entry.createdAt ?? 'Sin fecha'}</span>
                   </div>
 
                   <div className="admin-user-actions">
-                    <button type="button" className="admin-secondary-button" disabled={isBusy} onClick={() => void handleUpdateUserStatus(entry.uid, entry.status === 'away' ? 'active' : 'away')}>
-                      {entry.status === 'away' ? 'Reactivar' : 'Suspender'}
+                    <button type="button" className="admin-secondary-button" disabled={isBusy} onClick={() => void handleUpdateUserStatus(entry.uid, entry.status === 'away' ? 'active' : 'away')} title={entry.status === 'away' ? 'Reactivar usuario' : 'Suspender usuario'}>
+                      <span className="material-symbols-outlined" aria-hidden="true">{entry.status === 'away' ? 'play_circle' : 'pause_circle'}</span>
+                      <span>{entry.status === 'away' ? 'Reactivar' : 'Suspender'}</span>
                     </button>
 
-                    <button type="button" className="admin-secondary-button" disabled={isBusy || !canEditSelf} onClick={() => void handleToggleAdminRole(entry.uid, entry.role)}>
-                      {entry.role === 'admin' ? 'Quitar admin' : 'Promover admin'}
+                    <button type="button" className="admin-secondary-button" disabled={isBusy || !canEditSelf} onClick={() => void handleToggleAdminRole(entry.uid, entry.role)} title={entry.role === 'admin' ? 'Quitar rol admin' : 'Promover a admin'}>
+                      <span className="material-symbols-outlined" aria-hidden="true">{entry.role === 'admin' ? 'shield_moon' : 'shield_person'}</span>
+                      <span>{entry.role === 'admin' ? 'Quitar admin' : 'Promover admin'}</span>
                     </button>
 
-                    <button type="button" className="admin-danger-button" disabled={isBusy || !canEditSelf} onClick={() => void handleDeleteUser(entry.uid)}>
-                      Eliminar
+                    <button type="button" className="admin-danger-button" disabled={isBusy || !canEditSelf} onClick={() => void handleDeleteUser(entry.uid)} title="Eliminar usuario">
+                      <span className="material-symbols-outlined" aria-hidden="true">delete</span>
+                      <span>Eliminar</span>
                     </button>
                   </div>
                 </article>
@@ -772,5 +1037,6 @@ export function AdminPanelWorkspace() {
         )}
       </section>
     </section>
+   </div>
   );
 }

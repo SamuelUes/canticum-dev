@@ -169,7 +169,27 @@ function extractSongPayload(payload: unknown): SongDetail | null {
   return isSongDetail(envelope.song) ? envelope.song : null;
 }
 
-async function getSongDetailFromFunctions(songId: string, versionId?: string): Promise<SongDetail | null> {
+interface SongRequestOptions {
+  authToken?: string | null;
+}
+
+function withOptionalAuthHeader(headers: Record<string, string>, authToken?: string | null): Record<string, string> {
+  const token = typeof authToken === 'string' ? authToken.trim() : '';
+  if (!token || headers.Authorization) {
+    return headers;
+  }
+
+  return {
+    ...headers,
+    Authorization: `Bearer ${token}`
+  };
+}
+
+async function getSongDetailFromFunctions(
+  songId: string,
+  versionId?: string,
+  options: SongRequestOptions = {}
+): Promise<SongDetail | null> {
   if (!functionsBaseUrl) {
     return null;
   }
@@ -181,7 +201,10 @@ async function getSongDetailFromFunctions(songId: string, versionId?: string): P
   }
 
   try {
-    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
+    const headers = withOptionalAuthHeader(
+      await buildFunctionsHeaders({ Accept: 'application/json' }),
+      options.authToken
+    );
     const qs = versionId && versionId.trim()
       ? `?versionId=${encodeURIComponent(versionId.trim())}`
       : '';
@@ -211,8 +234,12 @@ async function getSongDetailFromFunctions(songId: string, versionId?: string): P
   }
 }
 
-export async function getSongDetailById(songId: string, versionId?: string): Promise<SongDetail | null> {
-  const remoteSong = await getSongDetailFromFunctions(songId, versionId);
+export async function getSongDetailById(
+  songId: string,
+  versionId?: string,
+  options: SongRequestOptions = {}
+): Promise<SongDetail | null> {
+  const remoteSong = await getSongDetailFromFunctions(songId, versionId, options);
 
   if (remoteSong) {
     return remoteSong;

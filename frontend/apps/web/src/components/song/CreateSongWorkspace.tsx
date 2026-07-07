@@ -32,11 +32,17 @@ const LITURGICAL_USES = [
   'Salida',
   'Adoración',
   'Mariana',
+  'Navidad',
+  'General'
+];
+
+const LITURGICAL_TIMES = [
+  'Ordinario',
+  'Extraordinario',
   'Cuaresma',
   'Adviento',
   'Navidad',
-  'Pascua',
-  'General'
+  'Pascua'
 ];
 
 const NOTATION_TYPES = ['Cifrado', 'Partitura', 'Tablatura', 'Ninguno'];
@@ -175,6 +181,7 @@ export function CreateSongWorkspace() {
   const [songArtistText, setSongArtistText] = useState('');
   const [year, setYear] = useState('');
   const [liturgicalUse, setLiturgicalUse] = useState('');
+  const [liturgicalTime, setLiturgicalTime] = useState('');
 
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const {
@@ -420,6 +427,7 @@ export function CreateSongWorkspace() {
       }
       if (year.trim()) payload.year = Number(year.trim()) || undefined;
       if (liturgicalUse) payload.liturgicalUse = liturgicalUse;
+      if (liturgicalTime) payload.liturgicalTime = liturgicalTime;
     } else {
       payload.songId = selectedExistingSongId;
     }
@@ -838,6 +846,16 @@ export function CreateSongWorkspace() {
               </select>
             </label>
 
+            <label className="create-form-field">
+              <span>Tiempo Litúrgico</span>
+              <select value={liturgicalTime} onChange={(e) => setLiturgicalTime(e.target.value)}>
+                <option value="">— Seleccionar —</option>
+                {LITURGICAL_TIMES.map((time) => (
+                  <option key={time} value={time}>{time}</option>
+                ))}
+              </select>
+            </label>
+
             <div className="create-form-field" />
 
             <div className="create-cover-field">
@@ -1220,6 +1238,9 @@ export function CreateSongWorkspace() {
 
                       <div className="create-instrumentation-section">
                         <h4 className="create-instrumentation-section-title">Archivos y contenido</h4>
+                        <p className="create-form-hint">
+                          Al subir una partitura, la letra no está disponible para esta instrumentación. Solo puedes elegir uno: partitura <strong>o</strong> letra. Si necesitas la letra, crea una nueva instrumentación.
+                        </p>
                         <div className="create-form-grid">
                           <div className="create-form-field">
                             <span>Partitura (archivo opcional)</span>
@@ -1237,26 +1258,45 @@ export function CreateSongWorkspace() {
                               <label htmlFor={`inst-sheet-${version.localId}-${inst.localId}`} className="create-file-upload-button">
                                 {inst.sheetFile ? inst.sheetFile.name : 'Seleccionar archivo'}
                               </label>
+                              {inst.sheetFile && (
+                                <button
+                                  type="button"
+                                  className="create-file-upload-cancel"
+                                  onClick={() => {
+                                    const input = document.getElementById(`inst-sheet-${version.localId}-${inst.localId}`) as HTMLInputElement | null;
+                                    if (input) input.value = '';
+                                    updateInstrumentation(version.localId, inst.localId, { sheetFile: null });
+                                  }}
+                                >
+                                  Cancelar
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
 
-                        <label className="create-form-field">
-                          <span>Letra de esta instrumentación</span>
-                          <textarea
-                            value={inst.lyrics}
-                            onChange={(e) => updateInstrumentation(version.localId, inst.localId, { lyrics: e.target.value })}
-                            placeholder="Escribe o pega la letra para esta instrumentación…"
-                            rows={6}
-                          />
-                        </label>
+                        {inst.sheetFile ? (
+                          <p className="create-form-hint" style={{ fontWeight: '900'}}>
+                            Al subir una partitura, la letra no está disponible para esta instrumentación. Solo puedes elegir uno: partitura <strong>o</strong> letra. Si necesitas la letra, crea una nueva instrumentación.
+                          </p>
+                        ) : (
+                          <label className="create-form-field">
+                            <span>Letra de esta instrumentación</span>
+                            <textarea
+                              value={inst.lyrics}
+                              onChange={(e) => updateInstrumentation(version.localId, inst.localId, { lyrics: e.target.value })}
+                              placeholder="Escribe o pega la letra para esta instrumentación…"
+                              rows={6}
+                            />
+                          </label>
+                        )}
                       </div>
                     </div>
                   </article>
                 ))}
               </div>
 
-               <label className="create-form-field">
+               {/* <label className="create-form-field">
                 <span>Letra de esta versión (legado)</span>
                 <textarea
                   value={version.lyrics || ''}
@@ -1264,7 +1304,7 @@ export function CreateSongWorkspace() {
                   placeholder="Escribe o pega la letra de esta versión…"
                   rows={10}
                 />
-              </label>
+              </label> */}
             </article>
           ))}
         </section>
@@ -1288,7 +1328,14 @@ export function CreateSongWorkspace() {
             Un curador la revisará antes de publicarla.
           </p>
         )}
+
+        <p className="create-form-hint create-form-copyright">
+          El artista/autor conserva todos los derechos de autor y el reconocimiento
+          correspondiente sobre la canción. Canticum únicamente la aloja y la difunde
+          respetando la autoría original.
+        </p>
       </form>
+
 
       <CropperModal
         isOpen={showCropper}

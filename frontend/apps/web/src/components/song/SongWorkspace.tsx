@@ -10,6 +10,7 @@ import { getArtistProfileHref } from '../../features/artist/routing';
 import { useAuth } from '../../context/AuthContext';
 import { useAudio } from '../../context/AudioContext';
 import { usePremiumNavigation } from '../../hooks/usePremiumNavigation';
+import { useIsMobile } from '../../hooks/useMediaQuery';
 import {
   loadSongFavorite,
   loadSongUserPreferences,
@@ -149,8 +150,9 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { user } = useAuth();
-  const { playSong: playGlobalSong } = useAudio();
+  const { playSong: playGlobalSong, isPlaying: isGlobalPlaying, stopAll: stopGlobalAudio } = useAudio();
   const { openPremiumPlans } = usePremiumNavigation();
+  const isMobile = useIsMobile();
 
   const persistentTools = [
     { label: 'Agregar a la lista', icon: 'bookmark', requiresPremium: false },
@@ -462,6 +464,9 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
     if (activeAudioSrc) {
       setActiveAudioSrc(null);
       setIsAudioPlaying(false);
+      if (isMobile) {
+        stopGlobalAudio();
+      }
       return;
     }
 
@@ -618,7 +623,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                   src={coverImageUrl}
                   alt={`Portada de ${song.title}`}
                   fill
-                  sizes="(max-width: 768px) 220px, 184px"
+                  sizes="(max-width: 375px) 100px, (max-width: 480px) 120px, (max-width: 768px) 140px, (max-width: 1200px) 160px, 192px"
                   className="song-cover-image"
                   priority
                 />
@@ -673,10 +678,10 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                     onClick={onPlayReferenceAudio}
                     aria-label={isAudioPlaying ? 'Pausar audio' : 'Reproducir audio'}
                   >
-                    <span className="song-play-audio-button">{isAudioPlaying ? 'Cerrar' : 'Reproducir'}</span>
+                    <span className="song-play-audio-button">{(isMobile ? isGlobalPlaying : isAudioPlaying) ? 'Cerrar' : 'Reproducir'}</span>
                   </button>
                   
-                  {activeAudioSrc ? (
+                  {activeAudioSrc && !isMobile ? (
                     <div className="song-inline-audio-player">
                       <AudioPlayer
                         key={`${activeAudioSrc}-${audioAutoplayToken}`}
@@ -879,6 +884,13 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
             ) : null}
           </div>
         </div>
+        <footer className="song-credit-footer">
+          <p className="song-credit-text">
+            Todos los derechos de autor y reconocimiento corresponden a {selectedVersion?.artistName ?? song.artistName ?? 'el artista/autor'}.
+            Canticum únicamente aloja y difunde esta obra respetando la autoría original.
+          </p>
+        </footer>
+
       </article>
     </section>
   );

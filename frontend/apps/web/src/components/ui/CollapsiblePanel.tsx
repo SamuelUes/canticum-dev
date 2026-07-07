@@ -21,7 +21,8 @@ export function CollapsiblePanel({
   unmountWhenCollapsed = false,
   children
 }: CollapsiblePanelProps) {
-  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const [isExpanded ] = useState(defaultExpanded);
+  // const [ setIsExpanded] = useState(defaultExpanded);
   const panelId = useId();
   const contentId = `${panelId}-content`;
   const titleId = `${panelId}-title`;
@@ -30,11 +31,11 @@ export function CollapsiblePanel({
   return (
     <section className={`collapsible-panel ${className ?? ''}`.trim()}>
       <div className="collapsible-header">
-        <HeadingTag id={titleId}>{title}</HeadingTag>
+        <HeadingTag className="collapsible-header-title" id={titleId}>{title}</HeadingTag>
 
         <div className="collapsible-actions">
           {rightSlot}
-          <button
+          {/* <button
             type="button"
             className="collapse-toggle"
             onClick={() => setIsExpanded((prev) => !prev)}
@@ -43,7 +44,7 @@ export function CollapsiblePanel({
             aria-label={isExpanded ? `Contraer ${title}` : `Expandir ${title}`}
           >
             <span className={isExpanded ? 'collapse-icon is-expanded' : 'collapse-icon'}>▾</span>
-          </button>
+          </button> */}
         </div>
       </div>
 

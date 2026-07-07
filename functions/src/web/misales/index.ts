@@ -1,1 +1,0 @@
-export { misales } from './http';

@@ -64,14 +64,12 @@ export async function requestTrackSongListen(songId: string): Promise<boolean> {
   try {
     const userId = await getCurrentUserId();
     const headers = await buildFunctionsHeaders({
-      'Content-Type': 'application/json',
       Accept: 'application/json'
     });
 
-    const response = await fetch(`${functionsBaseUrl}/songs/${encodeURIComponent(songId)}/listen`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ userId })
+    const response = await fetch(`${functionsBaseUrl}/songs/${encodeURIComponent(songId)}/listen?userId=${encodeURIComponent(userId)}`, {
+      method: 'PUT',
+      headers
     });
 
     if (response.status === 429) {
@@ -309,7 +307,7 @@ export async function saveSongUserPreferences(songId: string, preferences: SongU
       }
 
       const response = await fetch(`${functionsBaseUrl}/songs/${songId}/preferences`, {
-        method: 'POST',
+        method: 'PUT',
         headers,
         body: payload
       });
@@ -496,6 +494,7 @@ export interface CreateSongPayload {
   artistName?: string;
   year?: number;
   liturgicalUse?: string;
+  liturgicalTime?: string;
   coverImageUrl?: string;
   /** @deprecated Use per-version `lyrics` instead. Kept for legacy callers. */
   lyrics?: string;

@@ -2,12 +2,21 @@
 
 import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
+import { PdfViewer } from './PdfViewer';
 
 type SheetFileType = 'musicxml' | 'mxl' | 'pdf' | 'png' | 'jpg' | 'jpeg' | 'doc' | 'musescore' | 'txt' | 'unknown';
 
 interface SheetRendererProps {
   url: string;
   onError?: (error: string) => void;
+}
+
+function getProxiedSheetUrl(url: string): string {
+  if (!/^https?:\/\/firebasestorage\.googleapis\.com\//i.test(url)) {
+    return url;
+  }
+
+  return `/api/song-sheet?url=${encodeURIComponent(url)}`;
 }
 
 function getFileType(url: string): SheetFileType {
@@ -25,6 +34,7 @@ function getFileType(url: string): SheetFileType {
 
 export function SheetRenderer({ url, onError }: SheetRendererProps) {
   const fileType = getFileType(url);
+  const sheetUrl = getProxiedSheetUrl(url);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [imageZoom, setImageZoom] = useState(1);
@@ -57,6 +67,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
     }
 
     let cancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
     const container = osmdContainerRef.current;
     if (!container) {
       return;
@@ -70,7 +81,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
     void (async () => {
       try {
         // Try fetch with CORS
-        const response = await fetch(url, {
+        const response = await fetch(sheetUrl, {
           cache: 'no-store',
           mode: 'cors',
           credentials: 'omit'
@@ -144,7 +155,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
 
         const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay');
         const osmd = new OpenSheetMusicDisplay(container, {
-          autoResize: true,
+          autoResize: false,
           drawTitle: true,
           drawSubtitle: true,
           drawComposer: true,
@@ -157,7 +168,65 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
         });
 
         await osmd.load(source);
+
+        // Wait for the container to have a non-zero width before rendering.
+        // OSMD's SkyBottomLineBatchCalculator warns when measures have width <= 0,
+        // which happens if the container hasn't been laid out yet.
+        // Using autoResize: false prevents OSMD from rendering before we're ready.
+        const waitForWidth = (): Promise<void> => {
+          return new Promise((resolve) => {
+            if (container.offsetWidth > 0) {
+              resolve();
+              return;
+            }
+
+            let rafId: number;
+            const checkWidth = () => {
+              if (container.offsetWidth > 0) {
+                resolve();
+                return;
+              }
+              rafId = requestAnimationFrame(checkWidth);
+            };
+            rafId = requestAnimationFrame(checkWidth);
+
+            // Safety timeout: resolve after 2s even if width is still 0
+            setTimeout(() => {
+              cancelAnimationFrame(rafId);
+              resolve();
+            }, 2000);
+          });
+        };
+
+        await waitForWidth();
+        if (cancelled) {
+          return;
+        }
+
+        // Double rAF ensures the browser has completed at least one layout pass
+        // after the container has offsetWidth > 0.
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        if (cancelled) {
+          return;
+        }
+
         osmd.render();
+
+        // Manual resize handling (replaces autoResize: true)
+        let resizeRafId: number | null = null;
+        resizeObserver = new ResizeObserver(() => {
+          if (resizeRafId !== null) {
+            cancelAnimationFrame(resizeRafId);
+          }
+          resizeRafId = requestAnimationFrame(() => {
+            if (!cancelled && container.offsetWidth > 0) {
+              osmd.render();
+            }
+          });
+        });
+        resizeObserver.observe(container);
 
         if (cancelled) {
           return;
@@ -184,11 +253,14 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
 
     return () => {
       cancelled = true;
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       if (container) {
         container.innerHTML = '';
       }
     };
-  }, [url, fileType]);
+  }, [url, fileType, sheetUrl]);
 
   // Image zoom handlers
   const handleZoomIn = () => setImageZoom((prev) => Math.min(prev + 0.25, 3));
@@ -205,7 +277,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
 
     void (async () => {
       try {
-        const response = await fetch(url, {
+        const response = await fetch(sheetUrl, {
           cache: 'no-store',
           mode: 'cors',
           credentials: 'omit'
@@ -236,7 +308,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
     return () => {
       cancelled = true;
     };
-  }, [url, fileType]);
+  }, [url, fileType, sheetUrl]);
 
   // DOCX loading with mammoth
   useEffect(() => {
@@ -248,7 +320,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
 
     void (async () => {
       try {
-        const response = await fetch(url, {
+        const response = await fetch(sheetUrl, {
           cache: 'no-store',
           mode: 'cors',
           credentials: 'omit'
@@ -281,7 +353,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
     return () => {
       cancelled = true;
     };
-  }, [url, fileType]);
+  }, [url, fileType, sheetUrl]);
 
   // Render based on file type
   if (fileType === 'musicxml' || fileType === 'mxl') {
@@ -311,12 +383,10 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
       <div className="sheet-renderer-wrapper">
         {isLoading && <p className="sheet-status">Cargando PDF…</p>}
         {error && <p className="sheet-error">{error}</p>}
-        <iframe
-          src={url}
-          className="sheet-iframe"
-          title="Visor de PDF"
+        <PdfViewer
+          url={sheetUrl}
           onLoad={() => setIsLoading(false)}
-          onError={() => setError('No se pudo cargar el PDF en el visor.')}
+          onError={setError}
         />
       </div>
     );
@@ -364,7 +434,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
             onError={() => setError('No se pudo cargar la imagen.')}
           >
             <Image
-              src={url}
+              src={sheetUrl}
               alt="Partitura en imagen"
               width={0}
               height={0}

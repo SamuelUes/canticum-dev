@@ -22,13 +22,15 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
 
   return (
     <main className="home-page search-page-root">
-      <div className="home-shell search-page-shell layout-h-margin">
+      <div className="home-shell search-page-shell">
         <Header text={text} />
         <Nav selectedCategory={normalizedCategory || 'todos'} />
 
-        {/* SearchExplorer hace fetch en cliente al endpoint /search/catalog y muestra skeleton hasta que llega el dataset real */}
-        <SearchExplorer initialQuery={searchParams?.q ?? ''} initialCategory={normalizedCategory || 'todos'} />
-
+        <div className="layout-h-margin">
+          {/* SearchExplorer hace fetch en cliente al endpoint /search/catalog y muestra skeleton hasta que llega el dataset real */}
+          <SearchExplorer initialQuery={searchParams?.q ?? ''} initialCategory={normalizedCategory || 'todos'} />
+        </div>
+        
         <HomeFooter
           text={{
             footerKnowTitle: text.footerKnowTitle,

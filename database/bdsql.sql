@@ -102,6 +102,7 @@ CREATE TABLE songs (
   title VARCHAR(200) NOT NULL,
   year INT,
   liturgical_use VARCHAR(100),
+  liturgical_time VARCHAR(100),
   file_path TEXT NOT NULL,
   -- Spotify-aligned track metadata.
   -- images_json: ordered list of { url, width, height } (largest first).
@@ -835,7 +836,7 @@ INSERT INTO permissions (key, description) VALUES
 ('metadata:validate', 'Validar metadatos');
 
 -- Estados de canciones
-INSERT INTO song_3s (code, description) VALUES
+INSERT INTO song_states (code, description) VALUES
 ('DRAFT', 'Borrador'),
 ('UPLOADED', 'Archivo subido'),
 ('IN_REVIEW', 'En revisión'),

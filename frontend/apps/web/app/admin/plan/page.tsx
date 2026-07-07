@@ -1,6 +1,6 @@
 import { HomeFooter } from '../../../src/components/home/Footer';
 import { Header } from '../../../src/components/home/Header';
-import { MisalAdminWorkspace } from '../../../src/components/admin/MisalAdminWorkspace';
+import { PlanAdminWorkspace } from '../../../src/components/admin/PlanAdminWorkspace';
 import { homeMockData } from '../../../src/features/home/mockData';
 import { getHomeText } from '../../../src/i18n/home';
 import type { Locale } from '../../../src/types/home';
@@ -14,7 +14,7 @@ export default function MisalAdminPage() {
       <div className="home-shell">
         <Header text={text} />
 
-        <MisalAdminWorkspace />
+        <PlanAdminWorkspace />
 
         <HomeFooter
           text={{

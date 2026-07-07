@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { functionsBaseUrl } from '../../features/shared/functionsClient';
 import type { HomeText, NewsletterStat } from '../../types/home';
 
@@ -10,7 +10,20 @@ interface NewsletterSectionProps {
 }
 
 export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [slides, setSlides] = useState<Array<{ imageUrl: string; id?: string }>>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+
+  const visibleSlides = useMemo(() => slides.filter((slide) => Boolean(slide?.imageUrl)), [slides]);
+
+  const scrollToIndex = (index: number) => {
+    const track = trackRef.current;
+    const slide = track?.children.item(index) as HTMLElement | null;
+    if (!track || !slide) return;
+
+    const nextLeft = slide.offsetLeft - track.offsetLeft;
+    track.scrollTo({ left: nextLeft, behavior: 'smooth' });
+  };
 
   useEffect(() => {
     const fetchNewsletterImage = async () => {
@@ -23,9 +36,16 @@ export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
         });
 
         if (response.ok) {
-          const payload = await response.json() as { ok: boolean; imageUrl: string | null };
-          if (payload.ok && payload.imageUrl) {
-            setImageUrl(payload.imageUrl);
+          const payload = await response.json() as { ok: boolean; imageUrl: string | null; slides?: Array<{ imageUrl: string; id?: string }> };
+          if (payload.ok) {
+            const nextSlides = Array.isArray(payload.slides) && payload.slides.length > 0
+              ? payload.slides.filter((slide) => Boolean(slide?.imageUrl))
+              : payload.imageUrl
+                ? [{ imageUrl: payload.imageUrl }]
+                : [];
+
+            setSlides(nextSlides);
+            setActiveIndex(0);
           }
         }
       } catch (error) {
@@ -38,18 +58,71 @@ export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
     void fetchNewsletterImage();
   }, []);
 
-  if (imageUrl) {
+  useEffect(() => {
+    if (visibleSlides.length === 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setActiveIndex((current) => {
+        const next = (current + 1) % visibleSlides.length;
+        scrollToIndex(next);
+        return next;
+      });
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [visibleSlides.length]);
+
+  if (visibleSlides.length > 0) {
     return (
-      <section className="newsletter-banner layout-h-margin">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageUrl} alt={text.newsletterTitle} className="newsletter-banner-image" />
+      <section className="newsletter-banner layout-h-margin newsletter-banner--carousel">
+        <div className="newsletter-banner-carousel-shell">
+          <div className="newsletter-banner-carousel-header newsletter-banner-carousel-header--overlay">
+            <div className="newsletter-banner-progress" aria-hidden="true">
+              {visibleSlides.map((_, index) => (
+                <button
+                  key={`dot-${index}`}
+                  type="button"
+                  className={`newsletter-banner-dot ${index === activeIndex ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setActiveIndex(index);
+                    scrollToIndex(index);
+                  }}
+                  aria-label={`Ir a la imagen ${index + 1}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div
+            ref={trackRef}
+            className="newsletter-banner-carousel"
+            onScroll={(event) => {
+              const track = event.currentTarget;
+              const slideWidth = track.firstElementChild?.getBoundingClientRect().width ?? track.clientWidth;
+              if (!slideWidth) return;
+              const nextIndex = Math.round(track.scrollLeft / slideWidth);
+              if (nextIndex !== activeIndex) {
+                setActiveIndex(Math.max(0, Math.min(nextIndex, visibleSlides.length - 1)));
+              }
+            }}
+          >
+            {visibleSlides.map((slide, index) => (
+              <div key={slide.id ?? `${slide.imageUrl}-${index}`} className="newsletter-banner-slide">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={slide.imageUrl} alt={`${text.newsletterTitle} ${index + 1}`} className="newsletter-banner-image" />
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
     );
   }
 
   // Fallback to original design if no image is configured
   return (
-    <section className="newsletter-banner layout-h-margin">
+    <section className="newsletter-banner layout-h-margin newsletter-banner--fallback">
       <div className="banner-content">
         <h3>{text.newsletterTitle}</h3>
         <p>{text.newsletterDescription}</p>

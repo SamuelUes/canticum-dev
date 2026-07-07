@@ -4,7 +4,7 @@ import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getArtistProfileHref } from '../../features/artist/routing';
-import { getCachedSearchDatasetClient, getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
+import { getClientCurrentUserId, getSearchDatasetClient } from '../../features/search/repository';
 import { requestDeleterepertoire, loadRepertoireBookmark, saveRepertoireBookmark } from '../../features/repertoire/clientPersistence';
 import { HorizontalConveyor } from '../ui/HorizontalConveyor';
 import { SkeletonCard, SkeletonTitle } from '../ui/skeleton';
@@ -88,7 +88,7 @@ function resolveArtistName(item: SearchEntityItem): string {
 export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', dataset }: SearchExplorerProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const cachedDataset = useMemo(() => dataset ?? getCachedSearchDatasetClient('catalog') ?? EMPTY_DATASET, [dataset]);
+  const cachedDataset = useMemo(() => dataset ?? EMPTY_DATASET, [dataset]);
   const selectedKindsFromQuery = useMemo(() => parseKindsFromQuery(searchParams.get('kinds')), [searchParams]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [activeDataset, setActiveDataset] = useState<SearchDataset>(cachedDataset);
@@ -430,9 +430,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
               <span>{kindLabels[kind]}</span>
             </label>
           ))}
-        </div>
 
-        <div className="search-page__filter-group">
           <h3 className="search-page__filter-label">Tipo Litúrgico</h3>
           {activeDataset.filters.liturgicalTypes.map((type) => (
             <label key={type} className="search-page__filter-row">
@@ -444,9 +442,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
               <span>{type}</span>
             </label>
           ))}
-        </div>
 
-        <div className="search-page__filter-group">
           <h3 className="search-page__filter-label">Tiempo Litúrgico</h3>
           {activeDataset.filters.liturgicalTimes.map((time) => (
             <label key={time} className="search-page__filter-row">
@@ -454,9 +450,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
               <span>{time}</span>
             </label>
           ))}
-        </div>
 
-        <div className="search-page__filter-group">
           <h3 className="search-page__filter-label">Autor / Coro</h3>
           {activeDataset.filters.authorOrChoirs.map((author) => (
             <label key={author} className="search-page__filter-row">
@@ -524,11 +518,11 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
             <a href="#" className="search-page__section-link">Ver todas</a>
           </div>
           <div className="search-page__song-grid">
-            {grouped.songs.map((item) => (
-              <button key={item.id} type="button" className="search-page__song-card" onClick={() => navigateByItem(item)}>
+            {grouped.songs.map((item, index) => (
+              <button key={item.id} type="button" role="button" className="search-page__song-card" onClick={() => navigateByItem(item)}>
                 <div className="search-page__song-cover">
                   {item.images && item.images.length > 0 ? (
-                    <Image src={item.images[0].url} alt={item.title} width={48} height={48} />
+                    <Image src={item.images[0].url} alt={item.title} width={48} height={48} priority={index === 0} />
                   ) : (
                     <div className="search-page__song-cover">
                       <span className="material-symbols-outlined" aria-hidden="true">music_note</span>
@@ -536,7 +530,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
                   )}
                 </div>
                 <div className="search-page__song-content">
-                  <strong>{item.title}</strong>
+                  <strong role="button">{item.title}</strong>
                   <small>{item.subtitle}</small>
                 </div>
               </button>
@@ -552,11 +546,11 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
             </h2>
           </div>
           <div className="search-page__album-grid">
-            {grouped.albums.map((album) => (
+            {grouped.albums.map((album, index) => (
               <button key={album.id} type="button" className="search-page__album-card" onClick={() => navigateByItem(album)}>
                 <div className="search-page__album-cover">
                   {album.images && album.images.length > 0 ? (
-                    <Image src={album.images[0].url} alt={album.title} width={200} height={200} />
+                    <Image src={album.images[0].url} alt={album.title} width={200} height={200} priority={index === 0} />
                   ) : (
                     <span className="material-symbols-outlined search-page__album-placeholder" aria-hidden="true">album</span>
                   )}
@@ -579,12 +573,12 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
             </h2>
           </div>
           <div className="search-page__repertoire-list">
-            {grouped.repertoires.map((repertoire) => (
-              <button key={repertoire.id} type="button" className="search-page__repertoire-card" onClick={() => navigateByItem(repertoire)}>
+            {grouped.repertoires.map((repertoire, index) => (
+              <div key={repertoire.id} role="button" tabIndex={0} className="search-page__repertoire-card" onClick={() => navigateByItem(repertoire)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); navigateByItem(repertoire); } }}>
                 <div className={`search-page__repertoire-left-border ${repertoire.ownerUserId === currentUserId ? 'is-own' : ''}`}></div>
                 <div className="search-page__repertoire-cover">
                   {repertoire.images && repertoire.images.length > 0 ? (
-                    <Image src={repertoire.images[0].url} alt={`Portada de ${repertoire.title}`} width={64} height={64} />
+                    <Image src={repertoire.images[0].url} alt={`Portada de ${repertoire.title}`} width={64} height={64} priority={index === 0} />
                   ) : null}
                 </div>
                 <div className="search-page__repertoire-main">
@@ -644,7 +638,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
                     </>
                   ) : null}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </section>
@@ -660,7 +654,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
           <HorizontalConveyor ariaLabel="Artistas" className="artists-conveyor" scrollStep={260}>
             <div className="artists-track">
             {grouped.artists.length > 0
-              ? grouped.artists.map((item) => (
+              ? grouped.artists.map((item, index) => (
                   <button key={item.id} type="button" className="artist-home-pill artist-card-interactive" onClick={() => navigateByItem(item)}>
                     {item.images && item.images.length > 0 ? (
                       <Image
@@ -669,6 +663,7 @@ export function SearchExplorer({ initialQuery = '', initialCategory = 'todos', d
                         className="artist-avatar-image"
                         width={62}
                         height={62}
+                        priority={index === 0}
                       />
                     ) : (
                       <div className="artist-avatar">

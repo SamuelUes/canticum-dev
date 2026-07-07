@@ -27,6 +27,7 @@ interface AudioContextValue {
   addToQueue: (songs: ActiveSong[], source: 'repertoire' | 'album') => void;
   clearQueue: () => void;
   pause: () => void;
+  stopAll: () => void;
   seek: (time: number) => void;
   setVolume: (volume: number) => void;
   setMuted: (muted: boolean) => void;
@@ -48,6 +49,7 @@ const AudioContext = createContext<AudioContextValue>({
   addToQueue: () => {},
   clearQueue: () => {},
   pause: () => {},
+  stopAll: () => {},
   seek: () => {},
   setVolume: () => {},
   setMuted: () => {}
@@ -153,6 +155,27 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     setQueueIndex(0);
   }, []);
 
+  const stopAll = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.src = '';
+    }
+    setActiveSong(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setQueueState([]);
+    setQueueSource(null);
+    setQueueIndex(0);
+  }, []);
+
+  useEffect(() => {
+    const handleSessionCleared = () => stopAll();
+    window.addEventListener('canticum:session-cleared', handleSessionCleared);
+    return () => window.removeEventListener('canticum:session-cleared', handleSessionCleared);
+  }, [stopAll]);
+
   const pause = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -175,7 +198,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AudioContext.Provider value={{ activeSong, isPlaying, currentTime, duration, volume, muted, queue, queueSource, queueIndex, playSong, playSongAtIndex, setQueue, addToQueue, clearQueue, pause, seek, setVolume: handleSetVolume, setMuted: handleSetMuted }}>
+    <AudioContext.Provider value={{ activeSong, isPlaying, currentTime, duration, volume, muted, queue, queueSource, queueIndex, playSong, playSongAtIndex, setQueue, addToQueue, clearQueue, pause, stopAll, seek, setVolume: handleSetVolume, setMuted: handleSetMuted }}>
       {children}
     </AudioContext.Provider>
   );

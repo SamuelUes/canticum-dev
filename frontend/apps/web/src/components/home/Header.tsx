@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { isAdminUser } from '../../features/auth/repository';
 import { usePremiumNavigation } from '../../hooks/usePremiumNavigation';
 import type { HomeText } from '../../types/home';
+import { FloatingAudioPlayer, useAudioPlayerPlacement } from '../audio/FloatingAudioPlayer';
 import { CommandSearch } from '../ui/CommandSearch';
 import { CreateMenu } from '../ui/CreateMenu';
 import { HeaderActionGroup } from '../ui/HeaderActionGroup';
@@ -21,6 +22,7 @@ export function Header({ text }: HeaderProps) {
   const router = useRouter();
   const { user, loading, signOut } = useAuth();
   const { openPremiumPlans } = usePremiumNavigation();
+  const audioPlayerPlacement = useAudioPlayerPlacement();
   const canManageAdminRoutes = isAdminUser(user);
 
   useEffect(() => {
@@ -41,7 +43,7 @@ export function Header({ text }: HeaderProps) {
       router.prefetch('/auth');
       if (canManageAdminRoutes) {
         router.prefetch('/admin/dashboard');
-        router.prefetch('/admin/misales');
+        router.prefetch('/admin/plan');
         router.prefetch('/admin/albums');
       }
     };
@@ -84,6 +86,12 @@ export function Header({ text }: HeaderProps) {
           repertoiresLabel={text.repertoires}
           onSubscribe={openPremiumPlans}
         />
+
+        {audioPlayerPlacement === 'header' ? (
+          <div className="header-audio-player-slot">
+            <FloatingAudioPlayer placement="header" />
+          </div>
+        ) : null}
 
         <div className="welcome-box">
           <div className="avatar" aria-hidden>

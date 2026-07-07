@@ -358,9 +358,9 @@ export function CreaterepertoireWorkspace() {
             />
             <div>
               <strong>Privado</strong>
-              <small>Solo tú puedes verlo</small>
             </div>
           </label>
+         <small className="visibility-option-small">Solo tú puedes verlo</small>
           <label className="create-visibility-option">
             <input
               type="radio"
@@ -370,9 +370,9 @@ export function CreaterepertoireWorkspace() {
             />
             <div>
               <strong>Público</strong>
-              <small>Visible para todos los usuarios</small>
             </div>
           </label>
+         <small className="visibility-option-small">Visible para todos los usuarios</small>
         </fieldset>
 
         <div className="create-repertoire-songs-section">

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { requestDeleterepertoire, requestUserRepertoires, loadRepertoireBookmark, saveRepertoireBookmark } from '../../features/repertoire/clientPersistence';
 import { getRepertoireStatusLabel, normalizeRepertoireStatus } from '../../features/repertoire/status';
+import { ShareRepertoireButton } from './ShareRepertoireButton';
 import { SkeletonCard } from '../ui/skeleton';
 import type { repertoireListItem, repertoireStatus } from '../../types/repertoire';
 
@@ -179,7 +180,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
 
           <div className="repertoires-filter-group">
             <span className="repertoires-filter-label">Estado</span>
-            {(['Borrador', 'Publicado'] as repertoireStatus[]).map((status) => (
+            {(['Borrador', 'En revisión', 'Rechazado', 'Aprobado', 'Publicado'] as repertoireStatus[]).map((status) => (
               <label key={status} className="repertoires-checkbox-row">
                 <input type="checkbox" checked={selectedStatuses.includes(status)} onChange={() => toggleStatus(status)} />
                 <span>{status}</span>
@@ -261,12 +262,24 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
                 )}
                 <div className="repertoires-card-overlay"></div>
                 <div className="repertoires-card-badges">
-                  <span className={`repertoires-status-badge ${normalizeRepertoireStatus(item.status) === 'PUBLISHED' ? 'published' : 'draft'}`}>
-                    <span className="material-symbols-outlined">
-                      {normalizeRepertoireStatus(item.status) === 'PUBLISHED' ? 'check_circle' : 'edit_document'}
-                    </span>
-                    {getRepertoireStatusLabel(item.status)}
-                  </span>
+                  {(() => {
+                    const statusKey = normalizeRepertoireStatus(item.status);
+                    const statusIcon: Record<string, string> = {
+                      DRAFT: 'edit_document',
+                      IN_REVIEW: 'hourglass_top',
+                      REJECTED: 'cancel',
+                      APPROVED: 'task_alt',
+                      PUBLISHED: 'check_circle'
+                    };
+                    return (
+                      <span className={`repertoires-status-badge ${statusKey.toLowerCase()}`}>
+                        <span className="material-symbols-outlined">
+                          {statusIcon[statusKey] ?? 'edit_document'}
+                        </span>
+                        {getRepertoireStatusLabel(item.status)}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <button
                   className={`repertoire-bookmark-button ${bookmarkedRepertoires.has(item.id) ? 'is-bookmarked' : ''}`}
@@ -313,9 +326,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
                   <button type="button" aria-label="Ver repertorio" onClick={() => router.push(`/repertoires/${item.id}`)}>
                     <span className="material-symbols-outlined">visibility</span>
                   </button>
-                  <button type="button" aria-label="Compartir repertorio">
-                    <span className="material-symbols-outlined">share</span>
-                  </button>
+                  <ShareRepertoireButton repertoireId={item.id} />
                 </div>
                 <button type="button" className="repertoires-delete-button" aria-label="Eliminar repertorio" onClick={(e) => { e.stopPropagation(); void onDelete(item); }}>
                   <span className="material-symbols-outlined">delete</span>

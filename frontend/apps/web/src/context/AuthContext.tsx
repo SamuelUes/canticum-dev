@@ -29,6 +29,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleSignOut = useCallback(async () => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('canticum:session-cleared'));
+    }
     await repoSignOut();
     setUser(null);
   }, []);

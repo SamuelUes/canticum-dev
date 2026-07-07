@@ -61,18 +61,10 @@ export const homeMockData: HomeData = {
       id: 'footer-info',
       title: 'Información',
       links: [
-        { id: 'about', label: 'About Us', href: '/' },
-        { id: 'career', label: 'Carriler', href: '/' },
-        { id: 'blog', label: 'Blog', href: '/' }
-      ]
-    },
-    {
-      id: 'footer-news',
-      title: 'Novedades',
-      links: [
-        { id: 'news', label: 'Noticias', href: '/' },
-        { id: 'comments', label: 'Comentarios', href: '/' },
-        { id: 'support', label: 'Unlimited Support', href: '/' }
+        { id: 'about', label: 'Sobre Nosotros', href: '/about' },
+        { id: 'privacy', label: 'Términos de Privacidad', href: '/privacy' },
+        { id: 'terms', label: 'Términos de Uso', href: '/terms' },
+        { id: 'contact', label: 'Contacto', href: '/contact' },
       ]
     }
   ]

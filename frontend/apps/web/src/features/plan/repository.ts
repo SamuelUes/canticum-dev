@@ -19,6 +19,19 @@ export interface WeeklyMisalRecord {
   createdAt?: string | null;
 }
 
+export interface WeeklySundaySchemaRecord {
+  id: string;
+  title: string;
+  content: string;
+  storagePath: string;
+  fileName: string;
+  weekId: string;
+  weekStart: string;
+  weekEnd: string;
+  createdBy?: string | null;
+  createdAt?: string | null;
+}
+
 export interface UploadWeeklyMisalParams {
   title: string;
   file: File;
@@ -27,6 +40,17 @@ export interface UploadWeeklyMisalParams {
 export interface UploadWeeklyMisalResult {
   ok: boolean;
   misal?: WeeklyMisalRecord;
+  error?: string;
+}
+
+export interface UploadWeeklySundaySchemaParams {
+  title: string;
+  content: string;
+}
+
+export interface UploadWeeklySundaySchemaResult {
+  ok: boolean;
+  schema?: WeeklySundaySchemaRecord;
   error?: string;
 }
 
@@ -141,6 +165,36 @@ function normalizeApiItem(raw: unknown): WeeklyMisalRecord | null {
   };
 }
 
+function normalizeSundaySchemaApiItem(raw: unknown): WeeklySundaySchemaRecord | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const item = raw as Record<string, unknown>;
+  const id = typeof item.id === 'string' ? item.id : '';
+  const content = typeof item.content === 'string' ? item.content : '';
+  const storagePath = typeof item.storagePath === 'string' ? item.storagePath : '';
+  if (!id || !content || !storagePath) {
+    return null;
+  }
+
+  const weekId = typeof item.weekId === 'string' ? item.weekId : '';
+  const range = parseWeekIdToRange(weekId);
+
+  return {
+    id,
+    title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : 'Esquema del domingo',
+    content,
+    storagePath,
+    fileName: typeof item.fileName === 'string' ? item.fileName : 'esquema-domingo.txt',
+    weekId,
+    weekStart: typeof item.weekStart === 'string' ? item.weekStart : range.weekStart,
+    weekEnd: typeof item.weekEnd === 'string' ? item.weekEnd : range.weekEnd,
+    createdBy: typeof item.createdBy === 'string' ? item.createdBy : null,
+    createdAt: typeof item.createdAt === 'string' ? item.createdAt : null
+  };
+}
+
 async function fetchLatestWeeklyMisalesFromApi(limitCount = 3): Promise<WeeklyMisalRecord[]> {
   if (!functionsBaseUrl) {
     return [];
@@ -148,7 +202,7 @@ async function fetchLatestWeeklyMisalesFromApi(limitCount = 3): Promise<WeeklyMi
 
   try {
     const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
-    const endpoint = `${functionsBaseUrl}/misales?limit=${encodeURIComponent(String(limitCount))}`;
+    const endpoint = `${functionsBaseUrl}/misal__plan?limit=${encodeURIComponent(String(limitCount))}`;
     const response = await fetch(endpoint, {
       method: 'GET',
       headers,
@@ -173,11 +227,129 @@ async function fetchLatestWeeklyMisalesFromApi(limitCount = 3): Promise<WeeklyMi
   }
 }
 
-function parseStoragePath(path: string): { weekId: string; misalId: string } {
+export async function listLatestWeeklySundaySchemas(limitCount = 3): Promise<WeeklySundaySchemaRecord[]> {
+  if (!functionsBaseUrl) {
+    return [];
+  }
+
+  try {
+    const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
+    const response = await fetch(`${functionsBaseUrl}/misal__plan/weekly-plan?limit=${encodeURIComponent(String(limitCount))}`, {
+      method: 'GET',
+      headers,
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = (await response.json()) as { items?: unknown };
+    if (!Array.isArray(payload.items)) {
+      return [];
+    }
+
+    return payload.items
+      .map((entry) => normalizeSundaySchemaApiItem(entry))
+      .filter((entry): entry is WeeklySundaySchemaRecord => entry !== null)
+      .slice(0, limitCount);
+  } catch {
+    return [];
+  }
+}
+
+export async function uploadWeeklySundaySchema({ title, content }: UploadWeeklySundaySchemaParams): Promise<UploadWeeklySundaySchemaResult> {
+  if (!auth?.currentUser) {
+    return { ok: false, error: 'Debes iniciar sesion para subir el esquema del domingo.' };
+  }
+
+  const safeTitle = title.trim();
+  const safeContent = content.trim();
+  if (!safeTitle || !safeContent) {
+    return { ok: false, error: 'El titulo y el contenido son obligatorios.' };
+  }
+
+  const range = buildWeeklyMisalRange();
+  const misal_planId = Math.random().toString(36).slice(2, 12);
+  const schemaPlanId = `schema_${Math.random().toString(36).slice(2, 12)}`;
+  const storagePath = `misal__plan/${range.weekId}/${misal_planId}/${schemaPlanId}`;
+  const fileName = `esquema-domingo-${range.weekId}.txt`;
+
+  if (!functionsBaseUrl) {
+    return {
+      ok: true,
+      schema: {
+        id: schemaPlanId,
+        title: safeTitle,
+        content: safeContent,
+        storagePath,
+        fileName,
+        weekId: range.weekId,
+        weekStart: range.weekStartKey,
+        weekEnd: range.weekEndKey,
+        createdBy: auth.currentUser.uid,
+        createdAt: new Date().toISOString()
+      }
+    };
+  }
+
+  const headers = await buildFunctionsHeaders({
+    Accept: 'application/json',
+    'Content-Type': 'application/json'
+  });
+
+  const response = await fetch(`${functionsBaseUrl}/misal__plan/weekly-plan`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: safeTitle,
+      content: safeContent,
+      storagePath,
+      fileName,
+      weekId: range.weekId,
+      weekStart: range.weekStartKey,
+      weekEnd: range.weekEndKey,
+      kind: 'schema'
+    })
+  });
+
+  if (!response.ok) {
+    let backendMessage = 'No se pudo registrar el esquema del domingo.';
+    try {
+      const payload = (await response.json()) as { error?: { message?: string } };
+      if (payload.error?.message) {
+        backendMessage = payload.error.message;
+      }
+    } catch {
+    }
+    throw new Error(backendMessage);
+  }
+
+  const payload = (await response.json()) as { item?: unknown };
+  const normalized = normalizeSundaySchemaApiItem(payload.item);
+
+  return {
+    ok: true,
+    schema: normalized ?? {
+      id: schemaPlanId,
+      title: safeTitle,
+      content: safeContent,
+      storagePath,
+      fileName,
+      weekId: range.weekId,
+      weekStart: range.weekStartKey,
+      weekEnd: range.weekEndKey,
+      createdBy: auth.currentUser.uid,
+      createdAt: new Date().toISOString()
+    }
+  };
+}
+
+function parseStoragePath(path: string): { weekId: string; misal_planId: string } {
   const segments = path.split('/').filter(Boolean);
   return {
     weekId: segments[1] ?? '',
-    misalId: segments[2] ?? ''
+    misal_planId: segments[2] ?? ''
   };
 }
 
@@ -234,12 +406,12 @@ async function fetchLatestWeeklyMisalesFromStorage(limitCount = 3): Promise<Week
             getMetadata(objectRef)
           ]);
 
-          const { weekId, misalId } = parseStoragePath(candidate.path);
+          const { weekId, misal_planId } = parseStoragePath(candidate.path);
           const range = parseWeekIdToRange(weekId);
           const updatedAt = metadata.updated || metadata.timeCreated || null;
 
           return {
-            id: misalId || candidate.name,
+            id: misal_planId || candidate.name,
             title: 'Misal Semanal',
             downloadUrl: url,
             storagePath: candidate.path,
@@ -294,8 +466,9 @@ export async function uploadWeeklyMisal({ title, file }: UploadWeeklyMisalParams
   }
 
   const range = buildWeeklyMisalRange();
-  const provisionalId = Math.random().toString(36).slice(2, 12);
-  const storagePath = `misal/${range.weekId}/${provisionalId}`;
+  const misal_planId = Math.random().toString(36).slice(2, 12);
+  const misalId = `misal_${Math.random().toString(36).slice(2, 12)}`;
+  const storagePath = `misal__plan/${range.weekId}/${misal_planId}/${misalId}`;
   const fileName = buildDownloadFileName(safeTitle, range.weekId);
   const objectRef = ref(storage, storagePath);
 
@@ -312,7 +485,7 @@ export async function uploadWeeklyMisal({ title, file }: UploadWeeklyMisalParams
       return {
         ok: true,
         misal: {
-          id: provisionalId,
+          id: misalId,
           title: safeTitle,
           downloadUrl,
           storagePath,
@@ -331,7 +504,7 @@ export async function uploadWeeklyMisal({ title, file }: UploadWeeklyMisalParams
       'Content-Type': 'application/json'
     });
 
-    const response = await fetch(`${functionsBaseUrl}/misales`, {
+    const response = await fetch(`${functionsBaseUrl}/misal__plan`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -341,7 +514,8 @@ export async function uploadWeeklyMisal({ title, file }: UploadWeeklyMisalParams
         fileName,
         weekId: range.weekId,
         weekStart: range.weekStartKey,
-        weekEnd: range.weekEndKey
+        weekEnd: range.weekEndKey,
+        kind: 'misal'
       })
     });
 
@@ -363,7 +537,7 @@ export async function uploadWeeklyMisal({ title, file }: UploadWeeklyMisalParams
     return {
       ok: true,
       misal: normalized ?? {
-        id: provisionalId,
+        id: misalId,
         title: safeTitle,
         downloadUrl,
         storagePath,

@@ -115,13 +115,17 @@ service firebase.storage {
       allow write: if isAdminOrEditor();
     }
 
-    match /misal/{weekId}/{misalId} {
+    match /misal__plan/{weekId}/{misal_planId}/{leafId} {
       allow read: if true;
       allow write: if isAdminOrEditor()
         && weekId.size() > 0 && weekId.size() <= 40
-        && misalId.size() > 0 && misalId.size() <= 80
-        && request.resource.contentType == 'application/pdf'
-        && request.resource.size < 20 * 1024 * 1024;
+        && misal_planId.size() > 0 && misal_planId.size() <= 80
+        && leafId.size() > 0 && leafId.size() <= 80
+        && request.resource.size < 20 * 1024 * 1024
+        && (
+          (leafId.matches('^misal_[A-Za-z0-9_-]+$') && request.resource.contentType == 'application/pdf')
+          || (leafId.matches('^schema_[A-Za-z0-9_-]+$') && request.resource.contentType == 'text/plain')
+        );
     }
 
     match /users/{userId}/{allPaths=**} {

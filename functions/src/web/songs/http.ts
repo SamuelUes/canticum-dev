@@ -660,6 +660,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
         title,
         year: typeof body.year === 'number' ? body.year : null,
         liturgicalUse: typeof body.liturgicalUse === 'string' ? body.liturgicalUse : 'General',
+        liturgicalTime: typeof body.liturgicalTime === 'string' ? body.liturgicalTime : null,
         filePath: `songs/${songRef.id}`,
         previewUrl: null,
         artistId: songArtistId,
@@ -704,6 +705,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
         artistId: songArtistId ? String(songArtistId) : null,
         year: typeof body.year === 'number' ? body.year : null,
         liturgicalType: typeof body.liturgicalUse === 'string' ? body.liturgicalUse : 'General',
+        liturgicalTime: typeof body.liturgicalTime === 'string' ? body.liturgicalTime : null,
         status: 'DRAFT',
         createdBy: uid,
         ownerUserId: uid,
@@ -1565,10 +1567,10 @@ export const songs = functions.https.onRequest(async (req, res) => {
   }
   /*------*/
 
-  if (segments.length === 2 && segments[1] === 'listen' && req.method === 'POST') {
+  if (segments.length === 2 && segments[1] === 'listen' && req.method === 'PUT') {
     const listenLimiterIdentifier = authContext?.uid ?? getClientIp(req) ?? `song:${songId}`;
-    const listenLimiter = await checkRateLimit(`${listenLimiterIdentifier}:${songId}`, 'songs_listen', 1, 1800);
-    applyRateLimitHeaders(res, 1, listenLimiter);
+    const listenLimiter = await checkRateLimit(`${listenLimiterIdentifier}:${songId}`, 'songs_listen', 5, 300);
+    applyRateLimitHeaders(res, 5, listenLimiter);
     if (!listenLimiter.allowed) {
       res.set('Retry-After', String(listenLimiter.retryAfterSeconds));
       sendError(res, 429, 'too_many_requests', `Listen limit reached. Retry in ${listenLimiter.retryAfterSeconds}s.`);
@@ -1648,7 +1650,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  if (segments.length === 2 && segments[1] === 'preferences' && req.method === 'POST') {
+  if (segments.length === 2 && segments[1] === 'preferences' && req.method === 'PUT') {
     const body = getBodyRecord(req);
     const rawPreferences = normalizePreferencePayload(body.preferences);
 

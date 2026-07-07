@@ -11,7 +11,7 @@ export function HeaderBrand({ brand }: HeaderBrandProps) {
   return (
     <div className="header-brand">
       <Link href="/" aria-label="Ir al inicio" className="header-brand-link">
-        <Image src="/assets/icon/ofcanticumlogo.png" alt={brand} className="brand-logo-image" width={120} height={120} priority />
+        <Image src="/assets/icon/canticum-imagotipo-compacto-color.svg" alt={brand} className="brand-logo-image" width={64} height={64} priority />
       </Link>
       <div className="header-brand-copy">
         <span className="header-brand-kicker"></span>

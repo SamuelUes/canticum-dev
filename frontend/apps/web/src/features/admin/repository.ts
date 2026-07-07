@@ -96,12 +96,29 @@ export interface ArtistsResponse {
 export interface NewsletterResponse {
   ok: boolean;
   imageUrl: string | null;
+  slides: NewsletterSlide[];
 }
 
 export interface NewsletterUploadResponse {
   ok: boolean;
   imageUrl: string;
   storagePath: string;
+  slide: NewsletterSlide;
+  slides: NewsletterSlide[];
+}
+
+export interface NewsletterSlide {
+  id: string;
+  imageUrl: string;
+  storagePath: string;
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
+export interface UpdateNewsletterSlidesResponse {
+  ok: boolean;
+  slides: NewsletterSlide[];
+  imageUrl: string | null;
 }
 
 function assertFunctionsConfigured(): string {
@@ -302,7 +319,28 @@ export async function fetchNewsletterImage(): Promise<string | null> {
   return payload.imageUrl ?? null;
 }
 
-export async function uploadNewsletterImage(file: File): Promise<{ imageUrl: string; storagePath: string }> {
+export async function fetchNewsletterSlides(): Promise<NewsletterSlide[]> {
+  const baseUrl = assertFunctionsConfigured();
+  const headers = await buildFunctionsHeaders({ Accept: 'application/json' });
+  const response = await fetch(`${baseUrl}/admin-admin/newsletter`, {
+    method: 'GET',
+    headers,
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseJsonError(response, 'No se pudo cargar el carrusel del newsletter.'));
+  }
+
+  const payload = (await response.json()) as Partial<NewsletterResponse>;
+  if (!payload.ok) {
+    throw new Error('No se pudo cargar el carrusel del newsletter.');
+  }
+
+  return Array.isArray(payload.slides) ? payload.slides : [];
+}
+
+export async function uploadNewsletterImage(file: File): Promise<{ imageUrl: string; storagePath: string; slide: NewsletterSlide; slides: NewsletterSlide[] }> {
   const baseUrl = assertFunctionsConfigured();
   const headers = await buildFunctionsHeaders({});
   const response = await fetch(`${baseUrl}/admin-admin/newsletter`, {
@@ -319,14 +357,38 @@ export async function uploadNewsletterImage(file: File): Promise<{ imageUrl: str
   }
 
   const payload = (await response.json()) as Partial<NewsletterUploadResponse>;
-  if (!payload.ok || !payload.imageUrl || !payload.storagePath) {
+  if (!payload.ok || !payload.imageUrl || !payload.storagePath || !payload.slide || !Array.isArray(payload.slides)) {
     throw new Error('No se pudo subir la imagen del newsletter.');
   }
 
   return {
     imageUrl: payload.imageUrl,
     storagePath: payload.storagePath,
+    slide: payload.slide,
+    slides: payload.slides,
   };
+}
+
+export async function updateNewsletterSlides(slides: NewsletterSlide[]): Promise<NewsletterSlide[]> {
+  const baseUrl = assertFunctionsConfigured();
+  const headers = await buildFunctionsHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' });
+  const response = await fetch(`${baseUrl}/admin-admin/newsletter`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ slides }),
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseJsonError(response, 'No se pudo actualizar el carrusel del newsletter.'));
+  }
+
+  const payload = (await response.json()) as Partial<UpdateNewsletterSlidesResponse>;
+  if (!payload.ok || !Array.isArray(payload.slides)) {
+    throw new Error('No se pudo actualizar el carrusel del newsletter.');
+  }
+
+  return payload.slides;
 }
 
 export async function getArtistForAdmin(artistId: number): Promise<ArtistDetail> {

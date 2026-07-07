@@ -183,6 +183,7 @@ interface CreateSongDraftCloudSqlInput {
   title: string;
   year?: number | null;
   liturgicalUse?: string | null;
+  liturgicalTime?: string | null;
   filePath?: string | null;
   previewUrl?: string | null;
   artistId?: number | null;
@@ -289,10 +290,36 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
         WHERE code = 'DRAFT'
         LIMIT 1
       )
-      INSERT INTO songs (user_id, state_id, title, year, liturgical_use, file_path, preview_url, artist_id, images_json)
-      SELECT user_row.id, state_row.id, $2, $3, $4, $5, $6, $7, $8::jsonb
-      FROM user_row, state_row
-      RETURNING id, user_id AS "userId", state_id AS "stateId", title, artist_id AS "artistId";
+INSERT INTO songs (
+  user_id,
+  state_id,
+  title,
+  year,
+  liturgical_use,
+  liturgical_time,
+  file_path,
+  preview_url,
+  artist_id,
+  images_json
+)
+SELECT
+  user_row.id,
+  state_row.id,
+  $2,
+  $3,
+  $4,
+  $5,
+  $6,
+  $7,
+  $8,
+  $9::jsonb
+FROM user_row, state_row
+RETURNING
+  id,
+  user_id AS "userId",
+  state_id AS "stateId",
+  title,
+  artist_id AS "artistId";
     `;
 
     const songResult = await client.query<Omit<CloudSqlSongDraftRow, 'versions'>>(songInsertQuery, [
@@ -300,6 +327,7 @@ export async function createSongDraftInCloudSql(input: CreateSongDraftCloudSqlIn
       input.title,
       typeof input.year === 'number' ? input.year : null,
       input.liturgicalUse ?? null,
+      input.liturgicalTime ?? null,
       input.filePath ?? '',
       input.previewUrl ?? null,
       input.artistId ?? null,
@@ -547,6 +575,7 @@ export async function listSongsByArtistId(
         s.id AS "id",
         s.title AS "title",
         s.liturgical_use AS "liturgicalUse",
+        s.liturgical_time AS "liturgicalTime",
         s.year AS "year",
         u.firebase_uid AS "ownerFirebaseUid",
         ss.code AS "status",

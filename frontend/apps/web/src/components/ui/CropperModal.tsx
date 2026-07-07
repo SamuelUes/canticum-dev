@@ -26,6 +26,7 @@ export function CropperModal({
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const image = new Image();
+    image.crossOrigin = 'anonymous';
 
     image.onload = () => {
       canvas.width = croppedAreaPixels.width;

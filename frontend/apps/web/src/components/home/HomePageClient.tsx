@@ -7,6 +7,7 @@ import { Nav } from './nav';
 import { getCachedSearchDatasetClient } from '../../features/search/repository';
 import type { HomeText } from '../../types/home';
 import { WeeklyMisalStrip } from '../ui/WeeklyMisalStrip';
+import { WeeklyPlanStrip } from '../ui/WeeklyPlanStrip';
 
 interface HomePageClientProps {
   text: HomeText;
@@ -43,7 +44,10 @@ export function HomePageClient({ text }: HomePageClientProps) {
         categoryOptions={categoryOptions}
       />
 
-      <WeeklyMisalStrip />
+      <div className="weekly-panels-row layout-h-margin">
+        <WeeklyMisalStrip className="weekly-panel weekly-panel--misal" />
+        <WeeklyPlanStrip className="weekly-panel weekly-panel--plan" />
+      </div>
 
       <HomeContent
         text={text}

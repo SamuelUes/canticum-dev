@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node --use-system-ca ./scripts/next-build.cjs",
     "start": "next start -H 0.0.0.0",
     "lint": "next lint"
   },
@@ -23,17 +23,15 @@
     "mammoth": "^1.12.0",
     "next": "14.2.15",
     "opensheetmusicdisplay": "^1.9.9",
-    "react": "18.2.0",
+    "react": "^18.2.0",
     "react-beautiful-dnd": "^13.1.1",
-    "react-dom": "18.2.0",
+    "react-dom": "^18.2.0",
     "react-easy-crop": "^5.5.7",
     "react-loading-skeleton": "^3.5.0",
+    "react-pdf": "^7.7.3",
     "styled-jsx": "^5.1.7",
-    "zod": "^3.24.2",
-    "react-pdf": "^10.4.1"
-    
+    "zod": "^3.24.2"
   },
-  
   "devDependencies": {
     "@types/node": "^20.17.50",
     "@types/react": "^18.3.12",

@@ -3,6 +3,7 @@ import { HomeFooter } from '../../../src/components/home/Footer';
 import { Header } from '../../../src/components/home/Header';
 import { SongWorkspace } from '../../../src/components/song/SongWorkspace';
 import { homeMockData } from '../../../src/features/home/mockData';
+import { getServerSessionToken } from '../../../src/features/shared/functionsServer';
 import { getSongDetailById } from '../../../src/features/song/repository';
 import { getHomeText } from '../../../src/i18n/home';
 import type { Locale } from '../../../src/types/home';
@@ -21,9 +22,11 @@ export default async function SongPage({ params, searchParams }: SongPageProps) 
   const text = getHomeText(locale);
   const rawVersionId = searchParams?.versionId;
   const initialVersionId = Array.isArray(rawVersionId) ? rawVersionId[0] : rawVersionId;
+  const authToken = await getServerSessionToken();
   const song = await getSongDetailById(
     params.songId,
-    typeof initialVersionId === 'string' ? initialVersionId : undefined
+    typeof initialVersionId === 'string' ? initialVersionId : undefined,
+    { authToken }
   );
 
   if (!song) {

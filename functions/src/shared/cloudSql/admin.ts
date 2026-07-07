@@ -100,26 +100,34 @@ export interface AdminDashboardMetrics {
   newUsersLast48h: number;
 }
 
-export async function getAdminDashboardMetrics(): Promise<AdminDashboardMetrics> {
-  const pool = getPool();
+async function safeCount(query: string, params?: unknown[]): Promise<number> {
+  try {
+    const result = await getPool().query<{ count: string }>(query, params);
+    return Number(result.rows[0]?.count ?? 0);
+  } catch (error) {
+    console.error('[AdminDashboardMetrics] Query failed:', query, error);
+    return 0;
+  }
+}
 
+export async function getAdminDashboardMetrics(): Promise<AdminDashboardMetrics> {
   const [
-    totalSongsResult,
-    pendingSongsResult,
-    totalArtistsResult,
-    totalRepertoiresResult,
-    newUsersResult
+    totalSongs,
+    pendingSongs,
+    totalArtists,
+    totalRepertoires,
+    newUsersLast48h
   ] = await Promise.all([
-    pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM songs'),
-    pool.query<{ count: string }>(`
+    safeCount('SELECT COUNT(*)::text AS count FROM songs'),
+    safeCount(`
       SELECT COUNT(*)::text AS count
       FROM songs s
       JOIN song_states ss ON ss.id = s.state_id
       WHERE UPPER(ss.code) IN ('DRAFT', 'UPLOADED', 'IN_REVIEW')
     `),
-    pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM artists'),
-    pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM repertoires'),
-    pool.query<{ count: string }>(`
+    safeCount('SELECT COUNT(*)::text AS count FROM artists'),
+    safeCount('SELECT COUNT(*)::text AS count FROM repertoires'),
+    safeCount(`
       SELECT COUNT(*)::text AS count
       FROM users
       WHERE created_at >= NOW() - INTERVAL '48 hours'
@@ -127,11 +135,11 @@ export async function getAdminDashboardMetrics(): Promise<AdminDashboardMetrics>
   ]);
 
   return {
-    totalSongs: Number(totalSongsResult.rows[0]?.count ?? 0),
-    pendingSongs: Number(pendingSongsResult.rows[0]?.count ?? 0),
-    totalArtists: Number(totalArtistsResult.rows[0]?.count ?? 0),
-    totalRepertoires: Number(totalRepertoiresResult.rows[0]?.count ?? 0),
-    newUsersLast48h: Number(newUsersResult.rows[0]?.count ?? 0)
+    totalSongs,
+    pendingSongs,
+    totalArtists,
+    totalRepertoires,
+    newUsersLast48h
   };
 }
 

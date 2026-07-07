@@ -16,13 +16,13 @@ export function HeaderActionGroup({ primaryAction, subscribeLabel, repertoiresLa
   return (
     <nav className="top-actions header-action-group" aria-label="acciones principales">
       {primaryAction}
-      <button type="button" onClick={onSubscribe} className="header-action-button header-action-button--premium">
+      <button type="button" onClick={onSubscribe} className="header-action-button header-action-button--premium" aria-label={subscribeLabel}>
         <span className="material-symbols-outlined action-icon" aria-hidden="true">wallet</span>
-        {subscribeLabel}
+        <span className="header-action-button-label">{subscribeLabel}</span>
       </button>
-      <button type="button" onClick={() => router.push('/repertoires')} className="header-action-button">
+      <button type="button" onClick={() => router.push('/repertoires')} className="header-action-button" aria-label={repertoiresLabel}>
         <span className="material-symbols-outlined action-icon" aria-hidden="true">description</span>
-        {repertoiresLabel}
+        <span className="header-action-button-label">{repertoiresLabel}</span>
       </button>
     </nav>
   );

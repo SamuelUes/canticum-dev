@@ -4,14 +4,17 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import { isAdminUser } from '../../features/auth/repository';
-import { uploadWeeklyMisal } from '../../features/misales/repository';
+import { uploadWeeklyMisal, uploadWeeklySundaySchema } from '../../features/plan/repository';
 
-export function MisalAdminWorkspace() {
+export function PlanAdminWorkspace() {
   const router = useRouter();
   const { user, loading } = useAuth();
   const [title, setTitle] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
+  const [schemaTitle, setSchemaTitle] = useState('');
+  const [schemaContent, setSchemaContent] = useState('');
+  const [schemaSubmitting, setSchemaSubmitting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
@@ -56,8 +59,19 @@ export function MisalAdminWorkspace() {
     setFileInputKey((value) => value + 1);
   };
 
+  const clearSchemaForm = () => {
+    setSchemaTitle('');
+    setSchemaContent('');
+  };
+
   const handleClear = () => {
     clearForm();
+    setErrorMessage('');
+    setSuccessMessage('');
+  };
+
+  const handleSchemaClear = () => {
+    clearSchemaForm();
     setErrorMessage('');
     setSuccessMessage('');
   };
@@ -87,6 +101,38 @@ export function MisalAdminWorkspace() {
     setSuccessMessage('Misal subido correctamente.');
     clearForm();
     setSubmitting(false);
+  };
+
+  const handleSchemaSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const canSchemaSubmit = schemaTitle.trim().length > 0 && schemaContent.trim().length > 0 && !schemaSubmitting;
+    if (!canSchemaSubmit) {
+      return;
+    }
+
+    setSchemaSubmitting(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    try {
+      const result = await uploadWeeklySundaySchema({
+        title: schemaTitle,
+        content: schemaContent
+      });
+
+      if (!result.ok) {
+        setErrorMessage(result.error ?? 'No se pudo subir el esquema del domingo.');
+        return;
+      }
+
+      setSuccessMessage('Esquema del domingo subido correctamente.');
+      clearSchemaForm();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'No se pudo subir el esquema del domingo.');
+    } finally {
+      setSchemaSubmitting(false);
+    }
   };
 
   return (
@@ -143,6 +189,52 @@ export function MisalAdminWorkspace() {
 
           <button type="submit" className="create-form-submit" disabled={!canSubmit}>
             {submitting ? 'Subiendo...' : 'Subir misal'}
+          </button>
+        </div>
+      </form>
+
+      <form className="create-repertoire-form misal-admin-form weekly-schema-form" onSubmit={(event) => void handleSchemaSubmit(event)}>
+        <div className="create-form-grid weekly-schema-grid">
+          <label className="create-form-field">
+            <span>Título del esquema *</span>
+            <input
+              type="text"
+              value={schemaTitle}
+              onChange={(event) => setSchemaTitle(event.target.value)}
+              placeholder="Ej: Esquema del domingo"
+              maxLength={120}
+              required
+              disabled={schemaSubmitting}
+            />
+          </label>
+
+          <label className="create-form-field weekly-schema-field">
+            <span>Contenido del esquema *</span>
+            <textarea
+              value={schemaContent}
+              onChange={(event) => setSchemaContent(event.target.value)}
+              placeholder="Pega aquí el texto del esquema del domingo..."
+              rows={8}
+              required
+              disabled={schemaSubmitting}
+            />
+          </label>
+        </div>
+
+        <p className="weekly-schema-hint">Se guarda como texto plano y se muestra a la derecha del misal en la portada.</p>
+
+        <div className="create-form-actions">
+          <button
+            type="button"
+            className="create-form-cancel"
+            onClick={handleSchemaClear}
+            disabled={schemaSubmitting}
+          >
+            Limpiar esquema
+          </button>
+
+          <button type="submit" className="create-form-submit" disabled={schemaSubmitting || schemaTitle.trim().length === 0 || schemaContent.trim().length === 0}>
+            {schemaSubmitting ? 'Subiendo esquema...' : 'Subir esquema del domingo'}
           </button>
         </div>
       </form>

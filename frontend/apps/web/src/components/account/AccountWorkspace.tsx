@@ -46,6 +46,7 @@ type AccountSongListItem = {
   title: string;
   subtitle?: string;
   status: CanonicalStatus;
+  imageUrl?: string;
 };
 
 type AccountrepertoireListItem = {
@@ -55,6 +56,7 @@ type AccountrepertoireListItem = {
   subtitle?: string;
   status: CanonicalStatus;
   isPublic: boolean;
+  imageUrl?: string;
 };
 
 function toRepertoireStatus(item: SearchrepertoireItem): CanonicalStatus {
@@ -70,6 +72,28 @@ function toRepertoireStatus(item: SearchrepertoireItem): CanonicalStatus {
 
 function toSongStatus(item: SearchSongItem): CanonicalStatus {
   return normalizeStatus((item as SearchSongItem & { status?: unknown }).status);
+}
+
+function ThumbImage({ imageUrl, fallback, className }: { imageUrl?: string; fallback: string; className?: string }) {
+  const [errored, setErrored] = useState(false);
+  const src = imageUrl && !errored ? imageUrl : null;
+
+  if (src) {
+    return (
+      <div className={`account-item-thumb ${className ?? ''}`} aria-hidden="true">
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          onError={() => setErrored(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className={`account-item-thumb ${className ?? ''}`} aria-hidden="true">{fallback}</div>
+  );
 }
 
 function getInitials(value: string) {
@@ -160,7 +184,8 @@ export function AccountWorkspace() {
           linkId: songId,
           title: song.title,
           subtitle: song.subtitle,
-          status
+          status,
+          imageUrl: song.images?.[0]?.url
         };
       });
   }, [dataset, user?.uid]);
@@ -181,7 +206,8 @@ export function AccountWorkspace() {
           title: entry.title,
           subtitle: entry.subtitle,
           status,
-          isPublic: Boolean(entry.isPublic)
+          isPublic: Boolean(entry.isPublic),
+          imageUrl: entry.images?.[0]?.url
         };
       });
   }, [dataset, user?.uid]);
@@ -196,7 +222,8 @@ export function AccountWorkspace() {
       linkId: song.id,
       title: song.title,
       subtitle: song.subtitle,
-      status: normalizeStatus(song.status)
+      status: normalizeStatus(song.status),
+      imageUrl: song.coverImageUrl
     }));
   }, [summary]);
 
@@ -211,7 +238,8 @@ export function AccountWorkspace() {
       title: item.title,
       subtitle: item.subtitle,
       status: normalizeStatus(item.status),
-      isPublic: Boolean(item.isPublic)
+      isPublic: Boolean(item.isPublic),
+      imageUrl: item.coverImageUrl
     }));
   }, [summary]);
 
@@ -237,8 +265,8 @@ export function AccountWorkspace() {
   const profilePremium = summary?.profile.premium ?? user?.isPremium ?? false;
   const canBootstrapInitialAdmin = profileRole === 'admin';
   const profileInitials = getInitials(profileName);
-  const visibleSongs = songItems.slice(0, 5);
-  const visibleRepertoires = repertoireItems.slice(0, 5);
+  const visibleSongs = songItems.slice(0, 8);
+  const visibleRepertoires = repertoireItems.slice(0, 8);
   const planLabel = profilePremium || profilePlan === 'premium' ? 'Premium' : 'Free';
 
   const handleSoftDeleteAccount = async () => {
@@ -274,7 +302,8 @@ export function AccountWorkspace() {
   };
 
   return (
-    <section className="account-page-layout layout-h-margin">
+   <div className="layout-h-margin">
+    <section className="account-page-layout">
       <header className="account-page-head">
         <span className="account-page-kicker">Centro de control</span>
         <h1>Mi cuenta</h1>
@@ -382,7 +411,7 @@ export function AccountWorkspace() {
           <div className="account-items-grid" hidden={songItems.length === 0}>
             {visibleSongs.map((song) => (
               <div key={song.id} className="account-item-card">
-                <div className="account-item-thumb" aria-hidden="true">♪</div>
+                <ThumbImage imageUrl={song.imageUrl} fallback="♪" />
                 <div className="account-item-main">
                   <strong>{song.title}</strong>
                   <small>{song.subtitle ?? 'Sin artista'}</small>
@@ -415,7 +444,7 @@ export function AccountWorkspace() {
           <div className="account-items-grid" hidden={repertoireItems.length === 0}>
             {visibleRepertoires.map((item) => (
               <div key={item.id} className="account-item-card">
-                <div className="account-item-thumb is-repertoire" aria-hidden="true">≡</div>
+                <ThumbImage imageUrl={item.imageUrl} fallback="≡" className="is-repertoire" />
                 <div className="account-item-main">
                   <strong>{item.title}</strong>
                   <small>{item.subtitle ?? 'Sin descripción'}</small>
@@ -482,5 +511,6 @@ export function AccountWorkspace() {
         </div>
       </article>
     </section>
+   </div>
   );
 }

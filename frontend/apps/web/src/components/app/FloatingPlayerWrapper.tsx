@@ -1,17 +1,24 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { FloatingAudioPlayer } from '../audio/FloatingAudioPlayer';
+import { FloatingAudioPlayer, useAudioPlayerPlacement } from '../audio/FloatingAudioPlayer';
+import { useIsMobile } from '../../hooks/useMediaQuery';
 
 export function FloatingPlayerWrapper() {
   const pathname = usePathname();
-  
-  // Hide floating player on song detail pages
+  const placement = useAudioPlayerPlacement();
+  const isMobile = useIsMobile();
+
+  // Hide floating player on song detail pages (unless mobile, where inline player is hidden)
   const isSongPage = /^\/songs\/[^/]+$/.test(pathname);
-  
-  if (isSongPage) {
+
+  if (placement === 'header') {
     return null;
   }
-  
-  return <FloatingAudioPlayer />;
+
+  if (isSongPage && !isMobile) {
+    return null;
+  }
+
+  return <FloatingAudioPlayer placement="floating" />;
 }

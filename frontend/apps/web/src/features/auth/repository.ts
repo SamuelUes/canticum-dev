@@ -1,12 +1,15 @@
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
   signOut as firebaseSignOut,
   onIdTokenChanged,
   type User
 } from 'firebase/auth';
 import { clearAllAppCache } from '../shared/clientCache';
 import { clearAllPendingClientSyncs } from '../song/clientPersistence';
+import { clearAllRepertoirePendingSyncs } from '../repertoire/clientPersistence';
 import { functionsBaseUrl } from '../shared/functionsClient';
 
 const hasFirebaseConfig = Boolean(
@@ -373,8 +376,49 @@ export async function bootstrapInitialAdminAccount(): Promise<AuthResult> {
   }
 }
 
+export async function signInWithGoogle(): Promise<AuthResult> {
+  if (!hasFirebaseConfig) {
+    return { ok: false, error: 'Google Sign-In no está disponible en modo desarrollo.' };
+  }
+
+  try {
+    const { auth, googleOAuthClientId } = await import('../../services/firebase');
+    const provider = new GoogleAuthProvider();
+    const customParams: Record<string, string> = { prompt: 'select_account' };
+    if (googleOAuthClientId) {
+      customParams.client_id = googleOAuthClientId;
+    }
+    provider.setCustomParameters(customParams);
+
+    const credential = await signInWithPopup(auth, provider);
+
+    const backendClaims = await loginWithBackend(credential.user);
+
+    if (Object.keys(backendClaims).length > 0) {
+      await credential.user.getIdToken(true);
+    }
+
+    const tokenResult = await credential.user.getIdTokenResult();
+    const mergedClaims = { ...(tokenResult.claims as Record<string, unknown>), ...backendClaims };
+
+    writeSessionCookie(tokenResult.token);
+
+    return {
+      ok: true,
+      user: mapFirebaseUser(credential.user, mergedClaims)
+    };
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? '';
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      return { ok: false, error: undefined };
+    }
+    return { ok: false, error: parseFirebaseError(err) };
+  }
+}
+
 export async function signOut(): Promise<void> {
   clearAllPendingClientSyncs();
+  clearAllRepertoirePendingSyncs();
 
   if (!hasFirebaseConfig) {
     devMockSession = null;

@@ -65,6 +65,19 @@ function normalizeImages(raw: unknown): SearchImage[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function resolveImages(rawItem: Record<string, unknown>): SearchImage[] | undefined {
+  const fromArray = normalizeImages(rawItem.images);
+  if (fromArray) return fromArray;
+
+  const coverUrl =
+    typeof rawItem.coverImageUrl === 'string' ? rawItem.coverImageUrl :
+    typeof rawItem.cover_url === 'string' ? rawItem.cover_url :
+    typeof rawItem.coverUrl === 'string' ? rawItem.coverUrl : '';
+  if (coverUrl) return [{ url: coverUrl }];
+
+  return undefined;
+}
+
 function resolveArtistName(raw: Record<string, unknown>): string {
   const candidates = [raw.title, raw.name, raw.artistName, raw.displayName, raw.stageName, raw.authorOrChoir]
     .filter((value): value is string => typeof value === 'string')
@@ -329,7 +342,7 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     repertoireId: rawItem.repertoireId ? String(rawItem.repertoireId) : undefined,
     artistId: rawItem.artistId ? String(rawItem.artistId) : undefined,
     albumId: rawItem.albumId ? String(rawItem.albumId) : undefined,
-    images: normalizeImages(rawItem.images),
+    images: resolveImages(rawItem),
     liturgicalType: String(rawItem.liturgicalType ?? 'General'),
     liturgicalTime: String(rawItem.liturgicalTime ?? 'Ordinario'),
     authorOrChoir: String(rawItem.authorOrChoir ?? 'General'),

@@ -50,6 +50,7 @@ export function FeaturedSection({ title, songs, loading = false }: FeaturedSecti
                     className="song-thumb-image"
                     sizes="(max-width: 768px) 78vw, (max-width: 1200px) 24vw, 300px"
                     priority={index === 0}
+                    role="link"
                   />
                 </div>
               ) : (

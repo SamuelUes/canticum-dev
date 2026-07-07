@@ -19,7 +19,10 @@ const jetBrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: 'Canticum',
-  description: 'Cancionero digital Canticum'
+  description: 'Cancionero digital Canticum',
+  icons: {
+    icon: '/assets/icon/canticum-isotipo-color.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -322,13 +322,11 @@ export async function requestTrackArtistProfileView(artistId: string): Promise<b
 
   try {
     const headers = await buildFunctionsHeaders({
-      'Content-Type': 'application/json',
       Accept: 'application/json'
     });
     const response = await fetch(`${functionsBaseUrl}/artists/${encodeURIComponent(normalizedArtistId)}/listen`, {
-      method: 'POST',
-      headers,
-      cache: 'no-store'
+      method: 'PUT',
+      headers
     });
     return response.ok;
   } catch {

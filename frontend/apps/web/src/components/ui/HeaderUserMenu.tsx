@@ -25,7 +25,7 @@ export function HeaderUserMenu({
   accountLabel,
   adminLabel,
   signOutLabel,
-  onProfile,
+  // onProfile,
   onAccount,
   onAdmin,
   onSignOut
@@ -82,7 +82,7 @@ export function HeaderUserMenu({
 
       {isOpen ? (
         <div className="welcome-dropdown" role="menu" aria-label="Menú de usuario">
-          <button
+          {/* <button
             type="button"
             role="menuitem"
             className="welcome-dropdown-item"
@@ -92,7 +92,7 @@ export function HeaderUserMenu({
             }}
           >
             {profileLabel}
-          </button>
+          </button> */}
           <button
             type="button"
             role="menuitem"

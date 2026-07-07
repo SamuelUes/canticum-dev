@@ -17,7 +17,7 @@ const dictionary: Record<Locale, HomeText> = {
     newsletterDescription: 'Recibe nuevas canciones, versiones y recursos para tus ensayos cada semana.',
     learnMore: 'Conocer más',
     footerKnowTitle: 'Conoce',
-    footerKnowDescription: 'Las metas se cumplen cuando se trabajan.',
+    footerKnowDescription: 'Creado para la comunidad musical y catolica. ',
     footerCopyright: 'Hecho con amor por ImpulsaTEC · All Right Reserved'
   }
 };

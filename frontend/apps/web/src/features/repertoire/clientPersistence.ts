@@ -1,7 +1,8 @@
-import type { repertoireListItem, RepertoireSongSearchOption } from '../../types/repertoire';
+import type { repertoireListItem, repertoireStatus, RepertoireSongSearchOption } from '../../types/repertoire';
 import { invalidateAccountSummaryCache } from '../account/repository';
 import { buildFunctionsHeaders, functionsBaseUrl } from '../shared/functionsClient';
 import { formatDateForUi } from './repository';
+import { normalizeRepertoireStatus, REPERTOIRE_STATUS_LABELS } from './status';
 
 export interface repertoireUpdatePayload {
   title?: string;
@@ -264,7 +265,7 @@ export async function requestUserRepertoires(): Promise<repertoireListItem[] | n
       .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
       .map((raw): repertoireListItem => {
         const songIds = Array.isArray(raw.songIds) ? raw.songIds.filter((id): id is string => typeof id === 'string') : [];
-        const status = String(raw.status ?? 'Borrador') === 'Publicado' ? 'Publicado' : 'Borrador';
+        const status = REPERTOIRE_STATUS_LABELS[normalizeRepertoireStatus(raw.status ?? 'DRAFT')] as repertoireStatus;
         const countFromIds = songIds.length;
         return {
           id: String(raw.id ?? ''),
@@ -530,6 +531,20 @@ function saveLocalBookmark(repertoireId: string, isBookmarked: boolean): boolean
   } catch {
     return isBookmarked;
   }
+}
+
+export function clearAllRepertoirePendingSyncs(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  pendingBookmarkSyncTimeout.forEach((timeoutId) => {
+    window.clearTimeout(timeoutId);
+  });
+  pendingBookmarkSyncTimeout.clear();
+  pendingBookmarkLoads.clear();
+  bookmarkCache.clear();
+  lastSyncedBookmark.clear();
 }
 
 export async function loadRepertoireBookmark(repertoireId: string): Promise<boolean | null> {

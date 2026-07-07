@@ -5,6 +5,7 @@ import { RepertoireOwnerActions } from '../../../src/components/repertoire/Reper
 import { RepertoirePageClient } from '../../../src/components/repertoire/RepertoirePageClient';
 import { RepertoireSongSection } from '../../../src/components/repertoire/RepertoireSongSection';
 import { RepertoirePlayButton } from '../../../src/components/repertoire/RepertoirePlayButton';
+import { ShareRepertoireButton } from '../../../src/components/repertoire/ShareRepertoireButton';
 // import { RepertoireDetailClientFallback } from '../../../src/components/repertoire/RF';
 import { homeMockData } from '../../../src/features/home/mockData';
 import { getrepertoireDetailById } from '../../../src/features/repertoire/repository';
@@ -157,10 +158,13 @@ export default async function repertoirePage({ params }: repertoirePageProps) {
                   </div>
                 ) : null}
 
-                <RepertoirePlayButton
-                  songIds={songItems.map((s) => ({ songId: s.songId, versionId: s.versionId }))}
-                  className="repertoire-page__play-btn"
-                />
+                <div className="repertoire-action-row">
+                  <RepertoirePlayButton
+                    songIds={songItems.map((s) => ({ songId: s.songId, versionId: s.versionId }))}
+                    className="repertoire-page__play-btn"
+                  />
+                  <ShareRepertoireButton repertoireId={repertoire.id} className="repertoire-share-btn" />
+                </div>
 
                 <RepertoireOwnerActions
                   repertoireId={repertoire.id}
