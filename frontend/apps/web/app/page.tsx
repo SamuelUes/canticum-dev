@@ -1,6 +1,5 @@
 import { HomeFooter } from '../src/components/home/Footer';
 import { HomePageClient } from '../src/components/home/HomePageClient';
-import { NewsletterSection } from '../src/components/home/NewsletterSection';
 import { homeMockData } from '../src/features/home/mockData';
 import { getHomeText } from '../src/i18n/home';
 import type { Locale } from '../src/types/home';
@@ -14,15 +13,6 @@ export default function HomePage() {
     <main className="home-page">
       <div className="home-shell">
         <HomePageClient text={text} />
-
-        <NewsletterSection
-          text={{
-            newsletterTitle: text.newsletterTitle,
-            newsletterDescription: text.newsletterDescription,
-            learnMore: text.learnMore
-          }}
-          stats={homeMockData.newsletterStats}
-        />
 
         <HomeFooter
           text={{

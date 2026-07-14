@@ -15,8 +15,33 @@ import {
 import { uploadInstrumentationAsset, uploadVersionAsset } from '../../features/song/versionAssetUpload';
 import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import { CropperModal } from '../ui/CropperModal';
+import { FloatingStatusOverlay, type FloatingStatusState } from '../ui/FloatingStatusOverlay';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import { db } from '../../services/firebase';
 import { ArtistAutocomplete, type ArtistOption } from '../shared/ArtistAutocomplete';
+import { capitalizeFirstLetter } from '../../features/shared/textFormat';
+
+function getAudioFileDurationMs(file: File): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || !window.Audio) {
+      resolve(undefined);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    audio.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      const dur = audio.duration;
+      resolve(Number.isFinite(dur) && dur > 0 ? Math.round(dur * 1000) : undefined);
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(undefined);
+    };
+    audio.src = url;
+  });
+}
 
 const LITURGICAL_USES = [
   'Entrada',
@@ -418,16 +443,22 @@ export function CreateSongWorkspace() {
     const payload: CreateSongPayload = { mode };
     if (mode === 'new') {
       payload.songDocId = songDocId;
-      payload.title = title.trim();
+      payload.title = capitalizeFirstLetter(title.trim());
       if (songArtistOption?.id) {
         payload.artistId = songArtistOption.id;
         payload.artistName = songArtistOption.name;
       } else if (songArtistText.trim()) {
-        payload.artistName = songArtistText.trim();
+        payload.artistName = capitalizeFirstLetter(songArtistText.trim());
       }
       if (year.trim()) payload.year = Number(year.trim()) || undefined;
       if (liturgicalUse) payload.liturgicalUse = liturgicalUse;
       if (liturgicalTime) payload.liturgicalTime = liturgicalTime;
+
+      const firstVersionAudioFile = versions[0]?.audioFile;
+      if (firstVersionAudioFile) {
+        const durationMs = await getAudioFileDurationMs(firstVersionAudioFile);
+        if (durationMs) payload.durationMs = durationMs;
+      }
     } else {
       payload.songId = selectedExistingSongId;
     }
@@ -693,7 +724,7 @@ export function CreateSongWorkspace() {
 
       resolvedVersions.push({
         versionDocId: version.docId,
-        versionName: version.versionName.trim(),
+        versionName: capitalizeFirstLetter(version.versionName.trim()),
         artistId: versionArtistId,
         artistName: versionArtistName,
         isOwnVersion: version.isOwnVersion,
@@ -760,8 +791,12 @@ export function CreateSongWorkspace() {
     }
   };
 
+  const overlayState: FloatingStatusState = coverPreparing ? 'loading' : submitting ? 'uploading' : errorMessage ? 'error' : successMessage ? 'success' : 'idle';
+  const overlayMessage = coverPreparing ? 'Procesando imagen...' : submitting ? 'Enviando canción...' : errorMessage || successMessage || '';
+
   return (
     <section className="create-page-layout layout-h-margin">
+      <LoadingBubble isLoading={submitting || coverPreparing} message={coverPreparing ? 'Procesando imagen…' : 'Enviando canción…'} />
       <header className="create-page-header">
         <h1>Subir Canción</h1>
         <p>Completa los datos de la canción. Los campos marcados con * son obligatorios.</p>
@@ -1343,6 +1378,13 @@ export function CreateSongWorkspace() {
         aspectRatio={1}
         onConfirm={handleCropConfirm}
         onCancel={handleCropCancel}
+      />
+
+      <FloatingStatusOverlay
+        state={overlayState}
+        message={overlayMessage}
+        autoDismiss={overlayState === 'success' ? 3000 : 0}
+        onDismiss={() => { setErrorMessage(''); setSuccessMessage(''); }}
       />
     </section>
   );

@@ -456,6 +456,13 @@ export async function saveArtistFavoriteState(artistId: string, isFavorite: bool
 }
 
 /** Lightweight row returned by GET /artists/:id/songs. */
+export interface ArtistSongVersion {
+  id: number;
+  songId: number;
+  versionName: string;
+  artistId: number | null;
+}
+
 export interface ArtistSongLookup {
   sqlSongId: number;
   songId: string | null;
@@ -465,6 +472,7 @@ export interface ArtistSongLookup {
   status: string | null;
   reviewStatus: 'reviewed' | 'pending';
   ownerFirebaseUid: string | null;
+  versions?: ArtistSongVersion[];
 }
 
 /**
@@ -505,7 +513,18 @@ export async function fetchSongsByArtist(artistId: string | number): Promise<Art
         liturgicalUse: typeof row.liturgicalUse === 'string' ? row.liturgicalUse : null,
         status: typeof row.status === 'string' ? row.status : null,
         reviewStatus: row.reviewStatus === 'reviewed' ? 'reviewed' : 'pending',
-        ownerFirebaseUid: typeof row.ownerFirebaseUid === 'string' ? row.ownerFirebaseUid : null
+        ownerFirebaseUid: typeof row.ownerFirebaseUid === 'string' ? row.ownerFirebaseUid : null,
+        versions: Array.isArray(row.versions)
+          ? (row.versions as Array<Record<string, unknown>>)
+              .filter((v) => Boolean(v) && typeof v === 'object')
+              .map((v): ArtistSongVersion => ({
+                id: Number(v.id ?? 0),
+                songId: Number(v.songId ?? 0),
+                versionName: String(v.versionName ?? ''),
+                artistId: typeof v.artistId === 'number' ? v.artistId : null
+              }))
+              .filter((v) => Number.isFinite(v.id) && v.id > 0)
+          : []
       }))
       .filter((row) => Number.isFinite(row.sqlSongId) && row.sqlSongId > 0);
   } catch {

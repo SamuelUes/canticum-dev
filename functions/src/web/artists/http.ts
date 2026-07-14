@@ -15,7 +15,8 @@ import {
   searchArtists,
   setArtistLike
 } from '../../shared/cloudSql/artists';
-import { listSongsByArtistId } from '../../shared/cloudSql/songs';
+import { listSongVersionsByArtistId } from '../../shared/cloudSql/songs';
+import { capitalizeFirstLetter } from '../../shared/validation';
 
 interface ArtistSongRow {
   id: string;
@@ -46,6 +47,23 @@ interface SuggestedArtistItem {
   name: string;
   imageUrl?: string;
   images?: ArtistImage[];
+}
+
+interface FeaturedArtistTrendItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  avatarUrl?: string;
+  rankDelta: number | null;
+  score: number;
+}
+
+interface FeaturedArtistSnapshotDoc {
+  artistId: number;
+  rankPosition: number;
+  name: string;
+  imageUrl?: string;
+  score?: number;
 }
 
 interface ArtistImage {
@@ -112,12 +130,56 @@ function resolveArtistName(raw: Record<string, unknown>, fallback: string): stri
   return candidates[0] ?? fallback;
 }
 
+async function readFeaturedArtistSnapshot(
+  db: FirebaseFirestore.Firestore,
+  snapshotName: 'current' | 'past'
+): Promise<Map<string, FeaturedArtistSnapshotDoc>> {
+  const snap = await db.collection('featuredArtistsMeta').doc(snapshotName).collection('artists').get();
+  const map = new Map<string, FeaturedArtistSnapshotDoc>();
+
+  snap.docs.forEach((doc) => {
+    const data = (doc.data() ?? {}) as Record<string, unknown>;
+    const artistId = String(data.artistId ?? doc.id);
+    map.set(artistId, {
+      artistId: Number(data.artistId ?? doc.id),
+      rankPosition: Number(data.rankPosition ?? 0),
+      name: String(data.name ?? ''),
+      imageUrl: typeof data.imageUrl === 'string' ? data.imageUrl : undefined,
+      score: Number.isFinite(Number(data.score)) ? Number(data.score) : undefined
+    });
+  });
+
+  return map;
+}
+
+async function getFeaturedArtistTrends(db: FirebaseFirestore.Firestore): Promise<FeaturedArtistTrendItem[]> {
+  const [currentArtists, pastArtists] = await Promise.all([
+    readFeaturedArtistSnapshot(db, 'current'),
+    readFeaturedArtistSnapshot(db, 'past')
+  ]);
+
+  const trends: FeaturedArtistTrendItem[] = [];
+  currentArtists.forEach((current, artistId) => {
+    const past = pastArtists.get(artistId);
+    trends.push({
+      id: String(current.artistId),
+      title: current.name || 'Artista',
+      subtitle: 'General',
+      avatarUrl: current.imageUrl,
+      rankDelta: past ? past.rankPosition - current.rankPosition : null,
+      score: current.score ?? 0
+    });
+  });
+
+  return trends.sort((a, b) => b.score - a.score).slice(0, 6);
+}
+
 function buildSongRow(docId: string, data: Record<string, unknown>): ArtistSongRow {
   return {
     id: docId,
     title: String(data.title ?? ''),
     thumbnailUrl: typeof data.thumbnailUrl === 'string' && data.thumbnailUrl ? data.thumbnailUrl : undefined,
-    views: Number(data.views ?? data.viewCount ?? 0),
+    views: Number(data.views ?? data.viewCount ?? data.totalViews ?? 0),
     tone: String(data.tone ?? data.defaultTone ?? ''),
     hasLyrics: Boolean(data.hasLyrics ?? (typeof data.lyrics === 'string' && (data.lyrics as string).length > 0)),
     hasSheet: Boolean(data.hasSheet ?? (typeof data.sheetUrl === 'string' && (data.sheetUrl as string).length > 0)),
@@ -243,6 +305,18 @@ export const artists = functions.https.onRequest(async (req, res) => {
 
   const segments = getPathSegments(req);
 
+  if (segments.length === 1 && segments[0] === 'featured-trends' && req.method === 'GET') {
+    try {
+      const db = getAppFirestore();
+      const items = await getFeaturedArtistTrends(db);
+      sendJson(res, 200, { items });
+    } catch (error) {
+      console.error('Featured artist trends failed:', error);
+      sendError(res, 500, 'internal_error', 'Featured artist trends failed.');
+    }
+    return;
+  }
+
   // ── GET /artists?q=  →  autocomplete search from Cloud SQL ──
   if (!segments.length && req.method === 'GET') {
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -270,7 +344,7 @@ export const artists = functions.https.onRequest(async (req, res) => {
       return;
     }
     const body = getBodyRecord(req);
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const name = typeof body.name === 'string' ? capitalizeFirstLetter(body.name.trim()) : '';
     if (!name) {
       sendError(res, 400, 'invalid_argument', 'name is required.');
       return;
@@ -659,7 +733,7 @@ async function handleArtistSubEndpoint(
       return;
     }
     try {
-      const sqlRows = await listSongsByArtistId(numericArtistId, 100, viewerFirebaseUid);
+      const sqlRows = await listSongVersionsByArtistId(numericArtistId, 100, viewerFirebaseUid);
       // Enrich with Firestore song IDs (lookup by sqlSongId).
       const enriched = await Promise.all(sqlRows.map(async (row) => {
         let firestoreId: string | null = null;
@@ -677,7 +751,8 @@ async function handleArtistSubEndpoint(
           liturgicalUse: row.liturgicalUse,
           status: row.status,
           reviewStatus: row.reviewStatus,
-          ownerFirebaseUid: row.ownerFirebaseUid
+          ownerFirebaseUid: row.ownerFirebaseUid,
+          versions: row.versions ?? []
         };
       }));
       sendJson(res, 200, { items: enriched });

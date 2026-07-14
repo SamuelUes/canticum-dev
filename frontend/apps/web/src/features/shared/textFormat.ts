@@ -1,11 +1,3 @@
-import { z } from 'zod';
-
-export const subscriptionStatusrepertoire = z.object({
-  platform: z.enum(['android', 'ios', 'web']).optional(),
-  plan: z.string(),
-  status: z.enum(['active', 'inactive', 'expired'])
-});
-
 /**
  * Ensures the first letter of the string is uppercase.
  * Returns the string unchanged if empty or already capitalized.

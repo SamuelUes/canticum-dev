@@ -19,6 +19,8 @@ import {
   saveSongUserPreferences
 } from '../../features/song/clientPersistence';
 import { requestUpdateSongStatus } from '../../features/song/repository';
+import { ShareButton } from '../shared/ShareButton';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import type { SongDetail, SongVersion } from '../../types/song';
 
 type SongEditorialStatus = 'IN_REVIEW' | 'REJECTED' | 'APPROVED' | 'PUBLISHED';
@@ -153,6 +155,12 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
   const { playSong: playGlobalSong, isPlaying: isGlobalPlaying, stopAll: stopGlobalAudio } = useAudio();
   const { openPremiumPlans } = usePremiumNavigation();
   const isMobile = useIsMobile();
+  const [isHydrating, setIsHydrating] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsHydrating(false), 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   const persistentTools = [
     { label: 'Agregar a la lista', icon: 'bookmark', requiresPremium: false },
@@ -547,6 +555,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
 
   return (
     <section className="song-page">
+      <LoadingBubble isLoading={isHydrating} message="Cargando canción…" />
       <aside className="song-sidebar ">
         {/* Filters Card */}
         <div className="song-sidebar-card song-filters-card">
@@ -680,6 +689,7 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                   >
                     <span className="song-play-audio-button">{(isMobile ? isGlobalPlaying : isAudioPlaying) ? 'Cerrar' : 'Reproducir'}</span>
                   </button>
+
                   
                   {activeAudioSrc && !isMobile ? (
                     <div className="song-inline-audio-player">
@@ -716,6 +726,12 @@ export function SongWorkspace({ song, initialVersionId }: SongWorkspaceProps) {
                   >
                     <span className="material-symbols-outlined">favorite</span>
                   </button>
+                  <ShareButton
+                    shareUrl={`${typeof window !== 'undefined' ? window.location.origin : ''}/songs/${song.id}`}
+                    shareTitle="Canción Canticum"
+                    shareText="Mira esta canción en Canticum"
+                    className="song-secondary-button"
+                  />
                 </div>
               </div>
             </div>

@@ -6,6 +6,18 @@ export interface FeaturedSongCardData {
   subtitle: string;
   imageUrl?: string;
   isPremium?: boolean;
+  durationMs?: number;
+}
+
+export interface FeaturedAlbumCardData {
+  id: string;
+  title: string;
+  subtitle: string;
+  coverUrl?: string;
+  albumType?: string;
+  releaseYear?: number;
+  totalTracks?: number;
+  popularity?: number;
 }
 
 export interface ArtistData {
@@ -19,6 +31,8 @@ export interface ListItemData {
   title: string;
   subtitle: string;
   avatarUrl?: string;
+  rankDelta?: number | null;
+  score?: number;
 }
 
 export interface NewsletterStat {
@@ -61,6 +75,7 @@ export interface HomeText {
 
 export interface HomeData {
   featuredSongs: FeaturedSongCardData[];
+  featuredAlbums: FeaturedAlbumCardData[];
   artists: ArtistData[];
   trends: ListItemData[];
   recentSongs: ListItemData[];

@@ -1,11 +1,12 @@
 import * as functions from 'firebase-functions/v1';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { updateAlbumStatusInCloudSql } from '../../shared/cloudSql/artists';
-import { createAlbumInCloudSql } from '../../shared/cloudSql/albums';
+import { createAlbumInCloudSql, getAlbumSongsWithVersions } from '../../shared/cloudSql/albums';
 import { getSharedPool } from '../../shared/cloudSql/pool';
 import { getBodyRecord, getOptionalAuthContext, getPathSegments, getQueryString, handlePreflight, sendError, sendJson } from '../../shared/http/http';
+import { capitalizeFirstLetter } from '../../shared/validation';
 
 type AlbumType = 'album' | 'single' | 'ep' | 'compilation' | 'live';
 
@@ -39,6 +40,8 @@ interface AlbumSongRow {
   isPrimaryRelease: boolean;
   isVerified?: boolean;
   status?: string;
+  versionId?: string;
+  versionName?: string;
 }
 
 interface AlbumTracksBucket {
@@ -77,6 +80,8 @@ interface AlbumDetail {
   externalIds?: AlbumExternalIds;
   externalUrls?: AlbumExternalUrls;
   popularity: number;
+  totalViews?: number;
+  likeCount?: number;
 }
 
 interface AlbumRef {
@@ -128,11 +133,13 @@ function resolvePrecision(raw: unknown): 'year' | 'month' | 'day' | undefined {
   return raw === 'year' || raw === 'month' || raw === 'day' ? raw : undefined;
 }
 
-function computePopularity(raw: unknown, totalViews: number): number {
+function computePopularity(raw: unknown, totalViews: number, likeCount: number = 0): number {
   const stored = Number(raw);
-  if (Number.isFinite(stored) && stored >= 0) return Math.min(100, Math.round(stored));
-  if (!Number.isFinite(totalViews) || totalViews <= 0) return 0;
-  return Math.max(0, Math.min(100, Math.round(Math.log10(totalViews + 1) * 20)));
+  if (Number.isFinite(stored) && stored > 0) return Math.min(100, Math.round(stored));
+  const views = Number.isFinite(totalViews) && totalViews > 0 ? totalViews : 0;
+  const likes = Number.isFinite(likeCount) && likeCount > 0 ? likeCount : 0;
+  if (views === 0 && likes === 0) return 0;
+  return Math.max(0, Math.min(100, Math.round(Math.log10(views + 1) * 20 + Math.log10(likes + 1) * 12)));
 }
 
 
@@ -173,7 +180,7 @@ function deriveReleaseDate(data: Record<string, unknown>): { releaseDate?: strin
   return { year };
 }
 
-function buildSongRow(docId: string, data: Record<string, unknown>, trackNumber: number, isPrimaryRelease: boolean): AlbumSongRow {
+function buildSongRow(docId: string, data: Record<string, unknown>, trackNumber: number, isPrimaryRelease: boolean, versionId?: string, versionName?: string): AlbumSongRow {
   const title = String(data.title ?? data.name ?? '');
   const rawArtists = Array.isArray(data.artists) ? (data.artists as Array<Record<string, unknown>>) : null;
   const artists: AlbumSimplifiedArtist[] | undefined = rawArtists && rawArtists.length > 0
@@ -202,15 +209,17 @@ function buildSongRow(docId: string, data: Record<string, unknown>, trackNumber:
     trackNumber,
     discNumber: typeof data.discNumber === 'number' ? (data.discNumber as number) : 1,
     durationMs,
-    artists,
+    artists, 
     externalUrls: { canticum: `/songs/${docId}` },
     tone: String(data.tone ?? data.defaultTone ?? ''),
-    views: Number(data.views ?? data.viewCount ?? 0),
+    views: Number(data.views ?? data.viewCount ?? data.totalViews ?? 0),
     hasLyrics: Boolean(data.hasLyrics ?? (typeof data.lyrics === 'string' && (data.lyrics as string).length > 0)),
     hasSheet: Boolean(data.hasSheet ?? (typeof data.sheetUrl === 'string' && (data.sheetUrl as string).length > 0)),
     isPrimaryRelease,
     isVerified: Boolean(data.isVerified),
-    status: typeof data.status === 'string' ? data.status : undefined
+    status: typeof data.status === 'string' ? data.status : undefined,
+    versionId,
+    versionName
   };
 }
 
@@ -246,25 +255,78 @@ async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string, vi
 
   const songs: AlbumSongRow[] = [];
 
-  // Get songs from songIds array in album document
+  // Get songs from songIds array in album document (batch fetch to avoid N+1)
   const songIds = Array.isArray(albumData.songIds) ? (albumData.songIds as string[]) : [];
   if (songIds.length > 0) {
-    const songFetches = songIds.map(async (songId, index) => {
-      const songSnap = await db.collection('songs').doc(songId).get();
-      if (!songSnap.exists) return null;
+    const songDocMap = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+    const CHUNK_SIZE = 30;
+    for (let i = 0; i < songIds.length; i += CHUNK_SIZE) {
+      const chunk = songIds.slice(i, i + CHUNK_SIZE);
+      const chunkDocs = await db.collection('songs')
+        .where(FieldPath.documentId(), 'in', chunk)
+        .get();
+      for (const doc of chunkDocs.docs) {
+        songDocMap.set(doc.id, doc);
+      }
+    }
+
+    // Fetch version info: prefer trackVersions from Firestore doc, fall back to Cloud SQL
+    const trackVersions = Array.isArray(albumData.trackVersions) ? (albumData.trackVersions as Array<Record<string, unknown>>) : [];
+    let versionInfoMap = new Map<string, { versionId: string; versionName: string }>();
+
+    // Primary: trackVersions from Firestore album document
+    for (const tv of trackVersions) {
+      const tvSongId = typeof tv.songId === 'string' ? tv.songId : '';
+      const tvVersionId = typeof tv.versionId === 'string' ? tv.versionId : '';
+      if (tvSongId && tvVersionId) {
+        versionInfoMap.set(tvSongId, {
+          versionId: tvVersionId,
+          versionName: typeof tv.versionName === 'string' ? tv.versionName : ''
+        });
+      }
+    }
+
+    // Fallback: Cloud SQL album_songs with version join
+    if (versionInfoMap.size === 0) {
+      const sqlAlbumId = typeof albumData.sqlAlbumId === 'number' ? albumData.sqlAlbumId : Number(albumData.sqlAlbumId ?? 0);
+      if (Number.isFinite(sqlAlbumId) && sqlAlbumId > 0) {
+        try {
+          const albumSongs = await getAlbumSongsWithVersions(sqlAlbumId);
+          for (const [firestoreId, snap] of songDocMap) {
+            const sd = (snap.data() ?? {}) as Record<string, unknown>;
+            const docSqlSongId = Number(sd.sqlSongId ?? 0);
+            if (docSqlSongId > 0) {
+              const versionRow = albumSongs.find((r) => r.sqlSongId === docSqlSongId);
+              if (versionRow && versionRow.versionId != null) {
+                versionInfoMap.set(firestoreId, {
+                  versionId: String(versionRow.versionId),
+                  versionName: versionRow.versionName ?? ''
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('[albums] Failed to fetch version info from Cloud SQL:', error);
+        }
+      }
+    }
+
+    for (let index = 0; index < songIds.length; index++) {
+      const songId = songIds[index];
+      const songSnap = songDocMap.get(songId);
+      if (!songSnap || !songSnap.exists) continue;
 
       const sd = (songSnap.data() ?? {}) as Record<string, unknown>;
-      console.log('[albums] Song data for', songId, 'has status:', typeof sd.status === 'string', 'status value:', sd.status);
-      return buildSongRow(
+      const versionInfo = versionInfoMap.get(songId);
+      songs.push(buildSongRow(
         songSnap.id,
         sd,
-        index + 1, // Use array index as track number
-        true // Assume primary release
-      );
-    });
-
-    const results = await Promise.all(songFetches);
-    songs.push(...results.filter((s): s is AlbumSongRow => s !== null));
+        index + 1,
+        true,
+        versionInfo?.versionId,
+        versionInfo?.versionName
+      ));
+    }
   }
 
   const title = String(albumData.title ?? albumData.name ?? '');
@@ -273,7 +335,8 @@ async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string, vi
   const { releaseDate, precision, year } = deriveReleaseDate(albumData);
   const totalTracks = Number(albumData.songsCount ?? albumData.totalTracks ?? songs.length);
   const totalViews = songs.reduce((acc, s) => acc + (Number.isFinite(s.views) ? s.views : 0), 0);
-  const popularity = computePopularity(albumData.popularity, Number(albumData.totalViews ?? totalViews));
+  const likeCount = Number(albumData.likeCount ?? 0);
+  const popularity = computePopularity(albumData.popularity, Number(albumData.totalViews ?? totalViews), likeCount);
 
   const primaryArtist: AlbumSimplifiedArtist | null = artistName
     ? { id: artistId, name: artistName, type: 'artist', href: artistId ? `/artists/${artistId}` : undefined, imageUrl: artistImageUrl }
@@ -337,7 +400,9 @@ async function getAlbumById(db: FirebaseFirestore.Firestore, albumId: string, vi
     copyrights,
     externalIds: upc ? { upc } : undefined,
     externalUrls: { canticum: `/albums/${albumSnap.id}` },
-    popularity
+    popularity,
+    totalViews: Number(albumData.totalViews ?? totalViews),
+    likeCount
   };
 }
 
@@ -399,7 +464,7 @@ export const albums = functions.https.onRequest(async (req, res) => {
     }
 
     const body = getBodyRecord(req);
-    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const title = typeof body.title === 'string' ? capitalizeFirstLetter(body.title.trim()) : '';
     const artistId = Number(body.artistId);
     const artistName = typeof body.artistName === 'string' ? body.artistName.trim() : '';
     const releaseYear = typeof body.releaseYear === 'number' ? body.releaseYear : undefined;
@@ -437,7 +502,9 @@ export const albums = functions.https.onRequest(async (req, res) => {
       .map((t) => ({
         songId: typeof t.songId === 'string' ? t.songId.trim() : '',
         songTitle: typeof t.songTitle === 'string' ? t.songTitle.trim() : '',
-        trackNumber: Number(t.trackNumber ?? 0)
+        trackNumber: Number(t.trackNumber ?? 0),
+        versionId: typeof t.versionId === 'number' ? t.versionId : (typeof t.versionId === 'string' ? Number(t.versionId) : undefined),
+        versionName: typeof t.versionName === 'string' ? t.versionName.trim() : undefined
       }))
       .filter((t) => t.songId && Number.isFinite(t.trackNumber) && t.trackNumber > 0);
 
@@ -479,6 +546,13 @@ export const albums = functions.https.onRequest(async (req, res) => {
         songsCount: normalizedTracks.length,
         totalTracks: normalizedTracks.length,
         songIds: normalizedTracks.map(t => t.songId),
+        trackVersions: normalizedTracks
+          .filter((t) => t.versionId !== undefined && t.versionId > 0)
+          .map((t) => ({
+            songId: t.songId,
+            versionId: String(t.versionId),
+            versionName: typeof t.versionName === 'string' ? t.versionName : ''
+          })),
         createdBy: auth.uid,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp()

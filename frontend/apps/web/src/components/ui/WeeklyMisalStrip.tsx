@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { listLatestWeeklyMisales, type WeeklyMisalRecord } from '../../features/plan/repository';
+import type { HomeMisalRecord } from '../../features/home/repository';
 import { SkeletonText } from './skeleton';
+import { PdfThumbnail } from './PdfThumbnail';
 
 function WeeklyMisalSkeletonCard() {
   return (
     <article className="weekly-misal-card is-skeleton" aria-hidden>
+      <div className="weekly-misal-thumb" />
       <div className="weekly-misal-card-copy">
         <SkeletonText width="72%" className="weekly-misal-skeleton-line" />
         <SkeletonText width="48%" className="weekly-misal-skeleton-line" />
@@ -27,15 +30,39 @@ function formatRangeLabel(misal: WeeklyMisalRecord): string {
 
 interface WeeklyMisalStripProps {
   className?: string;
+  preloadedRecords?: HomeMisalRecord[];
 }
 
-export function WeeklyMisalStrip({ className }: WeeklyMisalStripProps) {
-  const [misales, setMisales] = useState<WeeklyMisalRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+function toWeeklyMisalRecord(home: HomeMisalRecord): WeeklyMisalRecord {
+  return {
+    id: home.id,
+    title: home.title,
+    downloadUrl: home.downloadUrl,
+    storagePath: home.storagePath,
+    fileName: home.fileName,
+    weekId: home.weekId,
+    weekStart: home.weekStart,
+    weekEnd: home.weekEnd,
+    createdBy: null,
+    createdAt: home.createdAt
+  };
+}
+
+export function WeeklyMisalStrip({ className, preloadedRecords }: WeeklyMisalStripProps) {
+  const [misales, setMisales] = useState<WeeklyMisalRecord[]>(() =>
+    preloadedRecords ? preloadedRecords.map(toWeeklyMisalRecord) : []
+  );
+  const [loading, setLoading] = useState(!preloadedRecords || preloadedRecords.length === 0);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
+    if (preloadedRecords && preloadedRecords.length > 0) {
+      setMisales(preloadedRecords.map(toWeeklyMisalRecord));
+      setLoading(false);
+      return;
+    }
+
     let active = true;
 
     const hydrate = async () => {
@@ -66,7 +93,7 @@ export function WeeklyMisalStrip({ className }: WeeklyMisalStripProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [preloadedRecords]);
 
   if (!loading && misales.length === 0 && !error) {
     return null;
@@ -106,6 +133,7 @@ export function WeeklyMisalStrip({ className }: WeeklyMisalStripProps) {
             ) : (
               misales.map((misal) => (
                 <article key={misal.id} className="weekly-misal-card" role="listitem">
+                  <PdfThumbnail url={misal.downloadUrl} width={72} className="weekly-misal-thumb" title={misal.title} />
                   <div className="weekly-misal-card-copy">
                     <strong className="weekly-misal-item-title">{misal.title}</strong>
                     <small className="weekly-misal-item-meta">{formatRangeLabel(misal)}</small>

@@ -188,6 +188,7 @@ interface CreateSongDraftCloudSqlInput {
   previewUrl?: string | null;
   artistId?: number | null;
   coverImageUrl?: string | null;
+  durationMs?: number | null;
   versions: VersionInput[];
 }
 
@@ -300,7 +301,8 @@ INSERT INTO songs (
   file_path,
   preview_url,
   artist_id,
-  images_json
+  images_json,
+  duration_ms
 )
 SELECT
   user_row.id,
@@ -312,7 +314,8 @@ SELECT
   $6,
   $7,
   $8,
-  $9::jsonb
+  $9::jsonb,
+  $10
 FROM user_row, state_row
 RETURNING
   id,
@@ -331,7 +334,8 @@ RETURNING
       input.filePath ?? '',
       input.previewUrl ?? null,
       input.artistId ?? null,
-      JSON.stringify(imagesJson)
+      JSON.stringify(imagesJson),
+      typeof input.durationMs === 'number' && input.durationMs > 0 ? input.durationMs : null
     ]);
 
     if (!songResult.rows.length) {
@@ -553,6 +557,13 @@ export async function bulkDeleteSongsByIds(songIds: number[]): Promise<{ deleted
   }
 }
 
+export interface ArtistSongVersionRow {
+  id: number;
+  songId: number;
+  versionName: string;
+  artistId: number | null;
+}
+
 export interface ArtistSongRow {
   id: number;
   title: string;
@@ -561,6 +572,7 @@ export interface ArtistSongRow {
   ownerFirebaseUid: string | null;
   status: string | null;
   reviewStatus: 'reviewed' | 'pending';
+  versions?: ArtistSongVersionRow[];
 }
 
 export async function listSongsByArtistId(
@@ -602,6 +614,123 @@ export async function listSongsByArtistId(
     [artistId, safeLimit, viewerFirebaseUid ?? null]
   );
   return result.rows;
+}
+
+export async function listSongVersionsByArtistId(
+  artistId: number,
+  limit: number = 100,
+  viewerFirebaseUid?: string | null
+): Promise<ArtistSongRow[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 200) : 100;
+  const result = await getPool().query<ArtistSongRow>(
+    `
+      SELECT
+        s.id AS "id",
+        s.title AS "title",
+        s.liturgical_use AS "liturgicalUse",
+        s.liturgical_time AS "liturgicalTime",
+        s.year AS "year",
+        u.firebase_uid AS "ownerFirebaseUid",
+        ss.code AS "status",
+        CASE
+          WHEN UPPER(COALESCE(ss.code, '')) = 'APPROVED' THEN 'reviewed'
+          ELSE 'pending'
+        END AS "reviewStatus"
+      FROM songs s
+      LEFT JOIN users u ON u.id = s.user_id
+      LEFT JOIN song_states ss ON ss.id = s.state_id
+      WHERE s.artist_id = $1
+        AND (
+          ss.id IS NULL
+          OR UPPER(COALESCE(ss.code, '')) IN ('PUBLISHED', 'APPROVED')
+          OR (
+            UPPER(COALESCE(ss.code, '')) = 'DRAFT'
+            AND $3::TEXT IS NOT NULL
+            AND u.firebase_uid = $3::TEXT
+          )
+        )
+      ORDER BY s.title ASC, s.id ASC
+      LIMIT $2;
+    `,
+    [artistId, safeLimit, viewerFirebaseUid ?? null]
+  );
+
+  if (result.rows.length === 0) {
+    return [];
+  }
+
+  const songIds = result.rows.map((r) => r.id);
+  const versionResult = await getPool().query<ArtistSongVersionRow>(
+    `
+      SELECT
+        sv.id AS "id",
+        sv.song_id AS "songId",
+        sv.version_name AS "versionName",
+        sv.artist_id AS "artistId"
+      FROM song_versions sv
+      WHERE sv.song_id = ANY($1::INT[])
+      ORDER BY sv.id ASC;
+    `,
+    [songIds]
+  );
+
+  const versionsBySong = new Map<number, ArtistSongVersionRow[]>();
+  for (const v of versionResult.rows) {
+    const list = versionsBySong.get(v.songId) ?? [];
+    list.push(v);
+    versionsBySong.set(v.songId, list);
+  }
+
+  return result.rows.map((row) => ({
+    ...row,
+    versions: versionsBySong.get(row.id) ?? []
+  }));
+}
+
+export async function listSongVersionsBySongIds(sqlSongIds: number[]): Promise<Map<number, ArtistSongVersionRow[]>> {
+  if (sqlSongIds.length === 0) {
+    return new Map();
+  }
+
+  const result = await getPool().query<ArtistSongVersionRow>(
+    `
+      SELECT
+        sv.id AS "id",
+        sv.song_id AS "songId",
+        sv.version_name AS "versionName",
+        sv.artist_id AS "artistId"
+      FROM song_versions sv
+      WHERE sv.song_id = ANY($1::INT[])
+      ORDER BY sv.id ASC;
+    `,
+    [sqlSongIds]
+  );
+
+  const versionsBySong = new Map<number, ArtistSongVersionRow[]>();
+  for (const v of result.rows) {
+    const list = versionsBySong.get(v.songId) ?? [];
+    list.push(v);
+    versionsBySong.set(v.songId, list);
+  }
+
+  return versionsBySong;
+}
+
+export async function getSongVersionInfo(versionId: number): Promise<{ id: number; songId: number; versionName: string } | null> {
+  const result = await getPool().query<{ id: number; songId: number; versionName: string }>(
+    `
+      SELECT
+        sv.id AS "id",
+        sv.song_id AS "songId",
+        sv.version_name AS "versionName"
+      FROM song_versions sv
+      WHERE sv.id = $1
+      LIMIT 1;
+    `,
+    [versionId]
+  );
+
+  return result.rows[0] ?? null;
 }
 
 export async function refreshFeaturedSongsSnapshot(limit: number = 50, snapshotWeek?: string): Promise<FeaturedSongSnapshotRow[]> {
@@ -787,6 +916,7 @@ export interface TopSongRow {
   totalViews: number;
   likeCount: number;
   popularity: number;
+  durationMs?: number;
 }
 
 export interface FeaturedSongSnapshotRow {
@@ -1207,7 +1337,8 @@ export async function listTopSongs(limit: number = 50): Promise<TopSongRow[]> {
         a.name AS "artistName",
         COALESCE(s.total_views, 0)::INT AS "totalViews",
         COALESCE(s.like_count, 0)::INT AS "likeCount",
-        COALESCE(s.popularity, 0)::INT AS "popularity"
+        COALESCE(s.popularity, 0)::INT AS "popularity",
+        s.duration_ms AS "durationMs"
       FROM songs s
       LEFT JOIN artists a ON a.id = s.artist_id
       LEFT JOIN song_states ss ON ss.id = s.state_id

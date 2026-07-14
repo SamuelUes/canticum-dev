@@ -32,6 +32,7 @@ export function Nav({
   const [internalCategoryOptions, setInternalCategoryOptions] = useState<string[]>([]);
   const [loadingInternalCategories, setLoadingInternalCategories] = useState(false);
   const [isMobileCategoriesUi, setIsMobileCategoriesUi] = useState(false);
+  const [visibleShortcutCount, setVisibleShortcutCount] = useState(4);
   const router = useRouter();
   const categoriesMenuRef = useRef<HTMLDivElement>(null);
 
@@ -111,6 +112,38 @@ export function Nav({
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const breakpoints = [
+      { query: '(max-width: 480px)', count: 3 },
+      { query: '(max-width: 768px)', count: 4 },
+      { query: '(max-width: 1024px)', count: 5 },
+    ];
+
+    const mediaQueries = breakpoints.map(({ query, count }) => ({
+      media: window.matchMedia(query),
+      count,
+    }));
+
+    const sync = () => {
+      let count = 6;
+      for (const { media, count: mediaCount } of mediaQueries) {
+        if (media.matches) {
+          count = mediaCount;
+          break;
+        }
+      }
+      setVisibleShortcutCount(count);
+    };
+
+    sync();
+    mediaQueries.forEach(({ media }) => media.addEventListener('change', sync));
+    return () => mediaQueries.forEach(({ media }) => media.removeEventListener('change', sync));
+  }, []);
+
+  useEffect(() => {
     if (!isMoreMenuOpen || !isMobileCategoriesUi || typeof document === 'undefined') {
       return;
     }
@@ -124,7 +157,7 @@ export function Nav({
   const normalizedCategoryOptions = (stableCategoryOptions.length > 0 ? stableCategoryOptions : internalCategoryOptions)
     .map((value) => value.trim().toLowerCase())
     .filter((value) => value.length > 0 && value !== 'todos');
-  const categoryShortcuts = ['todos'].concat(Array.from(new Set(normalizedCategoryOptions)).slice(0, 4));
+  const categoryShortcuts = ['todos'].concat(Array.from(new Set(normalizedCategoryOptions)).slice(0, visibleShortcutCount - 1));
 
   return (
     <nav className="header-categories home-nav layout-h-margin" aria-label="Filtros por categoría" ref={categoriesMenuRef}>

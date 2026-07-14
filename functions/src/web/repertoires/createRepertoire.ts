@@ -3,6 +3,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAppFirestore } from '../../shared/firestore';
 import '../../shared/firebaseAdmin';
 import { FREE_MAX_repertoireS, FREE_MAX_SONGS_PER_repertoire, countUserrepertoires, resolveIsPremium } from '../../shared/plan/planLimits';
+import { capitalizeFirstLetter } from '../../shared/validation';
 
 interface CreaterepertoirePayload {
   title: string;
@@ -17,7 +18,7 @@ export const createRepertoire = functions.https.onCall(async (data: Createrepert
     throw new functions.https.HttpsError('unauthenticated', 'Authenticated user required.');
   }
 
-  const title = typeof data?.title === 'string' ? data.title.trim() : '';
+  const title = typeof data?.title === 'string' ? capitalizeFirstLetter(data.title.trim()) : '';
 
   if (!title) {
     throw new functions.https.HttpsError('invalid-argument', 'title is required.');

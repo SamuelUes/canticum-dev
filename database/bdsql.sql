@@ -191,7 +191,7 @@ CREATE TABLE artist_discography (
 -- ================================
 CREATE TABLE artist_suggestions (
   id SERIAL PRIMARY KEY,
-  artist_id INT,3
+  artist_id INT,
   suggested_artist_id INT NOT NULL,
   relevance_score NUMERIC(5,2) DEFAULT 1.00,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -245,11 +245,13 @@ CREATE TABLE albums (
   copyrights_json JSONB DEFAULT '[]'::jsonb,
   -- external_urls_json: per-provider URLs, e.g. `{ "canticum": "...", "spotify": "..." }`.
   external_urls_json JSONB DEFAULT '{}'::jsonb,
-  -- popularity: 0-100 normalized score; derived from total_views (log10-scaled) when null.
+  -- popularity: 0-100 normalized score; derived from total_views + like_count (log10-scaled).
   popularity SMALLINT DEFAULT 0,
   total_views INT DEFAULT 0,
+  like_count INT DEFAULT 0,
   status VARCHAR(50) DEFAULT 'PUBLISHED',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE SET NULL
 );
 
@@ -264,9 +266,11 @@ CREATE TABLE album_songs (
   song_id INT NOT NULL,
   track_number INT,
   is_primary_release BOOLEAN DEFAULT FALSE,
+  version_id INT,
   UNIQUE (album_id, song_id),
   FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
-  FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+  FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+  FOREIGN KEY (version_id) REFERENCES song_versions(id) ON DELETE SET NULL
 );
 
 CREATE TABLE featured_songs (
@@ -282,6 +286,37 @@ CREATE TABLE featured_songs (
   PRIMARY KEY (snapshot_week, rank_position),
   UNIQUE (snapshot_week, song_id),
   FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+);
+
+-- ================================
+-- ALBUM_LIKES (N:M)
+-- ================================
+CREATE TABLE album_likes (
+  id SERIAL PRIMARY KEY,
+  album_id INT NOT NULL,
+  user_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (album_id, user_id),
+  FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ================================
+-- FEATURED_ALBUMS (weekly snapshot)
+-- ================================
+CREATE TABLE featured_albums (
+  snapshot_week DATE NOT NULL,
+  rank_position INT NOT NULL,
+  album_id INT NOT NULL,
+  score NUMERIC(10,4) NOT NULL,
+  popularity SMALLINT NOT NULL,
+  total_views INT NOT NULL,
+  like_count INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (snapshot_week, rank_position),
+  UNIQUE (snapshot_week, album_id),
+  FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE
 );
 
 -- ================================
@@ -457,6 +492,18 @@ AS $$
   SELECT clamp_metric_score(
     LOG(10, GREATEST(COALESCE(total_views_value, 0), 0) + 1) * 20
     + LOG(10, GREATEST(COALESCE(like_count_value, 0), 0) + 1) * 10
+  );
+$$;
+
+DROP FUNCTION IF EXISTS compute_album_popularity(INT, INT);
+CREATE OR REPLACE FUNCTION compute_album_popularity(total_views_value INT, like_count_value INT)
+RETURNS SMALLINT
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT clamp_metric_score(
+    LOG(10, GREATEST(COALESCE(total_views_value, 0), 0) + 1) * 20
+    + LOG(10, GREATEST(COALESCE(like_count_value, 0), 0) + 1) * 12
   );
 $$;
 
@@ -688,8 +735,213 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS sync_album_metrics_by_id(INT);
+CREATE OR REPLACE FUNCTION sync_album_metrics_by_id(target_album_id INT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  album_total_views INT := 0;
+  album_like_count INT := 0;
+BEGIN
+  IF target_album_id IS NULL OR target_album_id <= 0 THEN
+    RETURN;
+  END IF;
+
+  SELECT
+    COALESCE(SUM(song_metrics.total_views), 0)::INT
+  INTO album_total_views
+  FROM (
+    SELECT DISTINCT
+      s.id,
+      COALESCE(s.total_views, 0)::INT AS total_views
+    FROM songs s
+    JOIN album_songs als ON als.song_id = s.id
+    WHERE als.album_id = target_album_id
+  ) song_metrics;
+
+  SELECT
+    COUNT(*)::INT
+  INTO album_like_count
+  FROM album_likes al
+  WHERE al.album_id = target_album_id;
+
+  UPDATE albums
+  SET
+    total_views = album_total_views,
+    like_count = album_like_count,
+    popularity = compute_album_popularity(album_total_views, album_like_count),
+    updated_at = CURRENT_TIMESTAMP
+  WHERE id = target_album_id;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS trg_albums_prepare_metrics();
+CREATE OR REPLACE FUNCTION trg_albums_prepare_metrics()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.total_views := GREATEST(COALESCE(NEW.total_views, 0), 0);
+  NEW.like_count := GREATEST(COALESCE(NEW.like_count, 0), 0);
+  NEW.popularity := compute_album_popularity(NEW.total_views, NEW.like_count);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS albums_prepare_metrics_before_write ON albums;
+CREATE TRIGGER albums_prepare_metrics_before_write
+BEFORE INSERT OR UPDATE OF total_views, like_count
+ON albums
+FOR EACH ROW
+EXECUTE FUNCTION trg_albums_prepare_metrics();
+
+DROP FUNCTION IF EXISTS trg_album_songs_sync_album_metrics();
+CREATE OR REPLACE FUNCTION trg_album_songs_sync_album_metrics()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    PERFORM sync_album_metrics_by_id(NEW.album_id);
+  ELSIF TG_OP = 'DELETE' THEN
+    PERFORM sync_album_metrics_by_id(OLD.album_id);
+  ELSIF TG_OP = 'UPDATE' THEN
+    PERFORM sync_album_metrics_by_id(NEW.album_id);
+    IF OLD.album_id IS DISTINCT FROM NEW.album_id THEN
+      PERFORM sync_album_metrics_by_id(OLD.album_id);
+    END IF;
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS album_songs_sync_album_metrics_after_write ON album_songs;
+CREATE TRIGGER album_songs_sync_album_metrics_after_write
+AFTER INSERT OR UPDATE OR DELETE
+ON album_songs
+FOR EACH ROW
+EXECUTE FUNCTION trg_album_songs_sync_album_metrics();
+
+DROP FUNCTION IF EXISTS trg_album_likes_sync_album_metrics();
+CREATE OR REPLACE FUNCTION trg_album_likes_sync_album_metrics()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    PERFORM sync_album_metrics_by_id(NEW.album_id);
+  ELSIF TG_OP = 'DELETE' THEN
+    PERFORM sync_album_metrics_by_id(OLD.album_id);
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS album_likes_sync_album_metrics_after_write ON album_likes;
+CREATE TRIGGER album_likes_sync_album_metrics_after_write
+AFTER INSERT OR DELETE
+ON album_likes
+FOR EACH ROW
+EXECUTE FUNCTION trg_album_likes_sync_album_metrics();
+
+DROP FUNCTION IF EXISTS refresh_featured_albums_snapshot(INT, DATE);
+CREATE OR REPLACE FUNCTION refresh_featured_albums_snapshot(
+  snapshot_limit INT DEFAULT 50,
+  target_week DATE DEFAULT date_trunc('week', CURRENT_DATE)::DATE
+)
+RETURNS TABLE (
+  snapshot_week DATE,
+  rank_position INT,
+  album_id INT,
+  score NUMERIC(10,4),
+  popularity SMALLINT,
+  total_views INT,
+  like_count INT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  safe_limit INT;
+BEGIN
+  safe_limit := GREATEST(1, LEAST(COALESCE(snapshot_limit, 50), 200));
+
+  DELETE FROM featured_albums
+  WHERE snapshot_week = target_week;
+
+  INSERT INTO featured_albums (
+    snapshot_week,
+    rank_position,
+    album_id,
+    score,
+    popularity,
+    total_views,
+    like_count,
+    updated_at
+  )
+  SELECT
+    target_week,
+    ROW_NUMBER() OVER (
+      ORDER BY
+        ranked.score DESC,
+        ranked.popularity DESC,
+        ranked.like_count DESC,
+        ranked.total_views DESC,
+        ranked.album_id DESC
+    )::INT AS rank_position,
+    ranked.album_id,
+    ranked.score,
+    ranked.popularity,
+    ranked.total_views,
+    ranked.like_count,
+    CURRENT_TIMESTAMP
+  FROM (
+    SELECT
+      a.id AS album_id,
+      COALESCE(a.popularity, 0)::SMALLINT AS popularity,
+      COALESCE(a.total_views, 0)::INT AS total_views,
+      COALESCE(a.like_count, 0)::INT AS like_count,
+      ROUND(
+        (
+          COALESCE(a.popularity, 0)::NUMERIC * 0.60
+          + LOG(10, COALESCE(a.total_views, 0) + 1)::NUMERIC * 25
+          + LOG(10, COALESCE(a.like_count, 0) + 1)::NUMERIC * 15
+        ),
+        4
+      ) AS score
+    FROM albums a
+    WHERE UPPER(COALESCE(a.status, '')) IN ('PUBLISHED', 'APPROVED')
+  ) ranked
+  ORDER BY
+    ranked.score DESC,
+    ranked.popularity DESC,
+    ranked.like_count DESC,
+    ranked.total_views DESC,
+    ranked.album_id DESC
+  LIMIT safe_limit;
+
+  RETURN QUERY
+  SELECT
+    fa.snapshot_week,
+    fa.rank_position,
+    fa.album_id,
+    fa.score,
+    fa.popularity,
+    fa.total_views,
+    fa.like_count
+  FROM featured_albums fa
+  WHERE fa.snapshot_week = target_week
+  ORDER BY fa.rank_position ASC;
+END;
+$$;
+
 ALTER TABLE songs
   ADD CONSTRAINT fk_songs_artist FOREIGN KEY (artist_id) REFERENCES artists(id);
+
+ALTER TABLE songs
+  ADD CONSTRAINT fk_songs_album FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE SET NULL;
 
 -- ================================
 -- INDEXES (Performance)
@@ -743,10 +995,16 @@ CREATE INDEX idx_albums_status ON albums(status);
 CREATE INDEX idx_albums_release_year ON albums(release_year);
 CREATE INDEX idx_albums_release_date ON albums(release_date);
 CREATE INDEX idx_albums_popularity ON albums(popularity);
+CREATE INDEX idx_albums_like_count ON albums(like_count);
+CREATE INDEX idx_albums_total_views ON albums(total_views);
 CREATE UNIQUE INDEX idx_albums_upc ON albums(upc) WHERE upc IS NOT NULL;
 CREATE INDEX idx_album_songs_album ON album_songs(album_id);
 CREATE INDEX idx_album_songs_song ON album_songs(song_id);
 CREATE INDEX idx_album_songs_primary ON album_songs(is_primary_release);
+CREATE INDEX idx_album_likes_album ON album_likes(album_id);
+CREATE INDEX idx_album_likes_user ON album_likes(user_id);
+CREATE INDEX idx_featured_albums_week ON featured_albums(snapshot_week);
+CREATE INDEX idx_featured_albums_album ON featured_albums(album_id);
 CREATE INDEX idx_categories_type ON categories(category_type);
 CREATE INDEX idx_categories_parent ON categories(parent_id);
 CREATE INDEX idx_songs_categories_json ON songs USING GIN (categories_json);
@@ -800,6 +1058,15 @@ WHERE is_active = TRUE;
 -- Only index artists with popularity (simplified - no function call in index)
 CREATE INDEX idx_artists_popularity_score
 ON artists(popularity DESC NULLS LAST)
+WHERE popularity IS NOT NULL AND popularity > 0;
+
+-- For featured albums queries
+CREATE INDEX idx_featured_albums_snapshot_week_rank ON featured_albums(snapshot_week DESC, rank_position ASC);
+CREATE INDEX idx_featured_albums_album_week ON featured_albums(album_id, snapshot_week DESC);
+
+-- Only index albums with popularity
+CREATE INDEX idx_albums_popularity_score
+ON albums(popularity DESC NULLS LAST)
 WHERE popularity IS NOT NULL AND popularity > 0;
 
 -- ================================
@@ -897,6 +1164,8 @@ BEGIN
   GRANT INSERT, UPDATE, DELETE ON TABLE featured_songs TO app_user;
   GRANT INSERT, UPDATE, DELETE ON TABLE albums TO app_user;
   GRANT INSERT, UPDATE, DELETE ON TABLE album_songs TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE album_likes TO app_user;
+  GRANT INSERT, UPDATE, DELETE ON TABLE featured_albums TO app_user;
   GRANT INSERT, UPDATE, DELETE ON TABLE artist_discography TO app_user;
 
   -- Grant usage on sequences for auto-increment IDs

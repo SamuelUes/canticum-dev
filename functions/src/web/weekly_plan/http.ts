@@ -133,12 +133,17 @@ export const misal__plan = functions.https.onRequest(async (req, res) => {
       const snapshot = await db
         .collection('misal__plan')
         .orderBy('createdAt', 'desc')
-        .limit(max)
+        .limit(max * 10)
         .get();
+
+      const items = snapshot.docs
+        .filter(doc => doc.id.startsWith('schema_'))
+        .slice(0, max)
+        .map(normalizeSundaySchemaDoc);
 
       sendJson(res, 200, {
         ok: true,
-        items: snapshot.docs.map(normalizeSundaySchemaDoc)
+        items
       });
       return;
     }
@@ -188,6 +193,7 @@ export const misal__plan = functions.https.onRequest(async (req, res) => {
       weekId,
       weekStart,
       weekEnd,
+      kind: kind === 'schema' ? 'schema' : 'misal',
       createdBy: auth.uid,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
@@ -215,12 +221,17 @@ export const misal__plan = functions.https.onRequest(async (req, res) => {
     const snapshot = await db
       .collection('misal__plan')
       .orderBy('createdAt', 'desc')
-      .limit(max)
+      .limit(max * 10)
       .get();
+
+    const items = snapshot.docs
+      .filter(doc => doc.id.startsWith('misal_'))
+      .slice(0, max)
+      .map(normalizeMisalDoc);
 
     sendJson(res, 200, {
       ok: true,
-      items: snapshot.docs.map(normalizeMisalDoc)
+      items
     });
     return;
   }
@@ -270,6 +281,7 @@ export const misal__plan = functions.https.onRequest(async (req, res) => {
     weekId,
     weekStart,
     weekEnd,
+    kind: kind === 'schema' ? 'schema' : 'misal',
     createdBy: auth.uid,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp()

@@ -496,6 +496,8 @@ export interface CreateSongPayload {
   liturgicalUse?: string;
   liturgicalTime?: string;
   coverImageUrl?: string;
+  /** Song duration in milliseconds (extracted from audio file or manual input). */
+  durationMs?: number;
   /** @deprecated Use per-version `lyrics` instead. Kept for legacy callers. */
   lyrics?: string;
   versionName?: string;

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { listLatestWeeklySundaySchemas, type WeeklySundaySchemaRecord } from '../../features/plan/repository';
+import type { HomeSundaySchema } from '../../features/home/repository';
 
 function formatWeekLabel(schema: WeeklySundaySchemaRecord): string {
   const start = schema.weekStart?.trim();
@@ -21,15 +22,39 @@ function formatSchemaText(content: string): string[] {
 
 interface WeeklyPlanStripProps {
   className?: string;
+  preloadedRecord?: HomeSundaySchema;
 }
 
-export function WeeklyPlanStrip({ className }: WeeklyPlanStripProps) {
-  const [schemas, setSchemas] = useState<WeeklySundaySchemaRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+function toWeeklySundaySchemaRecord(home: HomeSundaySchema): WeeklySundaySchemaRecord {
+  return {
+    id: home.id,
+    title: home.title,
+    content: home.content,
+    storagePath: home.storagePath,
+    fileName: home.fileName,
+    weekId: home.weekId,
+    weekStart: home.weekStart,
+    weekEnd: home.weekEnd,
+    createdBy: null,
+    createdAt: home.createdAt
+  };
+}
+
+export function WeeklyPlanStrip({ className, preloadedRecord }: WeeklyPlanStripProps) {
+  const [schemas, setSchemas] = useState<WeeklySundaySchemaRecord[]>(() =>
+    preloadedRecord ? [toWeeklySundaySchemaRecord(preloadedRecord)] : []
+  );
+  const [loading, setLoading] = useState(!preloadedRecord);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
+    if (preloadedRecord) {
+      setSchemas([toWeeklySundaySchemaRecord(preloadedRecord)]);
+      setLoading(false);
+      return;
+    }
+
     let active = true;
 
     const hydrate = async () => {
@@ -60,7 +85,7 @@ export function WeeklyPlanStrip({ className }: WeeklyPlanStripProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [preloadedRecord]);
 
   const schema = schemas[0] ?? null;
   const lines = useMemo(() => (schema ? formatSchemaText(schema.content) : []), [schema]);

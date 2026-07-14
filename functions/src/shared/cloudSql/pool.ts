@@ -38,8 +38,8 @@ function buildPoolConfig(): PoolConfig {
     database,
     user,
     password,
-    max: 20,
-    min: 2,
+    max: 5,
+    min: 1,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 15_000,
     statement_timeout: 30_000,  // Prevent runaway queries

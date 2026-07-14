@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useEffect, useMemo, useState } from 'react';
 import { getSearchDatasetClient } from '../../features/search/repository';
 import type { FooterSection, HomeText } from '../../types/home';
@@ -74,13 +75,13 @@ export function HomeFooter({ text, sections }: HomeFooterProps) {
         <div className="home-footer-grid">
           <div className="home-footer-brand">
             <a href="/" className="home-footer-logo-link" aria-label="Canticum, inicio">
-              <img
+              <Image
                 src="/assets/icon/canticum-imagotipo-compacto-color.svg"
                 alt="Canticum"
-                width="120"
-                height="92"
+                width={120}
+                height={92}
                 className="home-footer-logo"
-                loading="lazy"
+                unoptimized
               />
             </a>
             <p className="home-footer-tagline">{text.footerKnowDescription}</p>

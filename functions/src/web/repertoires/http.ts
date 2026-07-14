@@ -20,6 +20,7 @@ import {
 } from '../../shared/plan/planLimits';
 import { createRepertoireInCloudSql, searchSongsForRepertoire } from '../../shared/cloudSql/songs';
 import { applyRateLimitHeaders, checkRateLimit } from '../../shared/rateLimit';
+import { capitalizeFirstLetter } from '../../shared/validation';
 
 function isMissingIndexError(error: unknown): boolean {
   const errorWithCode = error as { code?: unknown; message?: unknown };
@@ -273,7 +274,7 @@ const repertoiresHandler = functions.https.onRequest(async (req, res) => {
     }
 
     const body = getBodyRecord(req);
-    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Sin título';
+    const title = typeof body.title === 'string' && body.title.trim() ? capitalizeFirstLetter(body.title.trim()) : 'Sin título';
     const songIds = Array.isArray(body.songIds) ? body.songIds.map((v) => String(v)) : [];
     const songs = Array.isArray(body.songs)
       ? body.songs

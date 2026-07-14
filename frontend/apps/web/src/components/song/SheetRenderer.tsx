@@ -19,6 +19,15 @@ function getProxiedSheetUrl(url: string): string {
   return `/api/song-sheet?url=${encodeURIComponent(url)}`;
 }
 
+function getOsmdScale(width: number): number {
+  if (width >= 1082) return 1;
+  if (width >= 980) return 0.9;
+  if (width >= 768) return 0.8;
+  if (width >= 640) return 0.7;
+  if (width >= 440) return 0.6;
+  return 0.5;
+}
+
 function getFileType(url: string): SheetFileType {
   const extension = url.split('?')[0]?.split('#')[0]?.split('.').pop()?.toLowerCase() ?? '';
   if (extension === 'xml' || extension === 'musicxml') return 'musicxml';
@@ -154,6 +163,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
         // console.log('[SheetRenderer] Loading MusicXML/MXL:', { extension, contentType, isMxl, sourceLength: source.length });
 
         const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay');
+        const initialScale = getOsmdScale(container.offsetWidth || window.innerWidth);
         const osmd = new OpenSheetMusicDisplay(container, {
           autoResize: false,
           drawTitle: true,
@@ -164,7 +174,7 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
           drawMeasureNumbers: true,
           drawFingerings: true,
           backend: 'svg',
-          scale: 1
+          scale: initialScale
         });
 
         await osmd.load(source);
@@ -214,14 +224,20 @@ export function SheetRenderer({ url, onError }: SheetRendererProps) {
 
         osmd.render();
 
-        // Manual resize handling (replaces autoResize: true)
+        // Manual resize handling with dynamic scale (replaces autoResize: true)
         let resizeRafId: number | null = null;
+        let currentScale = initialScale;
         resizeObserver = new ResizeObserver(() => {
           if (resizeRafId !== null) {
             cancelAnimationFrame(resizeRafId);
           }
           resizeRafId = requestAnimationFrame(() => {
             if (!cancelled && container.offsetWidth > 0) {
+              const newScale = getOsmdScale(container.offsetWidth);
+              if (newScale !== currentScale) {
+                currentScale = newScale;
+                (osmd as unknown as { setOptions: (opts: { scale: number }) => void }).setOptions({ scale: newScale });
+              }
               osmd.render();
             }
           });

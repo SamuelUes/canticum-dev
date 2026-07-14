@@ -16,6 +16,7 @@ import { isModeratorUser } from '../../features/auth/repository';
 import { getSongStatusLabel, normalizeSongStatus } from '../../features/song/status';
 import { getAlbumStatusLabel, normalizeAlbumStatus } from '../../features/album/status';
 import { SkeletonList } from '../ui/skeleton';
+import { ShareButton } from '../shared/ShareButton';
 import type { ArtistDetail, ArtistImage, ArtistrepertoireRef, ArtistSongRow } from '../../types/artist';
 
 function pickImage(images: ArtistImage[] | undefined, targetSize: number, fallback?: string): string | undefined {
@@ -273,10 +274,16 @@ export function ArtistProfileWorkspace({ artist, repertoires }: ArtistProfileWor
             </span>
             <span>{favoriteState.isFavorite ? 'En Favoritos' : 'Favorito'}</span>
           </button>
-          <button type="button" className="artist-action-modern" aria-label="Compartir">
+          <ShareButton
+            shareUrl={typeof window !== 'undefined' ? `${window.location.origin}/artists/${artist.id}` : undefined}
+            shareTitle={`${artist.name} — Canticum`}
+            shareText={`Mira a ${artist.name} en Canticum`}
+            className="artist-action-modern"
+            style={{ width: '100%' }}
+          >
             <span className="material-symbols-outlined" aria-hidden="true">share</span>
             <span>Compartir</span>
-          </button>
+          </ShareButton>
         </div>
 
         <div className="artist-metrics-mini">

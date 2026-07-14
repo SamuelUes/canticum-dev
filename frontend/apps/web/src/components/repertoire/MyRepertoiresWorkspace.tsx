@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { requestDeleterepertoire, requestUserRepertoires, loadRepertoireBookmark, saveRepertoireBookmark } from '../../features/repertoire/clientPersistence';
 import { getRepertoireStatusLabel, normalizeRepertoireStatus } from '../../features/repertoire/status';
-import { ShareRepertoireButton } from './ShareRepertoireButton';
+import { ShareRepertoireButton } from '../shared/ShareButton';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import { SkeletonCard } from '../ui/skeleton';
 import type { repertoireListItem, repertoireStatus } from '../../types/repertoire';
 
@@ -161,6 +162,7 @@ export function MyrepertoiresWorkspace({ items: initialItems = [] }: Myrepertoir
 
   return (
     <section className="repertoires-page-container">
+      <LoadingBubble isLoading={isLoading} message="Cargando repertorios…" />
       <aside className="repertoires-sidebar" aria-label="Filtros de repertorios">
         <div className="repertoires-filter-panel">
           <h3 className="repertoires-filter-header">

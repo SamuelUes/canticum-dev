@@ -49,6 +49,7 @@ export interface SearchSongItem extends SearchEntityBase {
   popularity?: number;
   totalViews?: number;
   likeCount?: number;
+  durationMs?: number;
   publishedAt?: string | null;
   createdAt?: string | null;
   ownerUserId?: string;

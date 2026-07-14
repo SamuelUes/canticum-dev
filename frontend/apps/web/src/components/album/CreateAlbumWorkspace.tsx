@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
+import { DragDropContext, Droppable, Draggable, DropResult, DroppableProvided, DraggableProvided, DraggableStateSnapshot } from '@hello-pangea/dnd';
 import { useAuth } from '../../context/AuthContext';
 import { isAdminUser } from '../../features/auth/repository';
 import { ArtistAutocomplete, ArtistOption } from '../shared/ArtistAutocomplete';
@@ -11,9 +11,13 @@ import { fetchSongsByArtist } from '../../features/artist/repository';
 import type { ArtistSongLookup } from '../../features/artist/repository';
 import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import { CropperModal } from '../ui/CropperModal';
+import { FloatingNotice } from '../ui/FloatingNotice';
+import { FloatingStatusOverlay, type FloatingStatusState } from '../ui/FloatingStatusOverlay';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import { requestCreateAlbum } from '../../features/album/clientPersistence';
 import { functionsBaseUrl, buildFunctionsHeaders} from '../../features/shared/functionsClient';
 import type { AlbumTrack, AlbumType } from '../../types/album';
+import { capitalizeFirstLetter } from '../../features/shared/textFormat';
 
 const GENRES = ['Litúrgico', 'Contemporáneo', 'Tradicional', 'Instrumental'];
 const ALBUM_TYPES: AlbumType[] = ['album', 'single', 'ep', 'compilation', 'live', 'concert'];
@@ -51,6 +55,8 @@ export function CreateAlbumWorkspace() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [showReassignNotice, setShowReassignNotice] = useState(false);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
 
   const canManage = useMemo(() => isAdminUser(user), [user]);
 
@@ -137,15 +143,34 @@ export function CreateAlbumWorkspace() {
   const handleSelectSong = (song: ArtistSongLookup) => {
     if (!song.songId) return;
     
+    const firstVersion = song.versions?.[0];
     const newTrack: AlbumTrack = {
       songId: song.songId,
       songTitle: song.title,
+      versionId: firstVersion ? String(firstVersion.id) : undefined,
+      versionName: firstVersion?.versionName || undefined,
       trackNumber: addedTracks.length + 1
     };
     
     setAddedTracks((prev) => [...prev, newTrack]);
     setSongSearchInput('');
     setIsSearchOpen(false);
+  };
+
+  const handleChangeTrackVersion = (songId: string, versionId: string) => {
+    setAddedTracks((prev) =>
+      prev.map((track) => {
+        if (track.songId !== songId) return track;
+        const song = existingArtistSongs.find((s) => s.songId === songId);
+        const version = song?.versions?.find((v) => String(v.id) === versionId);
+        if (!version) return track;
+        return {
+          ...track,
+          versionId: String(version.id),
+          versionName: version.versionName
+        };
+      })
+    );
   };
 
   const handleRemoveTrack = (songId: string) => {
@@ -177,6 +202,15 @@ export function CreateAlbumWorkspace() {
       return;
     }
 
+    // First click: show confirmation notice, don't submit yet
+    if (!confirmSubmit) {
+      setConfirmSubmit(true);
+      setShowReassignNotice(true);
+      return;
+    }
+
+    // Second click: proceed with submission
+    setShowReassignNotice(false);
     setSubmitting(true);
     setErrorMessage('');
     setSuccessMessage('');
@@ -184,7 +218,7 @@ export function CreateAlbumWorkspace() {
     try {
       // Create album first without cover
       const payload = {
-        title: title.trim(),
+        title: capitalizeFirstLetter(title.trim()),
         artistId: Number(artistOption.id),
         artistName: artistOption.name,
         releaseYear: releaseYear ? Number(releaseYear) : undefined,
@@ -194,7 +228,9 @@ export function CreateAlbumWorkspace() {
         tracks: addedTracks.map(t => ({
           songId: t.songId,
           songTitle: t.songTitle,
-          trackNumber: t.trackNumber
+          trackNumber: t.trackNumber,
+          versionId: t.versionId,
+          versionName: t.versionName
         }))
       };
 
@@ -235,6 +271,7 @@ export function CreateAlbumWorkspace() {
       }
 
       setSuccessMessage('Álbum creado correctamente.');
+      setConfirmSubmit(false);
       clearForm();
 
       // Redirect to album detail page
@@ -250,14 +287,7 @@ export function CreateAlbumWorkspace() {
   };
 
   if (loading) {
-    return (
-      <section className="create-page-layout album-create-layout">
-        <header className="create-page-header">
-          <h1>Crear nuevo álbum</h1>
-          <p>Cargando permisos...</p>
-        </header>
-      </section>
-    );
+    return <LoadingBubble isLoading={true} message="Cargando permisos…" showDelay={0} />;
   }
 
   if (!canManage) {
@@ -279,8 +309,22 @@ export function CreateAlbumWorkspace() {
     );
   }
 
+  const overlayState: FloatingStatusState = submitting ? 'creating' : errorMessage ? 'error' : successMessage ? 'success' : 'idle';
+  const overlayMessage = submitting ? 'Guardando álbum...' : errorMessage || successMessage || '';
+
   return (
     <section className="create-page-layout album-create-layout">
+      <LoadingBubble isLoading={submitting} message="Guardando álbum…" />
+      {showReassignNotice ? (
+        <FloatingNotice
+          variant="warning"
+          message={'Si alguna canción ya pertenecía a otro álbum anterior, al guardar este álbum dejará de pertenecer a ese álbum anterior y será exclusiva del nuevo álbum que se está creando. Presiona nuevamente "Guardar Álbum" para confirmar.'}
+          onClose={() => {
+            setShowReassignNotice(false);
+          }}
+        />
+      ) : null}
+
       <header className="create-page-header">
         <h1>Crear nuevo álbum</h1>
         <p>Configura los detalles, enlaza artistas y gestiona la lista de canciones.</p>
@@ -365,6 +409,11 @@ export function CreateAlbumWorkspace() {
               value={artistOption}
               onChange={(artist) => {
                 setArtistOption(artist);
+                if (!artist) {
+                  setAddedTracks([]);
+                  setSongSearchInput('');
+                  setIsSearchOpen(false);
+                }
               }}
               label="BUSCAR ARTISTA REGISTRADO"
               placeholder="Escribe el nombre del artista..."
@@ -462,62 +511,90 @@ export function CreateAlbumWorkspace() {
             )}
           </div>
 
-          {addedTracks.length > 0 && (
-            <div className="album-track-list-container">
-              <h3 className="album-track-list-header">PISTAS AÑADIDAS</h3>
-              <DragDropContext onDragEnd={handleDragEnd}>
-                <Droppable droppableId="album-tracks">
-                  {(provided) => (
-                    <div
-                      {...provided.droppableProps}
-                      ref={provided.innerRef}
-                      className="album-track-list"
-                    >
-                      {addedTracks.map((track, index) => (
-                        <Draggable key={track.songId} draggableId={track.songId} index={index}>
-                          {(provided, snapshot) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              className={`album-track-item ${snapshot.isDragging ? 'dragging' : ''}`}
-                            >
-                              <span className="album-track-number">
-                                {String(track.trackNumber).padStart(2, '0')}
-                              </span>
-                              <div className="album-track-content">
-                                <p className="album-track-title">{track.songTitle}</p>
-                                {track.versionName && (
-                                  <span className="album-track-version">{track.versionName}</span>
-                                )}
-                              </div>
-                              <div className="album-track-actions">
-                                <button
-                                  type="button"
-                                  className="album-track-drag-handle"
-                                  {...provided.dragHandleProps}
-                                >
-                                  <span className="material-symbols-outlined">drag_indicator</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  className="album-track-remove"
-                                  onClick={() => handleRemoveTrack(track.songId)}
-                                  disabled={submitting}
-                                >
-                                  <span className="material-symbols-outlined">delete</span>
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </Draggable>
-                      ))}
-                      {provided.placeholder}
-                    </div>
+          <DragDropContext onDragEnd={handleDragEnd}>
+            <Droppable droppableId="album-tracks">
+              {(provided: DroppableProvided) => (
+                <div
+                  {...provided.droppableProps}
+                  ref={provided.innerRef}
+                  className={`album-track-list ${addedTracks.length > 0 ? 'has-tracks' : ''}`}
+                >
+                  {addedTracks.length > 0 && (
+                    <h3 className="album-track-list-header">PISTAS AÑADIDAS</h3>
                   )}
-                </Droppable>
-              </DragDropContext>
-            </div>
-          )}
+                  {addedTracks.map((track, index) => (
+                    <Draggable key={track.songId} draggableId={track.songId} index={index}>
+                      {(provided: DraggableProvided, snapshot: DraggableStateSnapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
+                          className={`album-track-item ${snapshot.isDragging ? 'dragging' : ''}`}
+                        >
+                          <div
+                            className="album-track-drag-handle"
+                            role="button"
+                            aria-label="Arrastrar para reordenar"
+                            {...provided.dragHandleProps}
+                          >
+                            <span className="material-symbols-outlined">drag_indicator</span>
+                          </div>
+                          <span className="album-track-number">
+                            {String(track.trackNumber).padStart(2, '0')}
+                          </span>
+                          <div className="album-track-content">
+                            <p className="album-track-title">{track.songTitle}</p>
+                            {(() => {
+                              const song = existingArtistSongs.find((s) => s.songId === track.songId);
+                              if (song?.versions && song.versions.length > 0) {
+                                return (
+                                  <div className="album-track-version-picker">
+                                    <span className="material-symbols-outlined album-track-version-icon">tune</span>
+                                    <select
+                                      className="album-track-version-select"
+                                      value={track.versionId ?? ''}
+                                      onChange={(e) => handleChangeTrackVersion(track.songId, e.target.value)}
+                                      disabled={submitting}
+                                    >
+                                      {song.versions.map((v) => (
+                                        <option key={v.id} value={String(v.id)}>
+                                          {v.versionName}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <span className="material-symbols-outlined album-track-version-arrow">expand_more</span>
+                                  </div>
+                                );
+                              }
+                              if (track.versionName) {
+                                return (
+                                  <div className="album-track-version-picker album-track-version-picker--static">
+                                    <span className="material-symbols-outlined album-track-version-icon">tune</span>
+                                    <span className="album-track-version-text">{track.versionName}</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
+                          <div className="album-track-actions">
+                            <button
+                              type="button"
+                              className="album-track-remove"
+                              onClick={() => handleRemoveTrack(track.songId)}
+                              disabled={submitting}
+                            >
+                              <span className="material-symbols-outlined">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </Draggable>
+                  ))}
+                  {provided.placeholder}
+                </div>
+              )}
+            </Droppable>
+          </DragDropContext>
         </section>
 
         {errorMessage ? <p className="create-form-error">{errorMessage}</p> : null}
@@ -533,9 +610,9 @@ export function CreateAlbumWorkspace() {
             Cancelar
           </button>
 
-          <button type="submit" className="create-form-submit" disabled={!canSubmit}>
+          <button type="submit" className="create-form-submit" disabled={!canSubmit || submitting}>
             <span className="material-symbols-outlined">save</span>
-            {submitting ? 'Guardando...' : 'Guardar Álbum'}
+            {submitting ? 'Guardando...' : confirmSubmit ? 'Confirmar y Guardar' : 'Guardar Álbum'}
           </button>
         </div>
       </form>
@@ -546,6 +623,13 @@ export function CreateAlbumWorkspace() {
         aspectRatio={1}
         onConfirm={handleCropConfirm}
         onCancel={handleCropCancel}
+      />
+
+      <FloatingStatusOverlay
+        state={overlayState}
+        message={overlayMessage}
+        autoDismiss={overlayState === 'success' ? 3000 : 0}
+        onDismiss={() => { setErrorMessage(''); setSuccessMessage(''); }}
       />
     </section>
   );

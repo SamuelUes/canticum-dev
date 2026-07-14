@@ -1,8 +1,85 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { CollapsiblePanel } from '../ui/CollapsiblePanel';
 import { SkeletonText, SkeletonTitle } from '../ui/skeleton';
+import { loadSongFavorite, saveSongFavorite } from '../../features/song/clientPersistence';
 import type { HomeText, ListItemData } from '../../types/home';
+
+function FavoriteButton({ songId }: { songId: string }) {
+  const [isFavorite, setIsFavorite] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    void loadSongFavorite(songId, 'default').then((value) => {
+      if (!disposed && typeof value === 'boolean') {
+        setIsFavorite(value);
+      }
+    });
+    return () => { disposed = true; };
+  }, [songId]);
+
+  const handleToggle = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const nextValue = !isFavorite;
+    setIsFavorite(nextValue);
+    void saveSongFavorite(songId, 'default', nextValue);
+  };
+
+  return (
+    <button
+      type="button"
+      className={isFavorite ? 'mini-item-favorite is-active' : 'mini-item-favorite'}
+      aria-label={isFavorite ? 'Quitar de favoritos' : 'Añadir a favoritos'}
+      aria-pressed={isFavorite}
+      onClick={handleToggle}
+    >
+      <span className="material-symbols-outlined">{isFavorite ? 'favorite' : 'heart_plus'}</span>
+    </button>
+  );
+}
+
+function TrendDelta({ item }: { item: ListItemData }) {
+  const delta = item.rankDelta;
+
+  if (delta === null || delta === undefined) {
+    return (
+      <div className="mini-item-delta mini-item-delta--new" aria-hidden>
+        <span className="mini-item-delta-label">NUEVO</span>
+      </div>
+    );
+  }
+
+  if (delta > 0) {
+    return (
+      <div className="mini-item-delta mini-item-delta--up" aria-hidden>
+        {/* <span className="mini-item-score">{score ?? '—'}</span> */}
+        <span className="mini-item-delta-indicator">
+          <span className="material-symbols-outlined">keyboard_arrow_up</span> {delta}
+        </span>
+      </div>
+    );
+  }
+
+  if (delta < 0) {
+    return (
+      <div className="mini-item-delta mini-item-delta--down" aria-hidden>
+        {/* <span className="mini-item-score">{score ?? '—'}</span> */}
+        <span className="mini-item-delta-indicator">
+          <span className="material-symbols-outlined">keyboard_arrow_down</span> {Math.abs(delta)}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mini-item-delta mini-item-delta--flat" aria-hidden>
+      {/* <span className="mini-item-score">{score ?? '—'}</span> */}
+      <span className="mini-item-delta-indicator">—</span>
+    </div>
+  );
+}
 
 interface ListColumnProps {
   title: string;
@@ -58,8 +135,8 @@ function ListColumn({ title, viewAllLabel, viewAllHref, items, linkBasePath, res
               ? <span className="mini-item-rank" aria-hidden>{index + 1}</span>
               : null;
             const trailing = variant === 'recent'
-              ? <span className="mini-item-action" aria-hidden>♡</span>
-              : <span className="mini-item-action mini-item-action--trend" aria-hidden>↗</span>;
+              ? <FavoriteButton songId={item.id} />
+              : <TrendDelta item={item} />;
 
             if (href) {
               return (

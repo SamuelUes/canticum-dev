@@ -420,7 +420,8 @@ function normalizeItem(rawItem: Partial<SearchEntityItem> & Record<string, unkno
     likeCount: Number.isFinite(Number(rawItem.likeCount)) ? Number(rawItem.likeCount) : undefined,
     publishedAt: typeof rawItem.publishedAt === 'string' ? rawItem.publishedAt : null,
     createdAt: typeof rawItem.createdAt === 'string' ? rawItem.createdAt : null,
-    ownerUserId: typeof rawItem.ownerUserId === 'string' ? rawItem.ownerUserId : undefined
+    ownerUserId: typeof rawItem.ownerUserId === 'string' ? rawItem.ownerUserId : undefined,
+    durationMs: Number.isFinite(Number(rawItem.durationMs)) ? Number(rawItem.durationMs) : undefined
   };
 }
 

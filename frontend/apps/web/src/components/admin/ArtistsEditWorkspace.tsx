@@ -13,6 +13,9 @@ import {
 } from '../../features/admin/repository';
 import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import { CropperModal } from '../ui/CropperModal';
+import { FloatingStatusOverlay, type FloatingStatusState } from '../ui/FloatingStatusOverlay';
+import { LoadingBubble } from '../ui/LoadingBubble';
+import { capitalizeFirstLetter } from '../../features/shared/textFormat';
 
 const ARTIST_TYPES = ['General', 'Litúrgico', 'Contemporáneo', 'Tradicional', 'Instrumental'];
 const COMMON_GENRES = ['Litúrgico', 'Contemporáneo', 'Tradicional', 'Instrumental', 'Alabanza', 'Adoración', 'Coro'];
@@ -193,7 +196,7 @@ export function ArtistsEditWorkspace({ artistId }: { artistId: number }) {
       }
 
       const updated = await updateArtist(artist.id, {
-        name: name.trim(),
+        name: capitalizeFirstLetter(name.trim()),
         type,
         bio: bio.trim() || null,
         imageUrl: finalImageUrl,
@@ -257,17 +260,7 @@ export function ArtistsEditWorkspace({ artistId }: { artistId: number }) {
   };
 
   if (loading) {
-    return (
-      <section className="admin-panel-shell layout-h-margin">
-        <header className="admin-panel-hero">
-          <div>
-            <span className="admin-panel-kicker">Editar Artista</span>
-            <h1>Cargando permisos...</h1>
-            <p>Estamos validando tu sesión antes de mostrar las herramientas de administración.</p>
-          </div>
-        </header>
-      </section>
-    );
+    return <LoadingBubble isLoading={true} message="Cargando permisos…" showDelay={0} />;
   }
 
   if (!canManage) {
@@ -288,16 +281,7 @@ export function ArtistsEditWorkspace({ artistId }: { artistId: number }) {
   }
 
   if (loadingArtist) {
-    return (
-      <section className="admin-panel-shell layout-h-margin">
-        <header className="admin-panel-hero">
-          <div>
-            <span className="admin-panel-kicker">Editar Artista</span>
-            <h1>Cargando artista...</h1>
-          </div>
-        </header>
-      </section>
-    );
+    return <LoadingBubble isLoading={true} message="Cargando artista…" showDelay={0} />;
   }
 
   if (error && !artist) {
@@ -317,8 +301,12 @@ export function ArtistsEditWorkspace({ artistId }: { artistId: number }) {
     );
   }
 
+  const overlayState: FloatingStatusState = uploadingImage ? 'uploading' : saving ? 'updating' : deleting ? 'updating' : successMessage ? 'success' : error ? 'error' : 'idle';
+  const overlayMessage = uploadingImage ? 'Subiendo imagen...' : saving ? 'Guardando cambios...' : deleting ? 'Eliminando artista...' : error ?? (successMessage || '');
+
   return (
     <section className="admin-panel-shell layout-h-margin">
+      <LoadingBubble isLoading={saving || uploadingImage || deleting} message={uploadingImage ? 'Subiendo imagen…' : deleting ? 'Eliminando artista…' : 'Guardando cambios…'} />
       <header className="admin-panel-hero">
         <div>
           <span className="admin-panel-kicker">Editar Artista</span>
@@ -813,6 +801,13 @@ export function ArtistsEditWorkspace({ artistId }: { artistId: number }) {
         aspectRatio={1}
         onConfirm={handleCropConfirm}
         onCancel={handleCropCancel}
+      />
+
+      <FloatingStatusOverlay
+        state={overlayState}
+        message={overlayMessage}
+        autoDismiss={overlayState === 'success' ? 3000 : 0}
+        onDismiss={() => { setError(null); setSuccessMessage(''); }}
       />
     </section>
   );

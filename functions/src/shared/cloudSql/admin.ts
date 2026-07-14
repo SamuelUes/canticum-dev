@@ -1,5 +1,5 @@
 import { type Pool } from 'pg';
-import { getSharedPool } from './pool';
+import { getSharedPool, withPoolRetry } from './pool';
 
 export interface CloudSqlAdminUserRow {
   id: number;
@@ -34,7 +34,7 @@ export async function listCloudSqlAdminUsers(limit = 12): Promise<CloudSqlAdminU
     LIMIT $1;
   `;
 
-  const result = await getPool().query<CloudSqlAdminUserRow>(query, [safeLimit]);
+  const result = await withPoolRetry(() => getPool().query<CloudSqlAdminUserRow>(query, [safeLimit]));
   return result.rows;
 }
 
@@ -52,7 +52,7 @@ export async function getCloudSqlAdminUser(firebaseUid: string): Promise<CloudSq
     LIMIT 1;
   `;
 
-  const result = await getPool().query<CloudSqlAdminUserRow>(query, [firebaseUid]);
+  const result = await withPoolRetry(() => getPool().query<CloudSqlAdminUserRow>(query, [firebaseUid]));
   return result.rows[0] ?? null;
 }
 
@@ -70,7 +70,7 @@ export async function updateCloudSqlAdminUserStatus(firebaseUid: string, status:
       created_at AS "createdAt";
   `;
 
-  const result = await getPool().query<CloudSqlAdminUserRow>(query, [normalizeStatus(status), firebaseUid]);
+  const result = await withPoolRetry(() => getPool().query<CloudSqlAdminUserRow>(query, [normalizeStatus(status), firebaseUid]));
 
   if (!result.rows.length) {
     throw new Error('User not found in Cloud SQL.');
@@ -102,7 +102,7 @@ export interface AdminDashboardMetrics {
 
 async function safeCount(query: string, params?: unknown[]): Promise<number> {
   try {
-    const result = await getPool().query<{ count: string }>(query, params);
+    const result = await withPoolRetry(() => getPool().query<{ count: string }>(query, params));
     return Number(result.rows[0]?.count ?? 0);
   } catch (error) {
     console.error('[AdminDashboardMetrics] Query failed:', query, error);
@@ -111,28 +111,20 @@ async function safeCount(query: string, params?: unknown[]): Promise<number> {
 }
 
 export async function getAdminDashboardMetrics(): Promise<AdminDashboardMetrics> {
-  const [
-    totalSongs,
-    pendingSongs,
-    totalArtists,
-    totalRepertoires,
-    newUsersLast48h
-  ] = await Promise.all([
-    safeCount('SELECT COUNT(*)::text AS count FROM songs'),
-    safeCount(`
-      SELECT COUNT(*)::text AS count
-      FROM songs s
-      JOIN song_states ss ON ss.id = s.state_id
-      WHERE UPPER(ss.code) IN ('DRAFT', 'UPLOADED', 'IN_REVIEW')
-    `),
-    safeCount('SELECT COUNT(*)::text AS count FROM artists'),
-    safeCount('SELECT COUNT(*)::text AS count FROM repertoires'),
-    safeCount(`
-      SELECT COUNT(*)::text AS count
-      FROM users
-      WHERE created_at >= NOW() - INTERVAL '48 hours'
-    `)
-  ]);
+  const totalSongs = await safeCount('SELECT COUNT(*)::text AS count FROM songs');
+  const pendingSongs = await safeCount(`
+    SELECT COUNT(*)::text AS count
+    FROM songs s
+    JOIN song_states ss ON ss.id = s.state_id
+    WHERE UPPER(ss.code) IN ('DRAFT', 'UPLOADED', 'IN_REVIEW')
+  `);
+  const totalArtists = await safeCount('SELECT COUNT(*)::text AS count FROM artists');
+  const totalRepertoires = await safeCount('SELECT COUNT(*)::text AS count FROM repertoires');
+  const newUsersLast48h = await safeCount(`
+    SELECT COUNT(*)::text AS count
+    FROM users
+    WHERE created_at >= NOW() - INTERVAL '48 hours'
+  `);
 
   return {
     totalSongs,
@@ -162,7 +154,7 @@ export async function getDraftSongsForAdmin(limit = 10, offset = 0): Promise<Clo
     LIMIT $1 OFFSET $2;
   `;
 
-  const result = await getPool().query<Omit<CloudSqlDraftSongRow, 'firestoreId'>>(query, [safeLimit, safeOffset]);
+  const result = await withPoolRetry(() => getPool().query<Omit<CloudSqlDraftSongRow, 'firestoreId'>>(query, [safeLimit, safeOffset]));
   const rows = result.rows;
 
   // Fetch Firestore IDs for each song
@@ -198,7 +190,7 @@ export async function getDraftSongsCount(): Promise<number> {
     WHERE UPPER(ss.code) IN ('DRAFT', 'UPLOADED', 'IN_REVIEW');
   `;
 
-  const result = await getPool().query<{ count: string }>(query);
+  const result = await withPoolRetry(() => getPool().query<{ count: string }>(query));
   return Number(result.rows[0]?.count ?? 0);
 }
 
@@ -226,12 +218,12 @@ export async function getArtistsForAdmin(limit = 10, offset = 0): Promise<CloudS
     LIMIT $1 OFFSET $2;
   `;
 
-  const result = await getPool().query<CloudSqlArtistRow>(query, [safeLimit, safeOffset]);
+  const result = await withPoolRetry(() => getPool().query<CloudSqlArtistRow>(query, [safeLimit, safeOffset]));
   return result.rows;
 }
 
 export async function getArtistsCount(): Promise<number> {
   const query = `SELECT COUNT(*)::text AS count FROM artists;`;
-  const result = await getPool().query<{ count: string }>(query);
+  const result = await withPoolRetry(() => getPool().query<{ count: string }>(query));
   return Number(result.rows[0]?.count ?? 0);
 }

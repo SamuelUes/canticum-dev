@@ -528,7 +528,7 @@ export async function getArtistProfileBundle(
               AND u.firebase_uid = $2::TEXT
             )
           )
-        GROUP BY s.id, fs.song_id
+        GROUP BY s.id, fs.song_id, ss.code
         ORDER BY
           "isFeatured" DESC,
           COALESCE(s.popularity, 0) DESC,

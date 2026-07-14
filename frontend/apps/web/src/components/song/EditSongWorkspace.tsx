@@ -7,7 +7,8 @@ import { useAuth } from '../../context/AuthContext';
 import { getSongDetailById, requestDeleteSong, requestUpdateSong } from '../../features/song/repository';
 import { uploadVersionAsset } from '../../features/song/versionAssetUpload';
 import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
-import { SkeletonCard, SkeletonText } from '../ui/skeleton';
+import { FloatingStatusOverlay, type FloatingStatusState } from '../ui/FloatingStatusOverlay';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import type { SongDetail, SongVersion } from '../../types/song';
 
 interface EditSongWorkspaceProps {
@@ -319,37 +320,11 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
   };
 
   if (loading) {
-    return (
-      <section className="create-page-layout layout-h-margin" aria-busy aria-label="Cargando canción">
-        <header className="create-page-header">
-          <SkeletonText width={220} className="edit-song-skeleton-title" />
-          <SkeletonText width="70%" className="edit-song-skeleton-subtitle" />
-        </header>
-        <div className="create-form-grid">
-          <SkeletonText className="edit-song-skeleton-input" />
-          <SkeletonText className="edit-song-skeleton-input" />
-        </div>
-        <div className="create-cover-field">
-          <SkeletonCard className="edit-song-skeleton-cover" />
-        </div>
-        <section className="create-versions-section">
-          <div className="create-versions-header">
-            <SkeletonText width={150} className="edit-song-skeleton-section-title" />
-            <SkeletonText width={140} className="edit-song-skeleton-button-small" />
-          </div>
-          {Array.from({ length: 2 }).map((_, idx) => (
-            <div className="create-version-card" key={idx}>
-              <SkeletonText className="edit-song-skeleton-version-field" />
-              <SkeletonText className="edit-song-skeleton-version-field" />
-              <SkeletonText className="edit-song-skeleton-version-lyrics" />
-              <SkeletonText className="edit-song-skeleton-version-field" />
-              <SkeletonText width={160} className="edit-song-skeleton-version-action" />
-            </div>
-          ))}
-        </section>
-      </section>
-    );
+    return <LoadingBubble isLoading={true} message="Cargando canción…" showDelay={0} />;
   }
+
+  const overlayState: FloatingStatusState = saving ? 'updating' : error ? 'error' : 'idle';
+  const overlayMessage = saving ? 'Guardando cambios...' : error || '';
 
   return (
     <section className="create-page-layout layout-h-margin">
@@ -756,6 +731,13 @@ export function EditSongWorkspace({ songId }: EditSongWorkspaceProps) {
           </button>
         </div>
       </form>
+
+      <FloatingStatusOverlay
+        state={overlayState}
+        message={overlayMessage}
+        autoDismiss={overlayState === 'error' ? 4000 : 0}
+        onDismiss={() => setError('')}
+      />
     </section>
   );
 }

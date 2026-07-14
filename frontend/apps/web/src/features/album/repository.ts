@@ -133,7 +133,9 @@ function normalizeAlbumSongRow(raw: Record<string, unknown>, index: number): Alb
     hasSheet: Boolean(raw.hasSheet),
     isPrimaryRelease: Boolean(raw.isPrimaryRelease),
     isVerified: Boolean(raw.isVerified),
-    status: typeof raw.status === 'string' ? raw.status : undefined
+    status: typeof raw.status === 'string' ? raw.status : undefined,
+    versionId: typeof raw.versionId === 'string' && raw.versionId ? raw.versionId : undefined,
+    versionName: typeof raw.versionName === 'string' && raw.versionName ? raw.versionName : undefined
   };
 }
 

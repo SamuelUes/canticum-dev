@@ -114,6 +114,7 @@ interface SearchItem {
   ownerUserId?: string;
   isPublic?: boolean;
   status?: string;
+  durationMs?: number;
   instrument?: string;
   notationType?: string;
   albumType?: string;
@@ -231,7 +232,8 @@ function pushSongItemIfMatch(
     publishedAt: publishedAtIso,
     createdAt: createdAtIso,
     ownerUserId: String(data.ownerUserId ?? data.createdBy ?? ''),
-    status: String(data.status ?? 'DRAFT').toUpperCase()
+    status: String(data.status ?? 'DRAFT').toUpperCase(),
+    durationMs: Number.isFinite(Number(data.durationMs ?? data.duration_ms)) ? Number(data.durationMs ?? data.duration_ms) : undefined
   };
 
   if (matchesQuery(item, query)) {
@@ -330,10 +332,15 @@ function buildBucket<T extends SearchItem>(
   };
 }
 
+function stripAccents(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function matchesQuery(item: SearchItem, query: string): boolean {
   if (!query) return true;
-  const haystack = `${item.title} ${item.subtitle} ${item.searchableText}`.toLowerCase();
-  return haystack.includes(query);
+  const normalizedQuery = stripAccents(query.toLowerCase());
+  const haystack = stripAccents(`${item.title} ${item.subtitle} ${item.searchableText}`.toLowerCase());
+  return haystack.includes(normalizedQuery);
 }
 
 function formatDateLabel(value: unknown): string {
@@ -443,8 +450,26 @@ export const search = functions.https.onRequest(async (req, res) => {
   const selectedCategory = normalizeCategoryValue(typeof req.query.category === 'string' ? req.query.category : '');
   const hasCategoryFilter = selectedCategory.length > 0 && selectedCategory !== 'todos';
   const isHomeScope = scopeParam === 'home';
+
+  // New server-side filter params
+  const sortParam = typeof req.query.sort === 'string' ? req.query.sort.trim().toLowerCase() : 'relevance';
+  const premiumOnly = req.query.premium === '1' || req.query.premium === 'true';
+  const instrumentFilter = typeof req.query.instrument === 'string'
+    ? req.query.instrument.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+  const notationFilter = typeof req.query.notation === 'string'
+    ? req.query.notation.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+  const albumTypeFilter = typeof req.query.albumType === 'string'
+    ? req.query.albumType.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+  const durationFilter = typeof req.query.duration === 'string'
+    ? req.query.duration.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    : [];
+  const ownerFilter = typeof req.query.owner === 'string' ? req.query.owner.trim() : '';
+  const visibilityFilter = typeof req.query.visibility === 'string' ? req.query.visibility.trim().toLowerCase() : '';
   const firestoreScanLimit = isHomeScope ? HOME_SCOPE_FIRESTORE_SCAN_LIMIT : FIRESTORE_CATALOG_SCAN_LIMIT;
-  const canUseSharedHomeCache = isHomeScope && !currentUserId && !query && !hasCategoryFilter && kindFilters.size === 0 && offset === 0 && limit === DEFAULT_LIMIT;
+  const canUseSharedHomeCache = isHomeScope && !currentUserId && !query && !hasCategoryFilter && kindFilters.size === 0 && offset === 0 && limit === DEFAULT_LIMIT && !premiumOnly && instrumentFilter.length === 0 && notationFilter.length === 0 && albumTypeFilter.length === 0 && durationFilter.length === 0 && !ownerFilter && !visibilityFilter && sortParam === 'relevance';
 
   if (canUseSharedHomeCache && sharedHomeCatalogCache && sharedHomeCatalogCache.expiresAt > Date.now()) {
     sendJson(res, 200, sharedHomeCatalogCache.payload);
@@ -476,8 +501,8 @@ export const search = functions.https.onRequest(async (req, res) => {
   const emptySnap = { docs: [] as FirebaseFirestore.QueryDocumentSnapshot[] };
 
   // PARALLELIZE ALL INDEPENDENT QUERIES - Critical optimization
-  const [publicSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, adminSongsSnap, albumsSnap, repertoiresSnap, artistsSnap, sqlTopSongs, sqlCategorySlugs, sqlArtists] = await Promise.all([
-    wants('song')
+  const [publicSongsSnap, ownerSongsByOwnerIdSnap, ownerSongsByCreatedBySnap, adminSongsSnap, albumsSnap, repertoiresSnap, artistsSnap, versionsSnap, sqlTopSongs, sqlCategorySlugs, sqlArtists] = await Promise.all([
+    (wants('song') || wants('version'))
       ? db.collection('songs')
         .where('status', 'in', ['APPROVED', 'PUBLISHED'])
         .limit(firestoreScanLimit)
@@ -503,6 +528,9 @@ export const search = functions.https.onRequest(async (req, res) => {
     wants('artist')
       ? db.collection('artists').limit(firestoreScanLimit).get()
       : Promise.resolve(emptySnap),
+    wants('version')
+      ? db.collectionGroup('versions').limit(firestoreScanLimit).get()
+      : Promise.resolve(emptySnap),
     sqlTopSongsPromise,
     sqlCategorySlugsPromise,
     sqlArtistsPromise
@@ -514,7 +542,7 @@ export const search = functions.https.onRequest(async (req, res) => {
   const albums: SearchItem[] = [];
   const repertoires: SearchItem[] = [];
   const artists: SearchItem[] = [];
-  const versions: SearchItem[] = []; // reserved for future SearchService
+  const versions: SearchItem[] = [];
 
   const publicSongDocs = [...publicSongsSnap.docs].sort((a, b) => {
     const aData = a.data() as Record<string, unknown>;
@@ -528,6 +556,46 @@ export const search = functions.https.onRequest(async (req, res) => {
     ...ownerSongsByCreatedBySnap.docs,
     ...adminSongsSnap.docs
   ];
+  const accessibleSongById = new Map<string, Record<string, unknown>>();
+  allSongDocs.forEach((doc) => {
+    accessibleSongById.set(doc.id, doc.data() as Record<string, unknown>);
+  });
+
+  if (wants('version')) {
+    versionsSnap.docs.forEach((doc) => {
+      const songId = doc.ref.parent.parent?.id ?? String((doc.data() as Record<string, unknown>).songId ?? '');
+      const songData = accessibleSongById.get(songId);
+      if (!songData || (String(songData.status ?? '').toUpperCase() === 'DRAFT' && String(songData.ownerUserId ?? songData.createdBy ?? '') !== currentUserId && !isAdmin)) {
+        return;
+      }
+
+      const data = doc.data() as Record<string, unknown>;
+      const title = String(data.versionName ?? data.label ?? 'Versión');
+      const instrument = String(data.instrumentName ?? data.instrument ?? 'Letra');
+      const notationType = String(data.notationType ?? 'Cifrado');
+      const artistName = String(data.artistName ?? songData.artistName ?? '');
+      const songTitle = String(songData.title ?? '');
+      const item: SearchItem = {
+        id: doc.id,
+        kind: 'version',
+        type: 'version',
+        songId,
+        title: songTitle ? `${songTitle} · ${title}` : title,
+        subtitle: artistName ? `Versión por ${artistName}` : 'Versión de canción',
+        images: normalizeImages(data.coverImageUrl, typeof songData.coverImageUrl === 'string' ? songData.coverImageUrl : undefined),
+        liturgicalType: String(songData.liturgicalType ?? 'General'),
+        liturgicalTime: String(songData.liturgicalTime ?? 'Ordinario'),
+        authorOrChoir: artistName || 'General',
+        categories: collectCategoriesFromRaw(songData, []),
+        searchableText: `${songTitle} ${title} ${artistName} ${instrument} ${notationType}`.trim(),
+        instrument,
+        notationType,
+        isPremium: Boolean(data.isPremium)
+      };
+      if (matchesQuery(item, query)) versions.push(item);
+    });
+  }
+
   const sqlSongIds = allSongDocs
     .map((doc) => Number((doc.data() as Record<string, unknown>).sqlSongId))
     .filter((id) => Number.isFinite(id) && id > 0)
@@ -582,7 +650,8 @@ export const search = functions.https.onRequest(async (req, res) => {
         searchableText: `${row.title} ${String(row.artistName ?? '')}`.trim(),
         popularity: row.popularity,
         totalViews: row.totalViews,
-        likeCount: row.likeCount
+        likeCount: row.likeCount,
+        durationMs: row.durationMs
       });
 
       seenSqlSongIds.add(row.sqlSongId);
@@ -748,11 +817,53 @@ export const search = functions.https.onRequest(async (req, res) => {
     });
   }
 
-  const songsFiltered = hasCategoryFilter ? songs.filter((item) => hasCategoryMatch(item, selectedCategory)) : songs;
-  const albumsFiltered = hasCategoryFilter ? albums.filter((item) => hasCategoryMatch(item, selectedCategory)) : albums;
-  const repertoiresFiltered = hasCategoryFilter ? repertoires.filter((item) => hasCategoryMatch(item, selectedCategory)) : repertoires;
-  const artistsFiltered = hasCategoryFilter ? artists.filter((item) => hasCategoryMatch(item, selectedCategory)) : artists;
-  const versionsFiltered = hasCategoryFilter ? versions.filter((item) => hasCategoryMatch(item, selectedCategory)) : versions;
+  // Apply server-side filters: category + premium + instrument + notation + albumType + duration + owner + visibility
+  const applyServerFilters = (items: SearchItem[], kind: SearchKind): SearchItem[] => {
+    let result = items;
+    if (hasCategoryFilter) result = result.filter((item) => hasCategoryMatch(item, selectedCategory));
+    if (premiumOnly) result = result.filter((item) => Boolean(item.isPremium));
+    if (kind === 'version' && instrumentFilter.length) result = result.filter((item) => item.instrument && instrumentFilter.includes(item.instrument.toLowerCase()));
+    if (kind === 'version' && notationFilter.length) result = result.filter((item) => item.notationType && notationFilter.includes(item.notationType.toLowerCase()));
+    if (kind === 'album' && albumTypeFilter.length) result = result.filter((item) => item.albumType && albumTypeFilter.includes(item.albumType.toLowerCase()));
+    if (kind === 'song' && durationFilter.length) {
+      result = result.filter((item) => {
+        const dur = item.durationMs;
+        if (!dur || !Number.isFinite(dur)) return false;
+        return durationFilter.some((b) => {
+          if (b === 'short') return dur <= 120_000;
+          if (b === 'medium') return dur > 120_000 && dur <= 240_000;
+          if (b === 'long') return dur > 240_000;
+          return false;
+        });
+      });
+    }
+    if (kind === 'repertoire' && ownerFilter) result = result.filter((item) => item.ownerUserId === ownerFilter);
+    if (kind === 'repertoire' && visibilityFilter) {
+      if (visibilityFilter === 'mine') result = result.filter((item) => item.ownerUserId === currentUserId);
+      else if (visibilityFilter === 'public') result = result.filter((item) => item.isPublic && item.ownerUserId !== currentUserId);
+    }
+    return result;
+  };
+
+  // Apply server-side sort
+  const sortItemsServer = (items: SearchItem[]): SearchItem[] => {
+    if (sortParam === 'alpha') return [...items].sort((a, b) => a.title.localeCompare(b.title, 'es'));
+    if (sortParam === 'popular') return [...items].sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0) || (b.totalViews ?? 0) - (a.totalViews ?? 0));
+    if (sortParam === 'recent') {
+      return [...items].sort((a, b) => {
+        const aTime = Math.max(toComparableMillis(a.publishedAt), toComparableMillis(a.createdAt));
+        const bTime = Math.max(toComparableMillis(b.publishedAt), toComparableMillis(b.createdAt));
+        return bTime - aTime;
+      });
+    }
+    return items;
+  };
+
+  const songsFiltered = sortItemsServer(applyServerFilters(songs, 'song'));
+  const albumsFiltered = sortItemsServer(applyServerFilters(albums, 'album'));
+  const repertoiresFiltered = sortItemsServer(applyServerFilters(repertoires, 'repertoire'));
+  const artistsFiltered = sortItemsServer(applyServerFilters(artists, 'artist'));
+  const versionsFiltered = sortItemsServer(applyServerFilters(versions, 'version'));
 
   const songsForResponse = isHomeScope ? songsFiltered.slice(0, 80) : songsFiltered;
   const albumsForResponse = isHomeScope ? albumsFiltered.slice(0, 30) : albumsFiltered;
@@ -768,11 +879,13 @@ export const search = functions.https.onRequest(async (req, res) => {
     ...versionsForResponse
   ];
 
+  // Aggregate facets from the full filtered set (before home-scope slicing)
+  // so clients always receive complete filter option lists.
   const liturgicalTypes = new Set<string>();
   const liturgicalTimes = new Set<string>();
   const authorOrChoirs = new Set<string>();
 
-  items.forEach((item) => {
+  [...songsFiltered, ...albumsFiltered, ...repertoiresFiltered, ...artistsFiltered, ...versionsFiltered].forEach((item) => {
     liturgicalTypes.add(item.liturgicalType || 'General');
     liturgicalTimes.add(item.liturgicalTime || 'Ordinario');
     authorOrChoirs.add(item.authorOrChoir || 'General');
@@ -785,6 +898,14 @@ export const search = functions.https.onRequest(async (req, res) => {
   if (typeParam) qs.set('type', typeParam);
   if (hasCategoryFilter) qs.set('category', selectedCategory);
   if (isHomeScope) qs.set('scope', 'home');
+  if (sortParam !== 'relevance') qs.set('sort', sortParam);
+  if (premiumOnly) qs.set('premium', '1');
+  if (instrumentFilter.length) qs.set('instrument', instrumentFilter.join(','));
+  if (notationFilter.length) qs.set('notation', notationFilter.join(','));
+  if (albumTypeFilter.length) qs.set('albumType', albumTypeFilter.join(','));
+  if (durationFilter.length) qs.set('duration', durationFilter.join(','));
+  if (ownerFilter) qs.set('owner', ownerFilter);
+  if (visibilityFilter) qs.set('visibility', visibilityFilter);
   const baseHref = `/search/catalog?${qs.toString()}`;
 
   const buckets = {

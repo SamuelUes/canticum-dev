@@ -3,8 +3,30 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useMemo } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import type { SearchEntityItem, SearchrepertoireItem, SearchSongItem } from '../../types/search';
 import { HorizontalConveyor } from '../ui/HorizontalConveyor';
+
+const STATUS_LABELS: Record<string, string> = {
+  DRAFT: 'Borrador',
+  UPLOADED: 'Archivo subido',
+  IN_REVIEW: 'En revisión',
+  REJECTED: 'Rechazada',
+  APPROVED: 'Aprobada',
+  PUBLISHED: 'Publicada',
+  ARCHIVED: 'Archivada'
+};
+
+function resolveStatusPill(
+  status: string | undefined,
+  isAdmin: boolean
+): { label: string; code: string } | null {
+  if (!status) return null;
+  const code = status.trim().toUpperCase();
+  if (!code || !(code in STATUS_LABELS)) return null;
+  if (!isAdmin && code !== 'DRAFT') return null;
+  return { label: STATUS_LABELS[code], code: code.toLowerCase() };
+}
 
 interface MySectionProps {
   title?: string;
@@ -17,7 +39,10 @@ function pickImage(item: SearchEntityItem): string | undefined {
     return item.images[0]?.url;
   }
 
-  const raw = item as SearchEntityItem & { coverImageUrl?: string; coverUrl?: string };
+  const raw = item as SearchEntityItem & { coverImageUrl?: string; coverUrl?: string; imageUrl?: string };
+  if (typeof raw.imageUrl === 'string' && raw.imageUrl.trim().length > 0) {
+    return raw.imageUrl;
+  }
   if (typeof raw.coverImageUrl === 'string' && raw.coverImageUrl.trim().length > 0) {
     return raw.coverImageUrl;
   }
@@ -40,6 +65,8 @@ function formatTimestamp(value?: string | null): number {
  * sorted most-recent first. Renders nothing if the user has no own content.
  */
 export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySectionProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const orderedSongs = useMemo(() => {
     return [...songs]
       .sort((a, b) => formatTimestamp(b.publishedAt ?? b.createdAt) - formatTimestamp(a.publishedAt ?? a.createdAt))
@@ -85,6 +112,10 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
                           sizes="(max-width: 768px) 60vw, 180px"
                           loading="lazy"
                         />
+                        {(() => {
+                          const pill = resolveStatusPill(song.status, isAdmin);
+                          return pill ? <span className={`home-status-pill status-${pill.code}`}>{pill.label}</span> : null;
+                        })()}
                       </div>
                     ) : (
                       <div className="song-thumb my-section-thumb" />
@@ -126,6 +157,10 @@ export function MySection({ title = 'Mis creaciones', songs, repertoires }: MySe
                           sizes="(max-width: 768px) 60vw, 180px"
                           loading="lazy"
                         />
+                        {(() => {
+                          const pill = resolveStatusPill(repertoire.status, isAdmin);
+                          return pill ? <span className={`home-status-pill status-${pill.code}`}>{pill.label}</span> : null;
+                        })()}
                       </div>
                     ) : (
                       <div className="song-thumb my-section-thumb" />

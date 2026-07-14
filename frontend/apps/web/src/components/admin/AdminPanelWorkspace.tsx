@@ -8,6 +8,7 @@ import { CropperModal } from '../ui/CropperModal';
 import { CreateMenu } from '../ui/CreateMenu';
 import { isAdminUser, BOOTSTRAP_ADMIN_UID } from '../../features/auth/repository';
 import { bulkDeleteSongsBeforeDate, deleteAdminUser, fetchAdminDashboardMetrics, fetchAdminUsers, fetchDraftSongs, fetchNewsletterImage, fetchNewsletterSlides, uploadNewsletterImage, updateNewsletterSlides, updateAdminUser, fetchArtists, type AdminDashboardMetrics, type AdminUserSummary, type DraftSong, type Artist, type NewsletterSlide } from '../../features/admin/repository';
+import { LoadingBubble } from '../ui/LoadingBubble';
 
 type DashboardMetric = {
   label: string;
@@ -503,17 +504,7 @@ export function AdminPanelWorkspace() {
   };
 
   if (loading) {
-    return (
-      <section className="admin-panel-shell layout-h-margin">
-        <header className="admin-panel-hero">
-          <div>
-            <span className="admin-panel-kicker">Panel de Administración</span>
-            <h1>Cargando permisos...</h1>
-            <p>Estamos validando tu sesión antes de mostrar las herramientas de administración.</p>
-          </div>
-        </header>
-      </section>
-    );
+    return <LoadingBubble isLoading={true} message="Cargando panel…" showDelay={0} />;
   }
 
   if (!user || !isAdmin) {
@@ -535,6 +526,7 @@ export function AdminPanelWorkspace() {
 
   return (
    <div className="layout-h-margin">
+    <LoadingBubble isLoading={newsletterUploading} message="Subiendo imagen…" />
     <section className="admin-panel-shell" id="admin-panel-top">
       <header className="admin-panel-hero">
         <div>

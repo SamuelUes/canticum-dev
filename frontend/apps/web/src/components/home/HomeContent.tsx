@@ -1,93 +1,41 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { getCachedSearchDatasetClient, getSearchDatasetClient } from '../../features/search/repository';
-import type {
-  SearchDataset,
-  SearchEntityItem,
-  SearchrepertoireItem,
-  SearchSongItem
-} from '../../types/search';
-import type { ArtistData, FeaturedSongCardData, HomeText, ListItemData } from '../../types/home';
+import { fetchHomeData, getCachedHomeData, type HomeData } from '../../features/home/repository';
+import type { ArtistData, FeaturedAlbumCardData, FeaturedSongCardData, HomeText, ListItemData } from '../../types/home';
 import { ArtistsSection } from './ArtistsSection';
 import { DualListSection } from './DualListSection';
 import { FeaturedSection } from './FeaturedSection';
 import { MySection } from './mySection';
 import { getArtistProfileHref } from '../../features/artist/routing';
 
+const EMPTY_HOME_DATA: HomeData = {
+  featuredSongs: [],
+  featuredAlbums: [],
+  recentSongs: [],
+  artists: [],
+  trends: [],
+  ownSongs: [],
+  ownRepertoires: [],
+  categories: [],
+  newsletterSlides: [],
+  misales: [],
+  sundaySchema: null
+};
+
 interface HomeContentProps {
   text: HomeText;
-  selectedCategory?: string;
   onAvailableCategoriesChange?: (categories: string[]) => void;
-}
-
-function pickImage(item: SearchEntityItem): string | undefined {
-  return item.images && item.images.length > 0 ? item.images[0]?.url : undefined;
-}
-
-function timestampOf(value?: string | null): number {
-  if (!value) return 0;
-  const parsed = new Date(value).getTime();
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function resolveArtistDisplayName(item: SearchEntityItem): string {
-  const candidates = [item.title, item.authorOrChoir]
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  if (candidates.length === 0) {
-    return 'Artista';
-  }
-
-  if (candidates[0].toLowerCase() === 'artista' && candidates[1]) {
-    return candidates[1];
-  }
-
-  return candidates[0];
-}
-
-function resolveArtistDisplaySubtitle(item: SearchEntityItem): string {
-  const raw = item.subtitle.trim();
-  if (!raw) {
-    return 'General';
-  }
-
-  if (raw.toLowerCase() === 'unknown') {
-    return 'General';
-  }
-
-  return raw;
-}
-
-function songToFeaturedCard(song: SearchSongItem): FeaturedSongCardData {
-  return {
-    id: song.songId ?? song.id,
-    title: song.title,
-    subtitle: song.subtitle || song.authorOrChoir,
-    imageUrl: pickImage(song),
-    isPremium: song.isPremium
-  };
-}
-
-function songToListItem(song: SearchSongItem): ListItemData {
-  return {
-    id: song.songId ?? song.id,
-    title: song.title,
-    subtitle: song.subtitle || song.authorOrChoir,
-    avatarUrl: pickImage(song)
-  };
 }
 
 export function HomeContent({
   text,
-  selectedCategory = 'todos',
   onAvailableCategoriesChange
 }: HomeContentProps) {
   const { user, loading: authLoading } = useAuth();
-  const [dataset, setDataset] = useState<SearchDataset | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [homeData, setHomeData] = useState<HomeData>(() => getCachedHomeData() ?? EMPTY_HOME_DATA);
+  const [loading, setLoading] = useState(() => !getCachedHomeData());
   const currentUserId = user?.uid ?? null;
 
   useEffect(() => {
@@ -99,22 +47,18 @@ export function HomeContent({
     const controller = new AbortController();
 
     const hydrate = async () => {
-      const cached = getCachedSearchDatasetClient('home');
+      const cached = getCachedHomeData();
       if (!disposed && cached) {
-        setDataset(cached);
+        setHomeData(cached);
         setLoading(false);
       } else if (!disposed) {
         setLoading(true);
       }
 
       try {
-        const resolvedDataset = await getSearchDatasetClient({
-          scope: 'home',
-          category: selectedCategory === 'todos' ? '' : selectedCategory,
-          signal: controller.signal
-        });
+        const resolved = await fetchHomeData();
         if (disposed) return;
-        setDataset(resolvedDataset);
+        setHomeData(resolved);
       } finally {
         if (!disposed) {
           setLoading(false);
@@ -128,99 +72,67 @@ export function HomeContent({
       disposed = true;
       controller.abort();
     };
-  }, [authLoading, currentUserId, selectedCategory]);
+  }, [authLoading, currentUserId]);
 
   useEffect(() => {
     if (!onAvailableCategoriesChange) {
       return;
     }
 
-    if (!dataset) {
-      onAvailableCategoriesChange([]);
-      return;
-    }
+    onAvailableCategoriesChange(homeData.categories);
+  }, [homeData.categories, onAvailableCategoriesChange]);
 
-    const categories = dataset.filters.categories
-      .map((value) => value.trim().toLowerCase())
-      .filter((value) => value.length > 0);
+  const featuredSongs: FeaturedSongCardData[] = homeData.featuredSongs.map((song) => ({
+    id: song.id,
+    title: song.title,
+    subtitle: song.subtitle,
+    imageUrl: song.imageUrl,
+    isPremium: song.isPremium,
+    durationMs: song.durationMs
+  }));
 
-    onAvailableCategoriesChange(Array.from(new Set(categories)));
-  }, [dataset, onAvailableCategoriesChange]);
+  const featuredAlbums: FeaturedAlbumCardData[] = homeData.featuredAlbums.map((album) => ({
+    id: album.id,
+    title: album.title,
+    subtitle: album.subtitle,
+    coverUrl: album.coverUrl,
+    albumType: album.albumType,
+    releaseYear: album.releaseYear,
+    totalTracks: album.totalTracks,
+    popularity: album.popularity
+  }));
 
-  const songs = useMemo<SearchSongItem[]>(() => {
-    if (!dataset) return [];
-    return dataset.items.filter((item): item is SearchSongItem => item.kind === 'song');
-  }, [dataset]);
+  const artists: ArtistData[] = homeData.artists.map((artist) => ({
+    id: artist.id,
+    name: artist.name,
+    avatarUrl: artist.avatarUrl
+  }));
 
-  const repertoires = useMemo<SearchrepertoireItem[]>(() => {
-    if (!dataset) return [];
-    return dataset.items.filter((item): item is SearchrepertoireItem => item.kind === 'repertoire');
-  }, [dataset]);
+  const trends: ListItemData[] = homeData.trends.map((trend) => ({
+    id: trend.id,
+    title: trend.title,
+    subtitle: trend.subtitle,
+    avatarUrl: trend.avatarUrl,
+    rankDelta: trend.rankDelta,
+    score: trend.score
+  }));
 
-  const artists = useMemo<ArtistData[]>(() => {
-    if (!dataset) return [];
-    return dataset.items
-      .filter((item) => item.kind === 'artist')
-      .slice(0, 24)
-      .map((item) => ({
-        id: item.artistId ?? item.id,
-        name: resolveArtistDisplayName(item),
-        avatarUrl: pickImage(item)
-      }));
-  }, [dataset]);
+  const recentSongs: ListItemData[] = homeData.recentSongs.map((song) => ({
+    id: song.id,
+    title: song.title,
+    subtitle: song.subtitle,
+    avatarUrl: song.avatarUrl
+  }));
 
-  const featuredSongs = useMemo<FeaturedSongCardData[]>(() => {
-    if (songs.length === 0) return [];
-    const ranked = [...songs].sort((a, b) => {
-      const popDelta = (b.popularity ?? 0) - (a.popularity ?? 0);
-      if (popDelta !== 0) return popDelta;
-      const likesDelta = (b.likeCount ?? 0) - (a.likeCount ?? 0);
-      if (likesDelta !== 0) return likesDelta;
-      const viewsDelta = (b.totalViews ?? 0) - (a.totalViews ?? 0);
-      if (viewsDelta !== 0) return viewsDelta;
-      return timestampOf(b.publishedAt ?? b.createdAt) - timestampOf(a.publishedAt ?? a.createdAt);
-    });
-    // Only public/published songs (those that don't have draft owner-only flag) are returned by /search/catalog
-    return ranked.filter((song) => !currentUserId || song.ownerUserId !== currentUserId).slice(0, 4).map(songToFeaturedCard);
-  }, [songs, currentUserId]);
-
-  const trends = useMemo<ListItemData[]>(() => {
-    // "Tendencias" → top artistas con más canciones publicadas
-    if (!dataset) return [];
-    return dataset.items
-      .filter((item) => item.kind === 'artist')
-      .slice(0, 6)
-      .map((item) => ({
-        id: item.artistId ?? item.id,
-        title: resolveArtistDisplayName(item),
-        subtitle: resolveArtistDisplaySubtitle(item),
-        avatarUrl: pickImage(item)
-      }));
-  }, [dataset]);
-
-  const recentSongs = useMemo<ListItemData[]>(() => {
-    return [...songs]
-      .sort((a, b) => timestampOf(b.publishedAt ?? b.createdAt) - timestampOf(a.publishedAt ?? a.createdAt))
-      .slice(0, 6)
-      .map(songToListItem);
-  }, [songs]);
-
-  const ownSongs = useMemo<SearchSongItem[]>(() => {
-    if (!currentUserId) return [];
-    return songs.filter((song) => song.ownerUserId === currentUserId);
-  }, [songs, currentUserId]);
-
-  const ownRepertoires = useMemo<SearchrepertoireItem[]>(() => {
-    if (!currentUserId) return [];
-    return repertoires.filter((repertoire) => repertoire.ownerUserId === currentUserId);
-  }, [repertoires, currentUserId]);
+  const ownSongs = currentUserId ? homeData.ownSongs : [];
+  const ownRepertoires = currentUserId ? homeData.ownRepertoires : [];
 
   return (
     <>
-      <FeaturedSection title={text.featuredTitle} songs={featuredSongs} loading={loading} />
+      <FeaturedSection title={text.featuredTitle} songs={featuredSongs} albums={featuredAlbums} loading={loading} />
 
       {!loading && currentUserId ? (
-        <MySection songs={ownSongs} repertoires={ownRepertoires} />
+        <MySection songs={ownSongs as never} repertoires={ownRepertoires as never} />
       ) : null}
 
       <ArtistsSection title={text.artistsTitle} artists={artists} loading={loading} />

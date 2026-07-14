@@ -1,7 +1,7 @@
 [
   {
-    "origin": ["http://localhost:3000", "https://*.firebaseapp.com", "https://*.web.app"],
-    "method": ["GET"],
+    "origin": ["http://localhost:3000", "https://*.firebaseapp.com", "https://*.web.app", "https://www.canticumcoro.com", "https://canticumcoro.com"],
+    "method": ["GET", "HEAD"],
     "maxAgeSeconds": 3600
   }
 ]

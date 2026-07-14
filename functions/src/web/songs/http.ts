@@ -18,6 +18,7 @@ import {
   type UpdateSongVersionInput
 } from '../../shared/cloudSql/songs';
 import { createArtist, getArtistById } from '../../shared/cloudSql/artists';
+import { capitalizeFirstLetter } from '../../shared/validation';
 import {
   getClientIp,
   getBodyRecord,
@@ -350,7 +351,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
       }
 
       for (const rv of rawVersions) {
-        const vName = typeof rv.versionName === 'string' && rv.versionName.trim() ? rv.versionName.trim() : 'Versión 1';
+        const vName = typeof rv.versionName === 'string' && rv.versionName.trim() ? capitalizeFirstLetter(rv.versionName.trim()) : 'Versión 1';
         let vArtistId: number | null = null;
         let vArtistName: string | null = null;
 
@@ -581,7 +582,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
     // ╔══════════════════════════════════════════╗
     // ║          mode = 'new' (default)          ║
     // ╚══════════════════════════════════════════╝
-    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const title = typeof body.title === 'string' ? capitalizeFirstLetter(body.title.trim()) : '';
     if (!title) {
       sendError(res, 400, 'invalid_argument', 'title is required.');
       return;
@@ -665,6 +666,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
         previewUrl: null,
         artistId: songArtistId,
         coverImageUrl: coverImageUrl || null,
+        durationMs: typeof body.durationMs === 'number' && body.durationMs > 0 ? body.durationMs : null,
         versions: versionInputs
       });
       sqlSongId = sqlSong.id;
@@ -712,6 +714,7 @@ export const songs = functions.https.onRequest(async (req, res) => {
         sqlSongId,
         currentVersionId: firstVersionRef.id,
         currentInstrumentId: firstSqlVersion?.instrumentId ? String(firstSqlVersion.instrumentId) : '',
+        ...(typeof body.durationMs === 'number' && body.durationMs > 0 ? { durationMs: body.durationMs } : {}),
         ...(songCoverUrl
           ? {
               coverImageUrl: songCoverUrl,

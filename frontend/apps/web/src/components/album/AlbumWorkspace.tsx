@@ -5,10 +5,12 @@ import Link from 'next/link';
 import { useMemo, useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { PlayQueueButton } from '../audio/PlayQueueButton';
+import { ShareButton } from '../shared/ShareButton';
 import { requestUpdateAlbumStatus} from '../../features/album/repository';
 import { loadAlbumFavorite, saveAlbumFavorite } from '../../features/album/clientPersistence';
 import { loadSongFavorite, saveSongFavorite } from '../../features/song/clientPersistence';
 import { getSongStatusLabel } from '../../features/song/status';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import type { AlbumDetail, AlbumSongRow } from '../../types/album';
 
 type FilterPill = 'Todas' | 'Letra' | 'Partituras';
@@ -19,13 +21,20 @@ interface AlbumWorkspaceProps {
 
 export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
   const { user } = useAuth();
-  const [activeFilter, setActiveFilter] = useState<FilterPill>('Todas');
+  const [activeFilter] = useState<FilterPill>('Todas');
+  const [isHydrating, setIsHydrating] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsHydrating(false), 300);
+    return () => clearTimeout(timer);
+  }, []);
+  // const [ setActiveFilter ] = useState<FilterPill>('Todas');
   const [albumStatusSelection, setAlbumStatusSelection] = useState(() => (typeof album.status === 'string' ? album.status.toUpperCase() : 'APPROVED'));
   const [isAlbumStatusMenuOpen, setIsAlbumStatusMenuOpen] = useState(false);
   const [isUpdatingAlbumStatus, setIsUpdatingAlbumStatus] = useState(false);
   const [songFavorites, setSongFavorites] = useState<Record<string, boolean>>({});
   const [isAlbumFavorite, setIsAlbumFavorite] = useState(false);
-  const pills: FilterPill[] = ['Todas', 'Letra', 'Partituras'];
+  // const pills: FilterPill[] = ['Todas', 'Letra', 'Partituras'];
 
   const albumTypeLabel: Record<string, string> = {
     album: 'Álbum',
@@ -50,9 +59,11 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
   // Load song favorites on mount
   useEffect(() => {
     album.songs.forEach((song) => {
-      loadSongFavorite(song.id, 'default').then((favorite) => {
+      const versionId = song.versionId ?? 'default';
+      const favKey = `${song.id}::${versionId}`;
+      loadSongFavorite(song.id, versionId).then((favorite) => {
         if (typeof favorite === 'boolean') {
-          setSongFavorites((prev) => ({ ...prev, [song.id]: favorite }));
+          setSongFavorites((prev) => ({ ...prev, [favKey]: favorite }));
         }
       });
     });
@@ -67,17 +78,19 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
     });
   }, [album.id]);
 
-  const handleToggleFavorite = async (songId: string) => {
-    const currentFavorite = songFavorites[songId] ?? false;
+  const handleToggleFavorite = async (songId: string, versionId?: string) => {
+    const effectiveVersionId = versionId ?? 'default';
+    const favKey = `${songId}::${effectiveVersionId}`;
+    const currentFavorite = songFavorites[favKey] ?? false;
     const nextFavorite = !currentFavorite;
     
-    setSongFavorites((prev) => ({ ...prev, [songId]: nextFavorite }));
+    setSongFavorites((prev) => ({ ...prev, [favKey]: nextFavorite }));
     
     try {
-      await saveSongFavorite(songId, 'default', nextFavorite);
+      await saveSongFavorite(songId, effectiveVersionId, nextFavorite);
     } catch {
       // Revert on error
-      setSongFavorites((prev) => ({ ...prev, [songId]: currentFavorite }));
+      setSongFavorites((prev) => ({ ...prev, [favKey]: currentFavorite }));
     }
   };
 
@@ -109,6 +122,7 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
 
   return (
     <div className="album-page">
+      <LoadingBubble isLoading={isHydrating || isUpdatingAlbumStatus} message={isUpdatingAlbumStatus ? 'Actualizando estado del álbum…' : 'Cargando álbum…'} />
       {/* ── Hero cover ── */}
       <header className="album-page__hero">
         <div className="album-page__cover-wrap">
@@ -188,6 +202,12 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
                 {isAlbumFavorite ? 'favorite' : 'favorite_border'}
               </span>
             </button>
+            <ShareButton
+              shareUrl={`${typeof window !== 'undefined' ? window.location.origin : ''}/albums/${album.id}`}
+              shareTitle="Álbum Canticum"
+              shareText="Mira este álbum en Canticum"
+              className="album-page__share-btn"
+            />
           </div>
 
           {isAdminUser ? (
@@ -252,7 +272,7 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
 
       {/* ── Track list ── */}
       <section className="album-page__tracklist">
-        <nav className="artist-pills album-page__filters" aria-label="filtrar canciones">
+        {/* <nav className="artist-pills album-page__filters" aria-label="filtrar canciones">
           {pills.map((pill) => (
             <button
               key={pill}
@@ -263,14 +283,15 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
               {pill}
             </button>
           ))}
-        </nav>
+        </nav> */}
 
         <div className="artist-table-head album-page__table-head">
           <span className="artist-col-num">#</span>
           <span className="artist-col-thumb" />
           <span className="artist-col-song">Canción</span>
+          
           {isAdminUser ? <span className="artist-col-status">Estado</span> : null}
-          <span className="artist-col-tone">Tono</span>
+          {/* <span className="artist-col-tone">Tono</span> */}
           <span className="artist-col-views">Visualizaciones</span>
           <span className="artist-col-favorite" />
           <span className="artist-col-play" />
@@ -299,6 +320,10 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
 
               <Link href={`/songs/${song.id}`} className="artist-col-song">
                 <span>{song.title}</span>
+                {/* {song.versionName ? (
+                  <span className="artist-col-song-version">{song.versionName}</span>
+                ) : null} */}
+                
                 {isAdminUser ? (
                   <span className={`song-status-badge status-${song.status?.toLowerCase()} artist-col-song--status-mobile`}>{getSongStatusLabel(song.status)}</span>
                 ) : null}
@@ -310,20 +335,27 @@ export function AlbumWorkspace({ album }: AlbumWorkspaceProps) {
                 </span>
               ) : null}
 
-              <span className="artist-col-tone">{song.tone}</span>
+              {/* <span className="artist-col-tone">{song.tone}</span> */}
               <span className="artist-col-views">{song.views.toLocaleString()}</span>
               <span className="artist-col-favorite">
-                <button
-                  type="button"
-                  className={`song-favorite-icon ${songFavorites[song.id] ? 'is-active' : ''}`}
-                  aria-label={songFavorites[song.id] ? 'Quitar de favoritos' : 'Guardar en favoritos'}
-                  aria-pressed={songFavorites[song.id]}
-                  onClick={() => handleToggleFavorite(song.id)}
-                >
-                  <span className="material-symbols-outlined">
-                    {songFavorites[song.id] ? 'favorite' : 'favorite_border'}
-                  </span>
-                </button>
+                {(() => {
+                  const versionId = song.versionId ?? 'default';
+                  const favKey = `${song.id}::${versionId}`;
+                  const isFavorite = songFavorites[favKey] ?? false;
+                  return (
+                    <button
+                      type="button"
+                      className={`song-favorite-icon ${isFavorite ? 'is-active' : ''}`}
+                      aria-label={isFavorite ? 'Quitar de favoritos' : 'Guardar en favoritos'}
+                      aria-pressed={isFavorite}
+                      onClick={() => handleToggleFavorite(song.id, song.versionId)}
+                    >
+                      <span className="material-symbols-outlined">
+                        {isFavorite ? 'favorite' : 'favorite_border'}
+                      </span>
+                    </button>
+                  );
+                })()}
               </span>
             </li>
           ))}

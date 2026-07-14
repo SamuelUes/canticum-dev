@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import type { SubscriptionPlan } from '../../types/subscription';
 
 interface SubscriptionPlansProps {
@@ -28,6 +29,7 @@ export function SubscriptionPlans({ plans, onPlanSelect, currentPlan, processing
 
   return (
     <div className="sp-container">
+      <LoadingBubble isLoading={!!processingPlan} message="Procesando…" />
       {/* Billing toggle */}
       <div className="sp-toggle-row">
         <span className={`sp-toggle-label ${!isYearly ? 'sp-toggle-label--active' : ''}`}>Mensual</span>

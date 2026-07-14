@@ -15,6 +15,8 @@ import { isAdminUser } from '../../features/auth/repository';
 import { getSongTitleById } from '../../features/song/repository';
 import { prepareCoverImageFile, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import type { RepertoireSongSearchOption, SongRef } from '../../types/repertoire';
+import { FloatingStatusOverlay, type FloatingStatusState } from '../ui/FloatingStatusOverlay';
+import { LoadingBubble } from '../ui/LoadingBubble';
 
 interface EditRepertoireWorkspaceProps {
   repertoireId: string;
@@ -277,8 +279,11 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
   };
 
   if (loading) {
-    return <section className="account-page-layout layout-h-margin"><p>Cargando repertorio...</p></section>;
+    return <LoadingBubble isLoading={true} message="Cargando repertorio…" showDelay={0} />;
   }
+
+  const overlayState: FloatingStatusState = saving ? 'updating' : error ? 'error' : 'idle';
+  const overlayMessage = saving ? 'Guardando cambios...' : error || '';
 
   return (
     <section className="account-page-layout layout-h-margin">
@@ -423,6 +428,13 @@ export function EditRepertoireWorkspace({ repertoireId }: EditRepertoireWorkspac
           Eliminar repertorio
         </button>
       </div>
+
+      <FloatingStatusOverlay
+        state={overlayState}
+        message={overlayMessage}
+        autoDismiss={overlayState === 'error' ? 4000 : 0}
+        onDismiss={() => setError('')}
+      />
     </section>
   );
 }

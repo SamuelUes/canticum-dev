@@ -23,6 +23,7 @@ import {
   updateCloudSqlAdminUserStatus,
   type CloudSqlAdminUserRow
 } from '../../shared/cloudSql/admin';
+import { setAlbumFavoriteInCloudSql } from '../../shared/cloudSql/albums';
 
 function canAccessUser(authUid: string | null, targetUserId: string, role?: string): boolean {
   if (role === 'admin') {
@@ -245,8 +246,8 @@ export const users = functions.https.onRequest(async (req, res) => {
     }
 
     const userId = segments[0];
-    const favoriteType = segments.length === 5 ? segments[2] : null;
-    const itemId = segments.length === 5 ? segments[3] : segments[2];
+    const favoriteType = segments.length >= 4 ? segments[2] : null;
+    const itemId = segments.length >= 4 ? segments[3] : segments[2];
     const versionId = segments.length === 5 ? segments[4] : null;
 
     if (!userId || !itemId) {
@@ -275,12 +276,7 @@ export const users = functions.https.onRequest(async (req, res) => {
         const favoriteVersionRef = favoriteSongRef.collection('versions').doc(versionId);
         const favoriteSnap = await favoriteVersionRef.get();
 
-        if (!favoriteSnap.exists) {
-          sendError(res, 404, 'not_found', 'Favorite not found.');
-          return;
-        }
-
-        sendJson(res, 200, { isFavorite: true, songId: itemId, versionId });
+        sendJson(res, 200, { isFavorite: favoriteSnap.exists, songId: itemId, versionId });
         return;
       }
 
@@ -288,12 +284,7 @@ export const users = functions.https.onRequest(async (req, res) => {
         const favoriteAlbumRef = getAppFirestore().collection('users').doc(userId).collection('favorites').doc(itemId);
         const favoriteSnap = await favoriteAlbumRef.get();
 
-        if (!favoriteSnap.exists) {
-          sendError(res, 404, 'not_found', 'Favorite not found.');
-          return;
-        }
-
-        sendJson(res, 200, { isFavorite: true, albumId: itemId });
+        sendJson(res, 200, { isFavorite: favoriteSnap.exists, albumId: itemId });
         return;
       }
 
@@ -371,6 +362,27 @@ export const users = functions.https.onRequest(async (req, res) => {
 
       await batch.commit();
 
+      if (isAlbumFavorite && auth.uid) {
+        try {
+          const albumSnap = await db.collection('albums').doc(itemId).get();
+          const albumData = (albumSnap.data() ?? {}) as Record<string, unknown>;
+          const sqlAlbumId = Number(albumData.sqlAlbumId ?? itemId);
+          if (Number.isFinite(sqlAlbumId) && sqlAlbumId > 0) {
+            const sqlMetrics = await setAlbumFavoriteInCloudSql(auth.uid, Math.floor(sqlAlbumId), true);
+            if (sqlMetrics) {
+              await db.collection('albums').doc(itemId).set({
+                likeCount: sqlMetrics.likeCount,
+                totalViews: sqlMetrics.totalViews,
+                popularity: sqlMetrics.popularity,
+                updatedAt: FieldValue.serverTimestamp()
+              }, { merge: true });
+            }
+          }
+        } catch (error) {
+          console.error('[users] Cloud SQL album favorite sync failed:', error);
+        }
+      }
+
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -389,6 +401,27 @@ export const users = functions.https.onRequest(async (req, res) => {
       } else if (isAlbumFavorite) {
         const favoriteAlbumRef = getAppFirestore().collection('users').doc(userId).collection('favorites').doc(itemId);
         await favoriteAlbumRef.delete();
+      }
+
+      if (isAlbumFavorite && auth.uid) {
+        try {
+          const albumSnap = await getAppFirestore().collection('albums').doc(itemId).get();
+          const albumData = (albumSnap.data() ?? {}) as Record<string, unknown>;
+          const sqlAlbumId = Number(albumData.sqlAlbumId ?? itemId);
+          if (Number.isFinite(sqlAlbumId) && sqlAlbumId > 0) {
+            const sqlMetrics = await setAlbumFavoriteInCloudSql(auth.uid, Math.floor(sqlAlbumId), false);
+            if (sqlMetrics) {
+              await getAppFirestore().collection('albums').doc(itemId).set({
+                likeCount: sqlMetrics.likeCount,
+                totalViews: sqlMetrics.totalViews,
+                popularity: sqlMetrics.popularity,
+                updatedAt: FieldValue.serverTimestamp()
+              }, { merge: true });
+            }
+          }
+        } catch (error) {
+          console.error('[users] Cloud SQL album favorite sync failed:', error);
+        }
       }
 
       sendJson(res, 200, { ok: true });

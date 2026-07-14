@@ -52,9 +52,35 @@ async function refreshFeaturedArtistsInternal() {
   const db = getAppFirestore();
   const snapshotWeek = normalizeSnapshotWeek(rows[0].snapshotWeek);
   const metaDocRef = db.collection('featuredArtistsMeta').doc('current');
+  const pastDocRef = db.collection('featuredArtistsMeta').doc('past');
   const batch = db.batch();
 
-  // Delete existing subcollection documents
+  // Copy existing current snapshot to past before overwriting —
+  // but only if the snapshotWeek differs, so same-week reruns
+  // (e.g. multiple deploys) don't overwrite past with identical data.
+  const existingCurrentMetaSnap = await metaDocRef.get();
+  const existingCurrentMeta = existingCurrentMetaSnap.exists
+    ? (existingCurrentMetaSnap.data() ?? {}) as Record<string, unknown>
+    : null;
+  const existingSnapshotWeek = existingCurrentMeta && typeof existingCurrentMeta.snapshotWeek === 'string'
+    ? existingCurrentMeta.snapshotWeek
+    : null;
+
+  if (existingCurrentMetaSnap.exists && existingSnapshotWeek !== snapshotWeek) {
+    batch.set(pastDocRef, existingCurrentMeta, { merge: true });
+
+    const existingPastArtistsSnap = await pastDocRef.collection('artists').get();
+    existingPastArtistsSnap.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+
+    const existingCurrentArtistsSnap = await metaDocRef.collection('artists').get();
+    existingCurrentArtistsSnap.docs.forEach((doc) => {
+      batch.set(pastDocRef.collection('artists').doc(doc.id), doc.data());
+    });
+  }
+
+  // Delete existing subcollection documents in current
   const existingArtistsSnap = await metaDocRef.collection('artists').get();
   existingArtistsSnap.docs.forEach((doc) => {
     batch.delete(doc.ref);

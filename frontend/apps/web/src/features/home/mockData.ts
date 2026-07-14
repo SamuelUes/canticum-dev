@@ -27,6 +27,28 @@ export const homeMockData: HomeData = {
       isPremium: true
     }
   ],
+  featuredAlbums: [
+    {
+      id: 'album-cantos-de-entrada',
+      title: 'Cantos de Entrada',
+      subtitle: 'Juan Pérez',
+      coverUrl: undefined,
+      albumType: 'album',
+      releaseYear: 2024,
+      totalTracks: 12,
+      popularity: 85
+    },
+    {
+      id: 'album-gloria',
+      title: 'Gloria a Dios',
+      subtitle: 'Coro Emanuel',
+      coverUrl: undefined,
+      albumType: 'album',
+      releaseYear: 2023,
+      totalTracks: 8,
+      popularity: 72
+    }
+  ],
   artists: [
     { id: 'artist-juan-perez', name: 'Juan Pérez' },
     { id: 'artist-maria-luz', name: 'María Luz' },

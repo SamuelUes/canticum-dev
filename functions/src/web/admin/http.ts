@@ -109,10 +109,8 @@ export const admin = functions.runWith({
       const offsetParam = req.query.offset;
       const limit = typeof limitParam === 'string' ? parseInt(limitParam, 10) : 10;
       const offset = typeof offsetParam === 'string' ? parseInt(offsetParam, 10) : 0;
-      const [songs, total] = await Promise.all([
-        getDraftSongsForAdmin(limit, offset),
-        getDraftSongsCount()
-      ]);
+      const songs = await getDraftSongsForAdmin(limit, offset);
+      const total = await getDraftSongsCount();
       sendJson(res, 200, {
         ok: true,
         songs,
@@ -274,10 +272,8 @@ export const admin = functions.runWith({
       const offsetParam = req.query.offset;
       const limit = typeof limitParam === 'string' ? parseInt(limitParam, 10) : 10;
       const offset = typeof offsetParam === 'string' ? parseInt(offsetParam, 10) : 0;
-      const [artists, total] = await Promise.all([
-        getArtistsForAdmin(limit, offset),
-        getArtistsCount()
-      ]);
+      const artists = await getArtistsForAdmin(limit, offset);
+      const total = await getArtistsCount();
       sendJson(res, 200, {
         ok: true,
         artists,

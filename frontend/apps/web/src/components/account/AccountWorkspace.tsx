@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
@@ -8,6 +9,7 @@ import type { AccountSummary } from '../../features/account/repository';
 import { getCachedSearchDatasetClient, getSearchDatasetClient } from '../../features/search/repository';
 import type { SearchrepertoireItem, SearchSongItem } from '../../types/search';
 import type { SearchDataset } from '../../types/search';
+import { LoadingBubble } from '../ui/LoadingBubble';
 
 const STATUS_ORDER = ['DRAFT', 'UPLOADED', 'IN_REVIEW', 'APPROVED', 'REJECTED', 'PUBLISHED', 'ARCHIVED'] as const;
 type CanonicalStatus = (typeof STATUS_ORDER)[number];
@@ -80,11 +82,13 @@ function ThumbImage({ imageUrl, fallback, className }: { imageUrl?: string; fall
 
   if (src) {
     return (
-      <div className={`account-item-thumb ${className ?? ''}`} aria-hidden="true">
-        <img
+      <div className={`account-item-thumb ${className ?? ''}`} aria-hidden="true" style={{ position: 'relative' }}>
+        <Image
           src={src}
           alt=""
-          loading="lazy"
+          fill
+          sizes="48px"
+          unoptimized
           onError={() => setErrored(true)}
         />
       </div>
@@ -303,6 +307,7 @@ export function AccountWorkspace() {
 
   return (
    <div className="layout-h-margin">
+    <LoadingBubble isLoading={authLoading || summaryLoading} message="Cargando tu cuenta…" />
     <section className="account-page-layout">
       <header className="account-page-head">
         <span className="account-page-kicker">Centro de control</span>

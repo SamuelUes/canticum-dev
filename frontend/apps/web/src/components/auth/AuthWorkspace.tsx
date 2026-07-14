@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { z } from 'zod';
@@ -45,7 +46,18 @@ export function AuthWorkspace({ redirectTo = '/' }: AuthWorkspaceProps) {
   const isLogin = mode === 'login';
   const passwordsMatch = isLogin || password === confirmPassword;
 
-  if (loading || user) {
+  if (loading) {
+    return (
+      <section className="auth-loading" aria-live="polite" aria-busy="true">
+        <div className="auth-loading-card">
+          <span className="auth-loading-mark" aria-hidden="true">C</span>
+          <p>Preparando tu repertorio…</p>  
+        </div>
+      </section>
+    );
+  }
+
+  if (user) {
     return null;
   }
 
@@ -108,19 +120,49 @@ export function AuthWorkspace({ redirectTo = '/' }: AuthWorkspaceProps) {
 
   return (
     <section className="auth-page-layout">
+      <aside className="auth-story" aria-label="Canticum">
+        <div className="auth-story-brand">
+          <Image
+            src="/assets/icon/canticum-isotipo-blanco.svg"
+            alt="Canticum"
+            width={48}
+            height={53}
+            className="auth-story-isotipo"
+          />
+          <Image
+            src="/assets/icon/canticum-logotipo-blanco.svg"
+            alt=""
+            width={150}
+            height={19}
+            className="auth-story-logotipo"
+          />
+        </div>
+        <div className="auth-story-copy">
+          <p className="auth-story-kicker">Tu cancionero personal</p>
+          <h1>Haz espacio para cantar.</h1>
+          <p>Guarda tus canciones, construye repertorios y encuentra tu próxima voz para cada momento.</p>
+        </div>
+        <div className="auth-story-notation" aria-hidden="true">
+          <span /><span /><span /><span /><span /><span />
+          <em>SONIC SONGBOOK / 01</em>
+        </div>
+      </aside>
       <div className="auth-card">
         <header className="auth-card-header">
           {reason === 'purchase' ? (
             <div className="auth-reason-banner is-purchase" role="note">
-              💳 Necesitas una cuenta para comprar canciones individuales.
+              <span className="auth-reason-icon" aria-hidden="true" />
+              <span>Necesitas una cuenta para comprar canciones individuales.</span>
             </div>
           ) : reason === 'premium' ? (
             <div className="auth-reason-banner is-premium" role="note">
-              ⭐ Crea una cuenta para acceder al plan Premium y desbloquear todo el contenido.
+              <span className="auth-reason-icon" aria-hidden="true" />
+              <span>Crea una cuenta para acceder al plan Premium y desbloquear todo el contenido.</span>
             </div>
           ) : reason === 'create' ? (
             <div className="auth-reason-banner is-premium" role="note">
-              ✏️ Inicia sesión o crea una cuenta para subir canciones y crear repertorios.
+              <span className="auth-reason-icon" aria-hidden="true" />
+              <span>Inicia sesión o crea una cuenta para subir canciones y crear repertorios.</span>
             </div>
           ) : null}
           <h1 className="auth-title">

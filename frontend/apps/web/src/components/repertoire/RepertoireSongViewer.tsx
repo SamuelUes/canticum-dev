@@ -229,7 +229,32 @@ export function RepertoireSongViewer({ songId: initialSongId, versionId: initial
 
   return (
     <div className="repertoire-song-viewer">
-      {/* Filters */}
+
+      {/* Song Header */}
+      <div className="repertoire-song-viewer-header">
+        <Link href={`/songs/${song.id}`} className="repertoire-song-viewer-title-link">
+          <h2 className="repertoire-song-viewer-title">{song.title}</h2>
+        </Link>
+        {song.artists && song.artists.length > 0 ? (
+          <Link href={`/artists/${song.artists[0].id}`} className="repertoire-song-viewer-artist-link">
+            <p className="repertoire-song-viewer-artist">{selectedVersion?.artistName ?? song.artistName}</p>
+          </Link>
+        ) : (
+          <p className="repertoire-song-viewer-artist">{selectedVersion?.artistName ?? song.artistName}</p>
+        )}
+        <div className="repertoire-song-viewer-meta">
+          <span className="repertoire-song-viewer-chip">
+            <span className="material-symbols-outlined">difference</span>
+            {selectedVersion?.versionName ?? selectedVersion?.label ?? 'Versión base'}
+          </span>
+          <span className="repertoire-song-viewer-chip">
+            <span className="material-symbols-outlined">mic</span>
+            {selectedInstrument?.name ?? 'Instrumentación base'}
+          </span>
+        </div>
+      </div>
+
+            {/* Filters */}
       <div className="repertoire-song-viewer-filters">
         <div className="repertoire-song-filter-group">
           <label className="repertoire-song-filter-label" htmlFor="version-select">
@@ -266,30 +291,6 @@ export function RepertoireSongViewer({ songId: initialSongId, versionId: initial
               </option>
             ))}
           </select>
-        </div>
-      </div>
-
-      {/* Song Header */}
-      <div className="repertoire-song-viewer-header">
-        <Link href={`/songs/${song.id}`} className="repertoire-song-viewer-title-link">
-          <h2 className="repertoire-song-viewer-title">{song.title}</h2>
-        </Link>
-        {song.artists && song.artists.length > 0 ? (
-          <Link href={`/artists/${song.artists[0].id}`} className="repertoire-song-viewer-artist-link">
-            <p className="repertoire-song-viewer-artist">{selectedVersion?.artistName ?? song.artistName}</p>
-          </Link>
-        ) : (
-          <p className="repertoire-song-viewer-artist">{selectedVersion?.artistName ?? song.artistName}</p>
-        )}
-        <div className="repertoire-song-viewer-meta">
-          <span className="repertoire-song-viewer-chip">
-            <span className="material-symbols-outlined">difference</span>
-            {selectedVersion?.versionName ?? selectedVersion?.label ?? 'Versión base'}
-          </span>
-          <span className="repertoire-song-viewer-chip">
-            <span className="material-symbols-outlined">mic</span>
-            {selectedInstrument?.name ?? 'Instrumentación base'}
-          </span>
         </div>
       </div>
 

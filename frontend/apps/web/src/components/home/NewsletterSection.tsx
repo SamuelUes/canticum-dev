@@ -3,14 +3,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { functionsBaseUrl } from '../../features/shared/functionsClient';
 import type { HomeText, NewsletterStat } from '../../types/home';
+import type { HomeNewsletterSlide } from '../../features/home/repository';
 
 interface NewsletterSectionProps {
   text: Pick<HomeText, 'newsletterTitle' | 'newsletterDescription' | 'learnMore'>;
   stats: NewsletterStat[];
+  preloadedSlides?: HomeNewsletterSlide[];
 }
 
-export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
-  const [slides, setSlides] = useState<Array<{ imageUrl: string; id?: string }>>([]);
+export function NewsletterSection({ text, stats, preloadedSlides }: NewsletterSectionProps) {
+  const [slides, setSlides] = useState<Array<{ imageUrl: string; id?: string }>>(() =>
+    preloadedSlides ? preloadedSlides.map((s) => ({ imageUrl: s.imageUrl, id: s.id })) : []
+  );
   const [activeIndex, setActiveIndex] = useState(0);
   const trackRef = useRef<HTMLDivElement | null>(null);
 
@@ -26,6 +30,12 @@ export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
   };
 
   useEffect(() => {
+    if (preloadedSlides && preloadedSlides.length > 0) {
+      setSlides(preloadedSlides.map((s) => ({ imageUrl: s.imageUrl, id: s.id })));
+      setActiveIndex(0);
+      return;
+    }
+
     const fetchNewsletterImage = async () => {
       try {
         const response = await fetch(`${functionsBaseUrl}/admin-admin/newsletter`, {
@@ -56,7 +66,7 @@ export function NewsletterSection({ text, stats }: NewsletterSectionProps) {
     };
 
     void fetchNewsletterImage();
-  }, []);
+  }, [preloadedSlides]);
 
   useEffect(() => {
     if (visibleSlides.length === 0) {

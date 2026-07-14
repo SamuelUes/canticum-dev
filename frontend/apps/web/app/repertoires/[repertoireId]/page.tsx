@@ -5,7 +5,7 @@ import { RepertoireOwnerActions } from '../../../src/components/repertoire/Reper
 import { RepertoirePageClient } from '../../../src/components/repertoire/RepertoirePageClient';
 import { RepertoireSongSection } from '../../../src/components/repertoire/RepertoireSongSection';
 import { RepertoirePlayButton } from '../../../src/components/repertoire/RepertoirePlayButton';
-import { ShareRepertoireButton } from '../../../src/components/repertoire/ShareRepertoireButton';
+import { ShareRepertoireButton } from '../../../src/components/shared/ShareButton';
 // import { RepertoireDetailClientFallback } from '../../../src/components/repertoire/RF';
 import { homeMockData } from '../../../src/features/home/mockData';
 import { getrepertoireDetailById } from '../../../src/features/repertoire/repository';

@@ -59,6 +59,8 @@ export interface AlbumSongRow {
   isPrimaryRelease: boolean;
   isVerified?: boolean;
   status?: string;
+  versionId?: string;
+  versionName?: string;
 }
 
 /** Paged tracks bucket, Spotify-aligned (`{ href, limit, offset, total, next, previous, items }`). */
@@ -110,6 +112,7 @@ export interface AlbumDetail {
   songs: AlbumSongRow[];
   /** Array of song IDs in the album. */
   songIds?: string[];
+  
   /** Spotify-aligned metadata. */
   label?: string;
   genres?: string[];
@@ -118,6 +121,10 @@ export interface AlbumDetail {
   externalUrls?: AlbumExternalUrls;
   /** 0-100 normalized popularity score (derived from total views if absent). */
   popularity?: number;
+  /** Total views across all songs in the album. */
+  totalViews?: number;
+  /** Total likes for the album. */
+  likeCount?: number;
   status?: string;
 }
 
@@ -152,6 +159,8 @@ export interface AlbumTrackPayload {
   songId: string;
   songTitle: string;
   trackNumber: number;
+  versionId?: string;
+  versionName?: string;
 }
 
 /** Payload for creating a new album. */

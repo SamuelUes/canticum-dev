@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import { isAdminUser } from '../../features/auth/repository';
 import { uploadWeeklyMisal, uploadWeeklySundaySchema } from '../../features/plan/repository';
+import { LoadingBubble } from '../ui/LoadingBubble';
 
 export function PlanAdminWorkspace() {
   const router = useRouter();
@@ -22,14 +23,7 @@ export function PlanAdminWorkspace() {
   const canManage = isAdminUser(user);
 
   if (loading) {
-    return (
-      <section className="create-page-layout misal-admin-layout">
-        <header className="create-page-header">
-          <h1>Programa semanal de misas</h1>
-          <p>Cargando permisos...</p>
-        </header>
-      </section>
-    );
+    return <LoadingBubble isLoading={true} message="Cargando permisos…" showDelay={0} />;
   }
 
   if (!canManage) {
@@ -137,6 +131,7 @@ export function PlanAdminWorkspace() {
 
   return (
     <section className="create-page-layout misal-admin-layout">
+      <LoadingBubble isLoading={submitting || schemaSubmitting} message={schemaSubmitting ? 'Guardando esquema…' : 'Subiendo misal…'} />
       <header className="create-page-header">
         <h1>Programa semanal de misas</h1>
         <p>Sube un PDF con el título visible para que aparezca en el acceso rápido del home.</p>

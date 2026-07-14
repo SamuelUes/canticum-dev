@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -16,6 +16,8 @@ interface PdfViewerProps {
 export function PdfViewer({ url, onLoad, onError }: PdfViewerProps) {
   const [numPages, setNumPages] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleDocumentLoadSuccess = useCallback((pdf: { numPages: number }) => {
     setNumPages(pdf.numPages);
@@ -29,8 +31,24 @@ export function PdfViewer({ url, onLoad, onError }: PdfViewerProps) {
     onError?.(message);
   }, [onError]);
 
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateWidth = () => {
+      setContainerWidth(container.offsetWidth);
+    };
+
+    updateWidth();
+
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, []);
+
   return (
-    <div className="sheet-pdf-container">
+    <div className="sheet-pdf-container" ref={containerRef}>
       {loadError && <p className="sheet-error">{loadError}</p>}
       <Document
         file={url}
@@ -43,7 +61,7 @@ export function PdfViewer({ url, onLoad, onError }: PdfViewerProps) {
           <Page
             key={`page_${index + 1}`}
             pageNumber={index + 1}
-            scale={1.6}
+            width={containerWidth}
             className="sheet-pdf-page"
             renderTextLayer={false}
             renderAnnotationLayer={false}

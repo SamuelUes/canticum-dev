@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import { usePathname } from 'next/navigation';
 import { useAudio } from '../../context/AudioContext';
 import type { repertoireDetail } from '../../types/repertoire';
@@ -26,6 +27,12 @@ export function RepertoirePageClient({ children }: RepertoirePageClientProps) {
   const pathname = usePathname();
   const { queue, queueSource } = useAudio();
   const [isPlaybackMode, setIsPlaybackMode] = useState(false);
+  const [isHydrating, setIsHydrating] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsHydrating(false), 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Close playback mode when navigating away
   useEffect(() => {
@@ -49,6 +56,7 @@ export function RepertoirePageClient({ children }: RepertoirePageClientProps) {
 
   return (
     <RepertoirePlaybackContext.Provider value={{ isPlaybackMode, enterPlaybackMode, exitPlaybackMode }}>
+      <LoadingBubble isLoading={isHydrating} message="Cargando repertorio…" />
       {children}
     </RepertoirePlaybackContext.Provider>
   );

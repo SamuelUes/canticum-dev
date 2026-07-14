@@ -13,8 +13,11 @@ import {
 } from '../../features/repertoire/clientPersistence';
 import { prepareCoverImageFileOriginalSize, uploadCoverImage } from '../../features/uploads/coverImageUpload';
 import { CropperModal } from '../ui/CropperModal';
+import { FloatingStatusOverlay, type FloatingStatusState } from '../ui/FloatingStatusOverlay';
+import { LoadingBubble } from '../ui/LoadingBubble';
 import type { RepertoireSongSearchOption, SongRef } from '../../types/repertoire';
 import { db } from '../../services/firebase';
+import { capitalizeFirstLetter } from '../../features/shared/textFormat';
 
 const LITURGICAL_TYPES = [
   'Misa Dominical',
@@ -213,7 +216,7 @@ export function CreaterepertoireWorkspace() {
     setSuccessMessage('');
 
     const payload: CreaterepertoirePayload = {
-      title: title.trim(),
+      title: capitalizeFirstLetter(title.trim()),
       repertoireDocId,
       isPublic
     };
@@ -270,8 +273,12 @@ export function CreaterepertoireWorkspace() {
     }
   };
 
+  const overlayState: FloatingStatusState = coverPreparing ? 'loading' : submitting ? 'creating' : errorMessage ? 'error' : successMessage ? 'success' : 'idle';
+  const overlayMessage = coverPreparing ? 'Procesando imagen...' : submitting ? 'Creando repertorio...' : errorMessage || successMessage || '';
+
   return (
     <section className="create-page-layout layout-h-margin">
+      <LoadingBubble isLoading={submitting || coverPreparing} message={coverPreparing ? 'Procesando imagen…' : 'Creando repertorio…'} />
       <header className="create-page-header">
         <h1>Crear Repertorio Litúrgico</h1>
         <p>Organiza canciones para tu celebración. El campo título es obligatorio.</p>
@@ -559,6 +566,13 @@ export function CreaterepertoireWorkspace() {
         aspectRatio={1}
         onConfirm={handleCropConfirm}
         onCancel={handleCropCancel}
+      />
+
+      <FloatingStatusOverlay
+        state={overlayState}
+        message={overlayMessage}
+        autoDismiss={overlayState === 'success' ? 3000 : 0}
+        onDismiss={() => { setErrorMessage(''); setSuccessMessage(''); }}
       />
     </section>
   );
